@@ -1,0 +1,191 @@
+package com.example.uai.ui.agents
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.AiProviderType
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AgentEditScreen(
+    viewModel: AgentEditViewModel,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val agent by viewModel.agent.collectAsStateWithLifecycle()
+    val isSaved by viewModel.isSaved.collectAsStateWithLifecycle()
+    val openRouterModels by viewModel.openRouterModels.collectAsStateWithLifecycle()
+    val isLoadingModels by viewModel.isLoadingModels.collectAsStateWithLifecycle()
+    var showApiKey by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isSaved) {
+        if (isSaved) onBack()
+    }
+
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            TopAppBar(
+                title = { Text(if (viewModel.agent.value.name == "New Agent") "New Agent" else "Edit Agent") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = viewModel::save) { Text("Save") }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Agent name
+            OutlinedTextField(
+                value = agent.name,
+                onValueChange = { viewModel.update { copy(name = it) } },
+                label = { Text("Agent name") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            // Provider selector
+            Text("Provider", style = MaterialTheme.typography.labelLarge)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AiProviderType.entries.forEach { type ->
+                    FilterChip(
+                        selected = agent.provider == type,
+                        onClick = {
+                            val defaultModel = AgentConfig.defaultModels[type]?.first() ?: ""
+                            viewModel.update { copy(provider = type, model = defaultModel) }
+                        },
+                        label = { Text(type.displayName) }
+                    )
+                }
+            }
+
+            OutlinedTextField(
+                value = agent.apiKey,
+                onValueChange = { viewModel.update { copy(apiKey = it) } },
+                label = { Text("API Key") },
+                modifier = Modifier.fillMaxWidth(),
+                visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    TextButton(onClick = { showApiKey = !showApiKey }) {
+                        Text(if (showApiKey) "Hide" else "Show")
+                    }
+                },
+                singleLine = true
+            )
+
+            // Model
+            ModelSelector(
+                provider = agent.provider,
+                selectedModel = agent.model,
+                onModelChange = { viewModel.update { copy(model = it) } },
+                fetchedOpenRouterModels = openRouterModels,
+                isLoadingModels = isLoadingModels
+            )
+
+            // System prompt
+            OutlinedTextField(
+                value = agent.systemPrompt,
+                onValueChange = { viewModel.update { copy(systemPrompt = it) } },
+                label = { Text("System prompt") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 3,
+                maxLines = 6
+            )
+
+            // Temperature
+            Column {
+                Text(
+                    "Temperature: ${"%.1f".format(agent.temperature)}",
+                    style = MaterialTheme.typography.labelLarge
+                )
+                Slider(
+                    value = agent.temperature,
+                    onValueChange = { viewModel.update { copy(temperature = it) } },
+                    valueRange = 0f..2f,
+                    steps = 19
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Precise", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Creative", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = viewModel::save, modifier = Modifier.fillMaxWidth()) {
+                Text("Save Agent")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModelSelector(
+    provider: AiProviderType,
+    selectedModel: String,
+    onModelChange: (String) -> Unit,
+    fetchedOpenRouterModels: List<String> = emptyList(),
+    isLoadingModels: Boolean = false
+) {
+    val presets = if (provider == AiProviderType.OPENROUTER && fetchedOpenRouterModels.isNotEmpty())
+        fetchedOpenRouterModels
+    else
+        AgentConfig.defaultModels[provider] ?: emptyList()
+    var expanded by remember { mutableStateOf(false) }
+
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = selectedModel,
+            onValueChange = onModelChange,
+            label = {
+                Text(
+                    if (provider == AiProviderType.OPENROUTER && isLoadingModels)
+                        "Model (loading…)"
+                    else
+                        "Model"
+                )
+            },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryEditable).fillMaxWidth(),
+            singleLine = true
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            presets.forEach { model ->
+                DropdownMenuItem(
+                    text = { Text(model) },
+                    onClick = { onModelChange(model); expanded = false }
+                )
+            }
+        }
+    }
+}

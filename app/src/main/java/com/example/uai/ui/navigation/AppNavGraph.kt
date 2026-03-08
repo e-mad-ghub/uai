@@ -1,9 +1,7 @@
 package com.example.uai.ui.navigation
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.remember
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -11,18 +9,14 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.example.uai.AppContainer
-import com.example.uai.data.db.ConversationEntity
 import com.example.uai.ui.agents.AgentEditScreen
 import com.example.uai.ui.agents.AgentEditViewModel
 import com.example.uai.ui.agents.AgentsScreen
 import com.example.uai.ui.agents.AgentsViewModel
 import com.example.uai.ui.conversations.ConversationDetailScreen
 import com.example.uai.ui.conversations.ConversationDetailViewModel
-import com.example.uai.ui.conversations.ConversationsScreen
-import com.example.uai.ui.conversations.ConversationsViewModel
 import com.example.uai.ui.settings.SettingsScreen
 import com.example.uai.ui.settings.SettingsViewModel
-import kotlinx.coroutines.launch
 import java.util.UUID
 
 @Composable
@@ -33,40 +27,23 @@ fun AppNavGraph(
 ) {
     NavHost(
         navController = navController,
-        startDestination = Routes.CONVERSATIONS
+        startDestination = Routes.NEW_CONVERSATION
     ) {
-        composable(Routes.CONVERSATIONS) {
-            val vm: ConversationsViewModel = viewModel(
-                factory = ConversationsViewModel.Factory(container.conversationRepository)
+        // New conversation — generates a fresh UUID; conversation is only saved to DB on first send
+        composable(Routes.NEW_CONVERSATION) {
+            val conversationId = remember { UUID.randomUUID().toString() }
+            val vm: ConversationDetailViewModel = viewModel(
+                key = conversationId,
+                factory = ConversationDetailViewModel.Factory(
+                    conversationId = conversationId,
+                    repo = container.conversationRepository,
+                    agentRepo = container.agentRepository,
+                    httpClient = container.okHttpClient
+                )
             )
-            val activeAgent by container.agentRepository.activeAgentFlow.collectAsState(null)
-            val scope = rememberCoroutineScope()
-
-            ConversationsScreen(
+            ConversationDetailScreen(
                 viewModel = vm,
-                openDrawer = openDrawer,
-                onConversationClick = { id ->
-                    navController.navigate(Routes.conversationDetail(id))
-                },
-                onNewConversation = {
-                    val agent = activeAgent
-                    if (agent != null) {
-                        scope.launch {
-                            val conv = ConversationEntity(
-                                id = UUID.randomUUID().toString(),
-                                title = "New conversation",
-                                agentId = agent.id,
-                                agentName = agent.name,
-                                createdAt = System.currentTimeMillis(),
-                                updatedAt = System.currentTimeMillis()
-                            )
-                            container.conversationRepository.upsertConversation(conv)
-                            navController.navigate(Routes.conversationDetail(conv.id))
-                        }
-                    } else {
-                        navController.navigate(Routes.AGENTS)
-                    }
-                }
+                openDrawer = openDrawer
             )
         }
 
@@ -83,12 +60,9 @@ fun AppNavGraph(
                     httpClient = container.okHttpClient
                 )
             )
-            val activeAgent by container.agentRepository.activeAgentFlow.collectAsState(null)
             ConversationDetailScreen(
                 viewModel = vm,
-                activeAgent = activeAgent,
-                openDrawer = openDrawer,
-                onBack = { navController.popBackStack() }
+                openDrawer = openDrawer
             )
         }
 

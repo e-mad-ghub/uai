@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.AppColorTheme
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.Flow
@@ -27,6 +28,7 @@ class AppPreferences(context: Context) {
         val BUBBLE_ENABLED = booleanPreferencesKey("bubble_enabled")
         val BUBBLE_POS_X = intPreferencesKey("bubble_pos_x")
         val BUBBLE_POS_Y = intPreferencesKey("bubble_pos_y")
+        val COLOR_THEME = stringPreferencesKey("color_theme")
     }
 
     val agentListFlow: Flow<List<AgentConfig>> = store.data.map { prefs ->
@@ -38,6 +40,14 @@ class AppPreferences(context: Context) {
     val activeAgentIdFlow: Flow<String?> = store.data.map { it[Keys.ACTIVE_AGENT_ID] }
 
     val bubbleEnabledFlow: Flow<Boolean> = store.data.map { it[Keys.BUBBLE_ENABLED] ?: false }
+
+    val colorThemeFlow: Flow<AppColorTheme> = store.data.map {
+        AppColorTheme.fromKey(it[Keys.COLOR_THEME] ?: AppColorTheme.TERRACOTTA.name)
+    }
+
+    suspend fun setColorTheme(theme: AppColorTheme) {
+        store.edit { it[Keys.COLOR_THEME] = theme.name }
+    }
 
     val bubblePosFlow: Flow<Pair<Int, Int>> = store.data.map { prefs ->
         Pair(prefs[Keys.BUBBLE_POS_X] ?: 0, prefs[Keys.BUBBLE_POS_Y] ?: 300)

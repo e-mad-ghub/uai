@@ -11,8 +11,11 @@ import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import java.util.UUID
 
@@ -23,11 +26,17 @@ class ConversationDetailViewModel(
     private val httpClient: OkHttpClient
 ) : ViewModel() {
 
-    val conversation: StateFlow<ConversationEntity?> = repo.getConversation(conversationId)
+    val conversation = repo.getConversation(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    val messages: StateFlow<List<MessageEntity>> = repo.getMessages(conversationId)
+    val messages = repo.getMessages(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val agents = agentRepo.agentsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val activeAgent = agentRepo.activeAgentFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
@@ -35,60 +44,106 @@ class ConversationDetailViewModel(
     private val _inputText = MutableStateFlow("")
     val inputText: StateFlow<String> = _inputText
 
+    private var streamingJob: Job? = null
+
     fun onInputChange(text: String) { _inputText.value = text }
 
-    fun sendMessage(text: String, agent: AgentConfig) {
+    fun setActiveAgent(agent: AgentConfig) {
+        viewModelScope.launch { agentRepo.setActiveAgent(agent.id) }
+    }
+
+    fun stopResponse() {
+        streamingJob?.cancel()
+        streamingJob = null
+    }
+
+    fun sendMessage(text: String) {
+        val agent = activeAgent.value ?: return
         if (text.isBlank() || _isLoading.value) return
-        viewModelScope.launch {
+
+        streamingJob = viewModelScope.launch {
             _isLoading.value = true
             _inputText.value = ""
 
-            val userMsg = MessageEntity(
-                id = UUID.randomUUID().toString(),
-                conversationId = conversationId,
-                role = "user",
-                content = text,
-                createdAt = System.currentTimeMillis()
+            val isFirstMessage = messages.value.isEmpty()
+
+            if (isFirstMessage) {
+                val title = text.trim().take(60)
+                val existing = conversation.value
+                if (existing != null) {
+                    repo.upsertConversation(existing.copy(title = title))
+                } else {
+                    repo.upsertConversation(
+                        ConversationEntity(
+                            id = conversationId,
+                            title = title,
+                            agentId = agent.id,
+                            agentName = agent.name,
+                            createdAt = System.currentTimeMillis(),
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+            }
+
+            repo.insertMessage(
+                MessageEntity(
+                    id = UUID.randomUUID().toString(),
+                    conversationId = conversationId,
+                    role = "user",
+                    content = text,
+                    createdAt = System.currentTimeMillis()
+                )
             )
-            repo.insertMessage(userMsg)
 
             val assistantId = UUID.randomUUID().toString()
-            val assistantMsg = MessageEntity(
-                id = assistantId,
-                conversationId = conversationId,
-                role = "assistant",
-                content = "",
-                createdAt = System.currentTimeMillis(),
-                isStreaming = true
+            repo.insertMessage(
+                MessageEntity(
+                    id = assistantId,
+                    conversationId = conversationId,
+                    role = "assistant",
+                    content = "",
+                    createdAt = System.currentTimeMillis(),
+                    isStreaming = true
+                )
             )
-            repo.insertMessage(assistantMsg)
 
             val history = repo.getMessagesList(conversationId)
                 .filter { !it.isStreaming }
                 .map { ChatMessage(it.role, it.content) }
 
             var accumulated = ""
-            AiProviderFactory.create(agent, httpClient)
-                .streamResponse(history, agent)
-                .catch { e -> emit(StreamChunk.Error(e)) }
-                .collect { chunk ->
-                    when (chunk) {
-                        is StreamChunk.Token -> {
-                            accumulated += chunk.text
-                            repo.updateMessageContent(assistantId, accumulated, true)
-                        }
-                        is StreamChunk.Done -> {
-                            repo.updateMessageContent(assistantId, accumulated, false)
-                            repo.touchConversation(conversationId)
-                        }
-                        is StreamChunk.Error -> {
-                            val errMsg = "$accumulated\n[Error: ${chunk.cause.message}]"
-                            repo.updateMessageContent(assistantId, errMsg, false)
+            try {
+                AiProviderFactory.create(agent, httpClient)
+                    .streamResponse(history, agent)
+                    .catch { e -> emit(StreamChunk.Error(e)) }
+                    .collect { chunk ->
+                        when (chunk) {
+                            is StreamChunk.Token -> {
+                                accumulated += chunk.text
+                                repo.updateMessageContent(assistantId, accumulated, true)
+                            }
+                            is StreamChunk.Done -> {
+                                repo.updateMessageContent(assistantId, accumulated, false)
+                                repo.touchConversation(conversationId)
+                            }
+                            is StreamChunk.Error -> {
+                                repo.updateMessageContent(
+                                    assistantId,
+                                    "$accumulated\n[Error: ${chunk.cause.message}]",
+                                    false
+                                )
+                            }
                         }
                     }
+            } finally {
+                // Runs on both normal completion AND cancellation (user pressed stop).
+                // NonCancellable lets us call suspend functions even when cancelled.
+                withContext(NonCancellable) {
+                    repo.updateMessageContent(assistantId, accumulated, false)
+                    _isLoading.value = false
                 }
-
-            _isLoading.value = false
+            }
         }
     }
 

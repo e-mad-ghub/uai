@@ -1,7 +1,7 @@
 package com.example.uai.ui.navigation
 
 object Routes {
-    const val CONVERSATIONS = "conversations"
+    const val NEW_CONVERSATION = "new_conversation"
     const val CONVERSATION_DETAIL = "conversation/{conversationId}"
     const val AGENTS = "agents"
     const val AGENT_EDIT = "agent_edit?agentId={agentId}"

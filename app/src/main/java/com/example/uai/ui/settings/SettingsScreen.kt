@@ -2,23 +2,34 @@ package com.example.uai.ui.settings
 
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.provider.Settings
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BubbleChart
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.uai.data.model.AppColorTheme
 import com.example.uai.service.FloatingBubbleService
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -31,8 +42,8 @@ fun SettingsScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val bubbleEnabled by viewModel.bubbleEnabled.collectAsStateWithLifecycle()
+    val colorTheme by viewModel.colorTheme.collectAsStateWithLifecycle()
 
-    // Re-check overlay permission when user returns from Settings
     var hasOverlayPermission by remember {
         mutableStateOf(Settings.canDrawOverlays(context))
     }
@@ -63,10 +74,10 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Overlay permission card
             if (!hasOverlayPermission) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
@@ -75,49 +86,27 @@ fun SettingsScreen(
                         modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            Icons.Default.Security,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onErrorContainer
-                        )
+                        Icon(Icons.Default.Security, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer)
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "Overlay permission required",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                            Text(
-                                "Grant \"Display over other apps\" to use the chat bubble.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
+                            Text("Overlay permission required", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                            Text("Grant \"Display over other apps\" to use the chat bubble.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
                         }
                         Spacer(Modifier.width(8.dp))
-                        TextButton(
-                            onClick = {
-                                val intent = Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}")
-                                )
-                                context.startActivity(intent)
-                            }
-                        ) { Text("Grant") }
+                        TextButton(onClick = {
+                            context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
+                        }) { Text("Grant") }
                     }
                 }
             }
 
-            // Bubble toggle
             ListItem(
-                leadingContent = {
-                    Icon(Icons.Default.BubbleChart, contentDescription = null)
-                },
+                leadingContent = { Icon(Icons.Default.BubbleChart, contentDescription = null) },
                 headlineContent = { Text("Floating bubble") },
                 supportingContent = {
                     Text(
                         if (bubbleEnabled) "Bubble is active" else "Bubble is inactive",
-                        color = if (bubbleEnabled) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (bubbleEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 },
                 trailingContent = {
@@ -125,11 +114,7 @@ fun SettingsScreen(
                         checked = bubbleEnabled,
                         onCheckedChange = { enabled ->
                             if (enabled && !hasOverlayPermission) {
-                                val intent = Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}")
-                                )
-                                context.startActivity(intent)
+                                context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
                             } else {
                                 viewModel.setBubbleEnabled(enabled)
                                 if (enabled) FloatingBubbleService.startService(context)
@@ -142,11 +127,65 @@ fun SettingsScreen(
             )
             HorizontalDivider()
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
-                "App version 1.0",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                "Color Theme",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                AppColorTheme.entries.forEach { theme ->
+                    ThemeCard(
+                        theme = theme,
+                        isSelected = theme == colorTheme,
+                        onClick = { viewModel.setColorTheme(theme) }
+                    )
+                }
+            }
+
+            HorizontalDivider()
+            Spacer(Modifier.height(4.dp))
+            Text("App version 1.0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun ThemeCard(theme: AppColorTheme, isSelected: Boolean, onClick: () -> Unit) {
+    OutlinedCard(
+        onClick = onClick,
+        border = if (isSelected)
+            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        else
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.width(76.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Box(
+                modifier = Modifier.size(36.dp).clip(CircleShape).background(Color(theme.previewColorArgb)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isSelected) {
+                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                }
+            }
+            Text(theme.emoji, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+            Text(
+                theme.displayName,
+                style = MaterialTheme.typography.labelSmall,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
             )
         }
     }

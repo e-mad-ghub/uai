@@ -15,7 +15,7 @@ interface ConversationDao {
     @Delete
     suspend fun delete(conversation: ConversationEntity)
 
-    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM conversations ORDER BY isPinned DESC, updatedAt DESC")
     fun getAllConversations(): Flow<List<ConversationEntity>>
 
     @Query("SELECT * FROM conversations WHERE id = :id")

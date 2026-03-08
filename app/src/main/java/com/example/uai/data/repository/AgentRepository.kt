@@ -1,6 +1,7 @@
 package com.example.uai.data.repository
 
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.AppColorTheme
 import com.example.uai.data.prefs.AppPreferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -36,4 +37,8 @@ class AgentRepository(private val prefs: AppPreferences) {
 
     suspend fun setBubbleEnabled(enabled: Boolean) =
         prefs.setBubbleEnabled(enabled)
+
+    val colorThemeFlow: Flow<AppColorTheme> = prefs.colorThemeFlow
+
+    suspend fun setColorTheme(theme: AppColorTheme) = prefs.setColorTheme(theme)
 }

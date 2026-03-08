@@ -4,29 +4,37 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.uai.data.db.ConversationEntity
+import com.example.uai.data.model.AppColorTheme
 import com.example.uai.ui.navigation.AppNavGraph
 import com.example.uai.ui.navigation.Routes
 import com.example.uai.ui.theme.UaiTheme
 import kotlinx.coroutines.launch
-import java.util.UUID
 
 class MainActivity : ComponentActivity() {
 
@@ -36,7 +44,10 @@ class MainActivity : ComponentActivity() {
         val container = (application as UaiApplication).container
 
         setContent {
-            UaiTheme {
+            val colorTheme by container.agentRepository.colorThemeFlow
+                .collectAsState(AppColorTheme.TERRACOTTA)
+
+            UaiTheme(colorTheme = colorTheme) {
                 val navController = rememberNavController()
                 val drawerState = rememberDrawerState(DrawerValue.Closed)
                 val scope = rememberCoroutineScope()
@@ -75,21 +86,9 @@ class MainActivity : ComponentActivity() {
                             Button(
                                 onClick = {
                                     closeDrawer()
-                                    val agent = activeAgent
-                                    if (agent != null) {
-                                        scope.launch {
-                                            val conv = ConversationEntity(
-                                                id = UUID.randomUUID().toString(),
-                                                title = "New conversation",
-                                                agentId = agent.id,
-                                                agentName = agent.name,
-                                                createdAt = System.currentTimeMillis(),
-                                                updatedAt = System.currentTimeMillis()
-                                            )
-                                            container.conversationRepository.upsertConversation(conv)
-                                            navController.navigate(Routes.conversationDetail(conv.id)) {
-                                                launchSingleTop = true
-                                            }
+                                    if (activeAgent != null) {
+                                        navController.navigate(Routes.NEW_CONVERSATION) {
+                                            popUpTo(Routes.NEW_CONVERSATION) { inclusive = true }
                                         }
                                     } else {
                                         navController.navigate(Routes.AGENTS) { launchSingleTop = true }
@@ -117,22 +116,34 @@ class MainActivity : ComponentActivity() {
                                 )
                                 LazyColumn(modifier = Modifier.weight(1f)) {
                                     items(conversations, key = { it.id }) { conv ->
-                                        NavigationDrawerItem(
-                                            label = {
-                                                Text(
-                                                    conv.title,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            },
-                                            selected = currentRoute?.contains(conv.id) == true,
+                                        DrawerConversationItem(
+                                            conv = conv,
+                                            isSelected = currentRoute?.contains(conv.id) == true,
                                             onClick = {
                                                 closeDrawer()
                                                 navController.navigate(Routes.conversationDetail(conv.id)) {
                                                     launchSingleTop = true
                                                 }
                                             },
-                                            modifier = Modifier.padding(horizontal = 8.dp)
+                                            onPin = {
+                                                scope.launch {
+                                                    container.conversationRepository.upsertConversation(
+                                                        conv.copy(isPinned = !conv.isPinned)
+                                                    )
+                                                }
+                                            },
+                                            onRename = { newTitle ->
+                                                scope.launch {
+                                                    container.conversationRepository.upsertConversation(
+                                                        conv.copy(title = newTitle)
+                                                    )
+                                                }
+                                            },
+                                            onDelete = {
+                                                scope.launch {
+                                                    container.conversationRepository.deleteConversation(conv)
+                                                }
+                                            }
                                         )
                                     }
                                 }
@@ -177,5 +188,127 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DrawerConversationItem(
+    conv: ConversationEntity,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onPin: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renameText by remember(conv.id) { mutableStateOf(conv.title) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 2.dp)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(28.dp))
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = { showMenu = true }
+                ),
+            shape = RoundedCornerShape(28.dp),
+            color = if (isSelected)
+                MaterialTheme.colorScheme.secondaryContainer
+            else
+                MaterialTheme.colorScheme.surface
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (conv.isPinned) {
+                    Icon(
+                        Icons.Filled.PushPin,
+                        contentDescription = "Pinned",
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Text(
+                    text = conv.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (isSelected)
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    else
+                        MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text(if (conv.isPinned) "Unpin" else "Pin") },
+                leadingIcon = {
+                    Icon(
+                        if (conv.isPinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                        contentDescription = null
+                    )
+                },
+                onClick = { showMenu = false; onPin() }
+            )
+            DropdownMenuItem(
+                text = { Text("Rename") },
+                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                onClick = {
+                    showMenu = false
+                    renameText = conv.title
+                    showRenameDialog = true
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                },
+                onClick = { showMenu = false; onDelete() }
+            )
+        }
+    }
+
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("Rename conversation") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    singleLine = true,
+                    label = { Text("Title") }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRenameDialog = false
+                    if (renameText.isNotBlank()) onRename(renameText.trim())
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 }

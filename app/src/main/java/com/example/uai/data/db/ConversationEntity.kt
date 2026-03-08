@@ -14,5 +14,6 @@ data class ConversationEntity(
     val agentId: String,
     val agentName: String,      // Denormalized for display without DataStore lookup
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val isPinned: Boolean = false
 )

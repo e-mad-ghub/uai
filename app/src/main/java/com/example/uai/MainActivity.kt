@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Settings
@@ -103,10 +104,27 @@ class MainActivity : ComponentActivity() {
                                 Text("New Chat")
                             }
 
+                            Spacer(Modifier.height(6.dp))
+
+                            // New Agora Room button
+                            OutlinedButton(
+                                onClick = {
+                                    closeDrawer()
+                                    navController.navigate(Routes.AGORA_CREATE) { launchSingleTop = true }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp)
+                            ) {
+                                Icon(Icons.Default.Groups, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("New Agora Room")
+                            }
+
                             Spacer(Modifier.height(8.dp))
                             HorizontalDivider()
 
-                            // Conversations list
+                            // Conversations list — all chats including Agora rooms
                             if (conversations.isNotEmpty()) {
                                 Text(
                                     "Recent",
@@ -119,9 +137,14 @@ class MainActivity : ComponentActivity() {
                                         DrawerConversationItem(
                                             conv = conv,
                                             isSelected = currentRoute?.contains(conv.id) == true,
+                                            isAgora = conv.isAgora,
                                             onClick = {
                                                 closeDrawer()
-                                                navController.navigate(Routes.conversationDetail(conv.id)) {
+                                                val route = if (conv.isAgora)
+                                                    Routes.agoraDetail(conv.id)
+                                                else
+                                                    Routes.conversationDetail(conv.id)
+                                                navController.navigate(route) {
                                                     launchSingleTop = true
                                                 }
                                             },
@@ -199,7 +222,8 @@ private fun DrawerConversationItem(
     onClick: () -> Unit,
     onPin: () -> Unit,
     onRename: (String) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    isAgora: Boolean = false
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -248,6 +272,19 @@ private fun DrawerConversationItem(
                         MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f)
                 )
+                if (isAgora) {
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = MaterialTheme.colorScheme.tertiaryContainer
+                    ) {
+                        Text(
+                            "Agora",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
             }
         }
 

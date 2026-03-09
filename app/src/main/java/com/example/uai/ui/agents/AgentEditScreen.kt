@@ -6,6 +6,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,7 +38,7 @@ fun AgentEditScreen(
     }
 
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.imePadding(),
         topBar = {
             TopAppBar(
                 title = { Text(if (viewModel.agent.value.name == "New Agent") "New Agent" else "Edit Agent") },
@@ -106,6 +108,30 @@ fun AgentEditScreen(
                 fetchedOpenRouterModels = openRouterModels,
                 isLoadingModels = isLoadingModels
             )
+
+            // Capability badges
+            if (agent.supportsVision || agent.supportsDocuments) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (agent.supportsVision) {
+                        AssistChip(
+                            onClick = {},
+                            label = { Text("Images", style = MaterialTheme.typography.labelSmall) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
+                            }
+                        )
+                    }
+                    if (agent.supportsDocuments) {
+                        AssistChip(
+                            onClick = {},
+                            label = { Text("Documents", style = MaterialTheme.typography.labelSmall) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(16.dp))
+                            }
+                        )
+                    }
+                }
+            }
 
             // System prompt
             OutlinedTextField(
@@ -180,12 +206,57 @@ private fun ModelSelector(
             singleLine = true
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            presets.forEach { model ->
+            if (provider == AiProviderType.OPENROUTER && isLoadingModels) {
                 DropdownMenuItem(
-                    text = { Text(model) },
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Text(
+                                "Fetching models from OpenRouter…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    onClick = {},
+                    enabled = false
+                )
+                HorizontalDivider()
+            }
+            presets.forEach { model ->
+                val config = AgentConfig(provider = provider, model = model)
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(model, modifier = Modifier.weight(1f))
+                            if (config.supportsVision) {
+                                Icon(
+                                    Icons.Default.Image,
+                                    contentDescription = "Supports images",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            if (config.supportsDocuments) {
+                                Icon(
+                                    Icons.Default.Description,
+                                    contentDescription = "Supports documents",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    },
                     onClick = { onModelChange(model); expanded = false }
                 )
             }
         }
     }
 }
+

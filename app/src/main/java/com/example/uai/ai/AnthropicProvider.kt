@@ -33,7 +33,7 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
         try {
             call.execute().use { response ->
                 if (!response.isSuccessful) {
-                    emit(StreamChunk.Error(Exception("HTTP ${response.code}: ${response.message}")))
+                    emit(StreamChunk.Error(Exception(httpErrorMessage(response.code))))
                     return@use
                 }
                 val source = response.body?.source() ?: run {
@@ -81,7 +81,38 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
     private fun buildBody(messages: List<ChatMessage>, config: AgentConfig): String {
         val apiMessages = messages
             .filter { it.role != "system" }
-            .map { mapOf("role" to it.role, "content" to it.content) }
+            .map { msg ->
+                val content: Any = when {
+                    msg.imageBase64 != null -> buildList {
+                        add(mapOf(
+                            "type" to "image",
+                            "source" to mapOf(
+                                "type" to "base64",
+                                "media_type" to (msg.imageMimeType ?: "image/jpeg"),
+                                "data" to msg.imageBase64
+                            )
+                        ))
+                        if (msg.content.isNotBlank()) {
+                            add(mapOf("type" to "text", "text" to msg.content))
+                        }
+                    }
+                    msg.documentBase64 != null -> buildList {
+                        add(mapOf(
+                            "type" to "document",
+                            "source" to mapOf(
+                                "type" to "base64",
+                                "media_type" to "application/pdf",
+                                "data" to msg.documentBase64
+                            )
+                        ))
+                        if (msg.content.isNotBlank()) {
+                            add(mapOf("type" to "text", "text" to msg.content))
+                        }
+                    }
+                    else -> msg.content
+                }
+                mapOf("role" to msg.role, "content" to content)
+            }
 
         return gson.toJson(
             buildMap {

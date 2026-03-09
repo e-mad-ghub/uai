@@ -36,6 +36,9 @@ class ConversationRepository(
     suspend fun updateMessageContent(id: String, content: String, isStreaming: Boolean) =
         messageDao.updateContent(id, content, isStreaming)
 
+    suspend fun deleteMessage(id: String) =
+        messageDao.deleteById(id)
+
     suspend fun touchConversation(id: String) =
         conversationDao.touchUpdatedAt(id)
 }

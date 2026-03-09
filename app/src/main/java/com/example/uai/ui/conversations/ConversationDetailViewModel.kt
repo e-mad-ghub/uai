@@ -16,6 +16,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.channels.Channel
 import okhttp3.OkHttpClient
 import java.util.UUID
 
@@ -44,6 +45,9 @@ class ConversationDetailViewModel(
     private val _inputText = MutableStateFlow("")
     val inputText: StateFlow<String> = _inputText
 
+    private val _errorEvent = Channel<String>(Channel.BUFFERED)
+    val errorEvent = _errorEvent.receiveAsFlow()
+
     private var streamingJob: Job? = null
 
     fun onInputChange(text: String) { _inputText.value = text }
@@ -57,9 +61,14 @@ class ConversationDetailViewModel(
         streamingJob = null
     }
 
-    fun sendMessage(text: String) {
+    fun sendMessage(
+        text: String,
+        imageBase64: String? = null,
+        imageUri: String? = null,
+        documentBase64: String? = null
+    ) {
         val agent = activeAgent.value ?: return
-        if (text.isBlank() || _isLoading.value) return
+        if ((text.isBlank() && imageBase64 == null && documentBase64 == null) || _isLoading.value) return
 
         streamingJob = viewModelScope.launch {
             _isLoading.value = true
@@ -68,7 +77,7 @@ class ConversationDetailViewModel(
             val isFirstMessage = messages.value.isEmpty()
 
             if (isFirstMessage) {
-                val title = text.trim().take(60)
+                val title = text.trim().ifBlank { if (documentBase64 != null) "Document" else "Image" }.take(60)
                 val existing = conversation.value
                 if (existing != null) {
                     repo.upsertConversation(existing.copy(title = title))
@@ -92,7 +101,8 @@ class ConversationDetailViewModel(
                     conversationId = conversationId,
                     role = "user",
                     content = text,
-                    createdAt = System.currentTimeMillis()
+                    createdAt = System.currentTimeMillis(),
+                    imageUri = imageUri
                 )
             )
 
@@ -108,9 +118,39 @@ class ConversationDetailViewModel(
                 )
             )
 
-            val history = repo.getMessagesList(conversationId)
-                .filter { !it.isStreaming }
-                .map { ChatMessage(it.role, it.content) }
+            // If the agent doesn't support the attachment type, say so in the chat
+            if (imageBase64 != null && !agent.supportsVision) {
+                repo.updateMessageContent(
+                    assistantId,
+                    "I don't support image analysis with \"${agent.model}\". Please switch to a vision-capable model in agent settings.",
+                    false
+                )
+                repo.touchConversation(conversationId)
+                return@launch
+            }
+            if (documentBase64 != null && agent.provider.name != "ANTHROPIC") {
+                repo.updateMessageContent(
+                    assistantId,
+                    "I don't support PDF documents. PDF upload requires a model with document analysis capabilities.",
+                    false
+                )
+                repo.touchConversation(conversationId)
+                return@launch
+            }
+
+            // Attach image/document to the latest user message for the API call
+            val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
+            val history = dbHistory.mapIndexed { index, msg ->
+                if (index == dbHistory.lastIndex && msg.role == "user") {
+                    when {
+                        imageBase64 != null -> ChatMessage(msg.role, msg.content, imageBase64, "image/jpeg")
+                        documentBase64 != null -> ChatMessage(msg.role, msg.content, documentBase64 = documentBase64)
+                        else -> ChatMessage(msg.role, msg.content)
+                    }
+                } else {
+                    ChatMessage(msg.role, msg.content)
+                }
+            }
 
             var accumulated = ""
             try {
@@ -128,10 +168,14 @@ class ConversationDetailViewModel(
                                 repo.touchConversation(conversationId)
                             }
                             is StreamChunk.Error -> {
+                                val errMsg = chunk.cause.message ?: "Unknown error"
                                 repo.updateMessageContent(
                                     assistantId,
-                                    "$accumulated\n[Error: ${chunk.cause.message}]",
+                                    "$accumulated\n[Error: $errMsg]",
                                     false
+                                )
+                                _errorEvent.trySend(
+                                    "Request failed: $errMsg\n\nThe model \"${agent.model}\" may not support this request. Try switching to a different model."
                                 )
                             }
                         }

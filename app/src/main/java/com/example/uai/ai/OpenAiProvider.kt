@@ -35,7 +35,7 @@ class OpenAiProvider(
         try {
             call.execute().use { response ->
                 if (!response.isSuccessful) {
-                    emit(StreamChunk.Error(Exception("HTTP ${response.code}: ${response.message}")))
+                    emit(StreamChunk.Error(Exception(httpErrorMessage(response.code))))
                     return@use
                 }
                 val source = response.body?.source() ?: run {
@@ -63,7 +63,24 @@ class OpenAiProvider(
             if (config.systemPrompt.isNotBlank()) {
                 add(mapOf("role" to "system", "content" to config.systemPrompt))
             }
-            addAll(messages.map { mapOf("role" to it.role, "content" to it.content) })
+            addAll(messages.map { msg ->
+                val content: Any = if (msg.imageBase64 != null) {
+                    buildList {
+                        add(mapOf(
+                            "type" to "image_url",
+                            "image_url" to mapOf(
+                                "url" to "data:${msg.imageMimeType ?: "image/jpeg"};base64,${msg.imageBase64}"
+                            )
+                        ))
+                        if (msg.content.isNotBlank()) {
+                            add(mapOf("type" to "text", "text" to msg.content))
+                        }
+                    }
+                } else {
+                    msg.content
+                }
+                mapOf("role" to msg.role, "content" to content)
+            })
         }
         return gson.toJson(
             mapOf(

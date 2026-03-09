@@ -1,9 +1,11 @@
 package com.example.uai
 
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -32,9 +34,11 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.model.AppColorTheme
+import com.example.uai.service.FloatingBubbleService
 import com.example.uai.ui.navigation.AppNavGraph
 import com.example.uai.ui.navigation.Routes
 import com.example.uai.ui.theme.UaiTheme
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -43,6 +47,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val container = (application as UaiApplication).container
+
+        // Auto-start bubble service if it was enabled in a previous session
+        lifecycleScope.launch {
+            val enabled = container.preferences.bubbleEnabledFlow.first()
+            if (enabled && Settings.canDrawOverlays(this@MainActivity)) {
+                FloatingBubbleService.startService(this@MainActivity)
+            }
+        }
 
         setContent {
             val colorTheme by container.agentRepository.colorThemeFlow

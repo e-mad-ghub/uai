@@ -6,7 +6,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,7 +32,9 @@ fun AgentEditScreen(
     val agent by viewModel.agent.collectAsStateWithLifecycle()
     val isSaved by viewModel.isSaved.collectAsStateWithLifecycle()
     val openRouterModels by viewModel.openRouterModels.collectAsStateWithLifecycle()
+    val freeModelIds by viewModel.freeModelIds.collectAsStateWithLifecycle()
     val isLoadingModels by viewModel.isLoadingModels.collectAsStateWithLifecycle()
+    val connectionTestState by viewModel.connectionTestState.collectAsStateWithLifecycle()
     var showApiKey by remember { mutableStateOf(false) }
 
     LaunchedEffect(isSaved) {
@@ -106,6 +110,7 @@ fun AgentEditScreen(
                 selectedModel = agent.model,
                 onModelChange = { viewModel.update { copy(model = it) } },
                 fetchedOpenRouterModels = openRouterModels,
+                freeModelIds = freeModelIds,
                 isLoadingModels = isLoadingModels
             )
 
@@ -130,6 +135,51 @@ fun AgentEditScreen(
                             }
                         )
                     }
+                }
+            }
+
+            // Test connection
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = viewModel::testConnection,
+                    enabled = connectionTestState !is ConnectionTestState.Testing
+                ) {
+                    if (connectionTestState is ConnectionTestState.Testing) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Testing…")
+                    } else {
+                        Text("Test connection")
+                    }
+                }
+                when (val state = connectionTestState) {
+                    is ConnectionTestState.Success -> Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    is ConnectionTestState.Failure -> Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Error,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            state.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
+                    else -> {}
                 }
             }
 
@@ -181,6 +231,7 @@ private fun ModelSelector(
     selectedModel: String,
     onModelChange: (String) -> Unit,
     fetchedOpenRouterModels: List<String> = emptyList(),
+    freeModelIds: Set<String> = emptySet(),
     isLoadingModels: Boolean = false
 ) {
     val presets = if (provider == AiProviderType.OPENROUTER && fetchedOpenRouterModels.isNotEmpty())
@@ -228,6 +279,8 @@ private fun ModelSelector(
             }
             presets.forEach { model ->
                 val config = AgentConfig(provider = provider, model = model)
+                val isFree = provider == AiProviderType.OPENROUTER &&
+                    (freeModelIds.contains(model) || model.endsWith(":free"))
                 DropdownMenuItem(
                     text = {
                         Row(
@@ -235,6 +288,13 @@ private fun ModelSelector(
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Text(model, modifier = Modifier.weight(1f))
+                            if (isFree) {
+                                SuggestionChip(
+                                    onClick = {},
+                                    label = { Text("Free", style = MaterialTheme.typography.labelSmall) },
+                                    modifier = Modifier.height(24.dp)
+                                )
+                            }
                             if (config.supportsVision) {
                                 Icon(
                                     Icons.Default.Image,
@@ -259,4 +319,3 @@ private fun ModelSelector(
         }
     }
 }
-

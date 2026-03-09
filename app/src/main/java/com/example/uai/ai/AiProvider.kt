@@ -17,6 +17,7 @@ fun httpErrorMessage(code: Int): String {
     val description = when (code) {
         400 -> "Bad request — the model may not support this message format or the request was malformed"
         401 -> "Invalid API key — check the API key in your agent settings"
+        402 -> "Insufficient credits — add credits to your account to use this model"
         403 -> "Access denied — your API key may not have permission to use this model"
         404 -> "Model not found — check the model name in your agent settings"
         429 -> "Rate limit exceeded — too many requests, please wait a moment and try again"

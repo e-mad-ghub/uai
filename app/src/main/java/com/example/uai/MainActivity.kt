@@ -61,6 +61,8 @@ class MainActivity : ComponentActivity() {
 
                 val currentEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = currentEntry?.destination?.route
+                val currentOpenId = currentEntry?.arguments?.getString("conversationId")
+                    ?: currentEntry?.arguments?.getString("agoraId")
 
                 fun openDrawer() = scope.launch { drawerState.open() }
                 fun closeDrawer() = scope.launch { drawerState.close() }
@@ -165,6 +167,11 @@ class MainActivity : ComponentActivity() {
                                             onDelete = {
                                                 scope.launch {
                                                     container.conversationRepository.deleteConversation(conv)
+                                                    if (currentOpenId == conv.id) {
+                                                        navController.navigate(Routes.NEW_CONVERSATION) {
+                                                            popUpTo(0) { inclusive = true }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         )

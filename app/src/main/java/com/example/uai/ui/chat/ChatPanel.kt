@@ -386,15 +386,14 @@ fun ChatPanel(
 }
 
 @Composable
-fun BubbleContent(isLoading: Boolean, screenshotPending: Boolean = false, modifier: Modifier = Modifier) {
+fun BubbleContent(isLoading: Boolean, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxSize()
             .clip(CircleShape)
             .background(
                 Brush.radialGradient(
-                    colors = if (screenshotPending) listOf(Color(0xFF1976D2), Color(0xFF0D47A1))
-                             else listOf(Color(0xFF6750A4), Color(0xFF9C27B0))
+                    colors = listOf(Color(0xFF6750A4), Color(0xFF9C27B0))
                 )
             ),
         contentAlignment = Alignment.Center
@@ -404,13 +403,6 @@ fun BubbleContent(isLoading: Boolean, screenshotPending: Boolean = false, modifi
                 modifier = Modifier.size(28.dp),
                 color = Color.White,
                 strokeWidth = 2.5.dp
-            )
-        } else if (screenshotPending) {
-            Icon(
-                Icons.Default.Screenshot,
-                contentDescription = "Tap to capture screen",
-                tint = Color.White,
-                modifier = Modifier.size(30.dp)
             )
         } else {
             Icon(

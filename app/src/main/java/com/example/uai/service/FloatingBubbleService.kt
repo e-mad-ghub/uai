@@ -102,8 +102,6 @@ class FloatingBubbleService : Service() {
     private var colorTheme by mutableStateOf(AppColorTheme.TERRACOTTA)
     private var isDismissTargetActive by mutableStateOf(false)
 
-    private var screenshotPending by mutableStateOf(false)
-
     // Attachment state
     private var pendingImageBase64 by mutableStateOf<String?>(null)
     private var pendingImageUriStr by mutableStateOf<String?>(null)
@@ -199,7 +197,6 @@ class FloatingBubbleService : Service() {
         super.onDestroy()
         cachedMediaProjection?.stop()
         cachedMediaProjection = null
-        screenshotPending = false
         lifecycleOwner.onDestroy()
         serviceScope.cancel()
         removeSafely(chatPanelContainer)
@@ -249,7 +246,7 @@ class FloatingBubbleService : Service() {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 UaiTheme(colorTheme = colorTheme) {
-                    BubbleContent(isLoading = isLoading, screenshotPending = screenshotPending)
+                    BubbleContent(isLoading = isLoading)
                 }
             }
             setupDragAndTap(this)
@@ -318,13 +315,7 @@ class FloatingBubbleService : Service() {
                     removeSafely(dismissZoneView)
                     isDismissTargetActive = false
                     if (!isDragging && !longPressConsumed) {
-                        val projection = cachedMediaProjection
-                        if (screenshotPending && projection != null) {
-                            doCaptureWithProjection(projection)
-                        } else {
-                            screenshotPending = false  // clear any stale mode
-                            toggleChatPanel()
-                        }
+                        toggleChatPanel()
                     } else if (isDragging) {
                         if (wasOverDismiss) {
                             stopSelf()
@@ -640,77 +631,62 @@ class FloatingBubbleService : Service() {
     }
 
     private fun launchScreenshotCapture() {
+        fun doCapture(projection: MediaProjection) {
+            // Wait for the tap ripple animation to finish (~150ms) before detaching the panel.
+            // If we detach mid-ripple, the RippleDrawable's RenderNodeAnimator is left with a
+            // stale target, causing "Target already set!" crash on the next re-attach draw pass.
+            Handler(Looper.getMainLooper()).postDelayed({
+                hideChatPanel()
+                // Wait for panel close animation, then hide bubble and capture
+                Handler(Looper.getMainLooper()).postDelayed({
+                    bubbleParams.alpha = 0f
+                    bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        try {
+                            performCapture(projection) { result ->
+                                bubbleParams.alpha = 1f
+                                bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
+                                if (result != null) {
+                                    val (base64, bitmap) = result
+                                    pendingImageBase64 = base64
+                                    pendingImageUriStr = null
+                                    pendingImageBitmap = bitmap
+                                    pendingFileName = null
+                                    pendingFileText = null
+                                    pendingDocumentBase64 = null
+                                }
+                                showChatPanel()
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("UAI_CAP", "capture error: ${e.javaClass.simpleName}: ${e.message}")
+                            cachedMediaProjection = null
+                            bubbleParams.alpha = 1f
+                            bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
+                            showChatPanel()
+                        }
+                    }, 150L)
+                }, 300L)
+            }, 200L)
+        }
+
         val projection = cachedMediaProjection
         if (projection != null) {
-            // Already have permission — close panel and enter camera mode
-            hideChatPanel()
-            screenshotPending = true
-            android.widget.Toast.makeText(this, "Tap the bubble to capture the screen", android.widget.Toast.LENGTH_SHORT).show()
+            doCapture(projection)
         } else {
-            // Need permission first
             MediaPickerActivity.onProjectionConsent = { resultCode, data ->
                 if (resultCode == Activity.RESULT_OK) {
                     val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                     mpm.getMediaProjection(resultCode, data)?.let { newProjection ->
                         newProjection.registerCallback(object : MediaProjection.Callback() {
-                            override fun onStop() {
-                                cachedMediaProjection = null
-                                Handler(Looper.getMainLooper()).post {
-                                    screenshotPending = false
-                                    restoreOverlays()
-                                }
-                            }
+                            override fun onStop() { cachedMediaProjection = null }
                         }, Handler(Looper.getMainLooper()))
                         cachedMediaProjection = newProjection
-                        Handler(Looper.getMainLooper()).post {
-                            hideChatPanel()
-                            screenshotPending = true
-                            android.widget.Toast.makeText(this@FloatingBubbleService, "Tap the bubble to capture the screen", android.widget.Toast.LENGTH_SHORT).show()
-                        }
+                        Handler(Looper.getMainLooper()).post { doCapture(newProjection) }
                     }
                 }
             }
             startMediaPickerActivity(MediaPickerActivity.ACTION_SCREENSHOT)
         }
-    }
-
-    /** Restores bubble visibility — safe to call even if already visible. */
-    private fun restoreOverlays() {
-        if (bubbleParams.alpha != 1f) {
-            bubbleParams.alpha = 1f
-            bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
-        }
-    }
-
-    private fun doCaptureWithProjection(projection: MediaProjection) {
-        // Panel is always already closed when this is called (screenshot pending mode).
-        // Only hide the tiny bubble for the capture window.
-        bubbleParams.alpha = 0f
-        bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
-
-        Handler(Looper.getMainLooper()).postDelayed({
-            try {
-                performCapture(projection) { result ->
-                    screenshotPending = false
-                    restoreOverlays()
-                    if (result != null) {
-                        val (base64, bitmap) = result
-                        pendingImageBase64 = base64
-                        pendingImageUriStr = null
-                        pendingImageBitmap = bitmap
-                        pendingFileName = null
-                        pendingFileText = null
-                        pendingDocumentBase64 = null
-                    }
-                    showChatPanel()
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("UAI_CAP", "capture error: ${e.javaClass.simpleName}: ${e.message}")
-                cachedMediaProjection = null
-                screenshotPending = false
-                restoreOverlays()
-            }
-        }, 300L)
     }
 
     /** Captures one frame and returns base64+ImageBitmap encoded in the background thread. */

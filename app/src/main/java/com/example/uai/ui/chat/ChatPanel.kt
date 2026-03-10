@@ -1,5 +1,6 @@
 package com.example.uai.ui.chat
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -14,7 +15,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Screenshot
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
@@ -24,6 +29,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.text.input.ImeAction
@@ -40,12 +47,20 @@ fun ChatPanel(
     isLoading: Boolean,
     agentName: String,
     agents: List<AgentConfig>,
+    pendingImageBitmap: ImageBitmap?,
+    pendingFileName: String?,
+    hasAttachment: Boolean,
     onInputChange: (String) -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onClose: () -> Unit,
     onAgentSelect: (AgentConfig) -> Unit,
     onNewConversation: () -> Unit,
+    onPickGallery: () -> Unit,
+    onPickCamera: () -> Unit,
+    onPickFile: () -> Unit,
+    onTakeScreenshot: () -> Unit,
+    onClearAttachment: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -55,6 +70,7 @@ fun ChatPanel(
     }
 
     var agentDropdownExpanded by remember { mutableStateOf(false) }
+    var attachMenuExpanded by remember { mutableStateOf(false) }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -173,20 +189,135 @@ fun ChatPanel(
                     }
                 }
 
-                // Slot 2: bottom divider + input row
+                // Slot 2: attachment preview + bottom divider + input row
                 Column(modifier = Modifier.fillMaxWidth()) {
+                    // Attachment preview strip
+                    if (hasAttachment) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (pendingImageBitmap != null) {
+                                Image(
+                                    bitmap = pendingImageBitmap,
+                                    contentDescription = "Attached image",
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .clip(RoundedCornerShape(8.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else if (pendingFileName != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    modifier = Modifier.height(40.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 10.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.AttachFile,
+                                            null,
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            pendingFileName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.weight(1f))
+                            IconButton(
+                                onClick = onClearAttachment,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    "Clear attachment",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                     HorizontalDivider()
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                            .padding(horizontal = 4.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.Bottom
                     ) {
+                        // "+" attachment picker button
+                        Box {
+                            IconButton(
+                                onClick = { attachMenuExpanded = true },
+                                enabled = !isLoading,
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    "Attach",
+                                    tint = if (hasAttachment) MaterialTheme.colorScheme.primary
+                                           else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = attachMenuExpanded,
+                                onDismissRequest = { attachMenuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Camera") },
+                                    leadingIcon = { Icon(Icons.Default.CameraAlt, null) },
+                                    onClick = { onPickCamera(); attachMenuExpanded = false }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Gallery") },
+                                    leadingIcon = { Icon(Icons.Default.Image, null) },
+                                    onClick = { onPickGallery(); attachMenuExpanded = false }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("File") },
+                                    leadingIcon = { Icon(Icons.Default.AttachFile, null) },
+                                    onClick = { onPickFile(); attachMenuExpanded = false }
+                                )
+                            }
+                        }
+                        // Screenshot button (floating chat exclusive)
+                        IconButton(
+                            onClick = onTakeScreenshot,
+                            enabled = !isLoading,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Screenshot,
+                                "Screenshot",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                         OutlinedTextField(
                             value = inputText,
                             onValueChange = onInputChange,
                             modifier = Modifier.weight(1f),
-                            placeholder = { Text("Message…") },
+                            placeholder = {
+                                Text(
+                                    when {
+                                        pendingImageBitmap != null -> "Ask about this image…"
+                                        pendingFileName != null    -> "Ask about this file…"
+                                        else                       -> "Message…"
+                                    }
+                                )
+                            },
                             shape = RoundedCornerShape(24.dp),
                             keyboardOptions = KeyboardOptions(
                                 capitalization = KeyboardCapitalization.Sentences,
@@ -200,7 +331,7 @@ fun ChatPanel(
                         if (isLoading) {
                             FilledIconButton(
                                 onClick = onStop,
-                                modifier = Modifier.size(48.dp),
+                                modifier = Modifier.size(44.dp),
                                 colors = IconButtonDefaults.filledIconButtonColors(
                                     containerColor = MaterialTheme.colorScheme.errorContainer,
                                     contentColor = MaterialTheme.colorScheme.error
@@ -211,8 +342,8 @@ fun ChatPanel(
                         } else {
                             FilledIconButton(
                                 onClick = { onSend(inputText) },
-                                enabled = inputText.isNotBlank(),
-                                modifier = Modifier.size(48.dp)
+                                enabled = inputText.isNotBlank() || hasAttachment,
+                                modifier = Modifier.size(44.dp)
                             ) {
                                 Icon(
                                     Icons.AutoMirrored.Filled.Send,
@@ -255,17 +386,15 @@ fun ChatPanel(
 }
 
 @Composable
-fun BubbleContent(isLoading: Boolean, modifier: Modifier = Modifier) {
+fun BubbleContent(isLoading: Boolean, screenshotPending: Boolean = false, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxSize()
             .clip(CircleShape)
             .background(
                 Brush.radialGradient(
-                    colors = listOf(
-                        Color(0xFF6750A4),
-                        Color(0xFF9C27B0)
-                    )
+                    colors = if (screenshotPending) listOf(Color(0xFF1976D2), Color(0xFF0D47A1))
+                             else listOf(Color(0xFF6750A4), Color(0xFF9C27B0))
                 )
             ),
         contentAlignment = Alignment.Center
@@ -275,6 +404,13 @@ fun BubbleContent(isLoading: Boolean, modifier: Modifier = Modifier) {
                 modifier = Modifier.size(28.dp),
                 color = Color.White,
                 strokeWidth = 2.5.dp
+            )
+        } else if (screenshotPending) {
+            Icon(
+                Icons.Default.Screenshot,
+                contentDescription = "Tap to capture screen",
+                tint = Color.White,
+                modifier = Modifier.size(30.dp)
             )
         } else {
             Icon(

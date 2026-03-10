@@ -31,6 +31,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
+import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
@@ -550,7 +551,9 @@ class FloatingBubbleService : Service() {
 
         chatPanelView = ComposeView(this).apply {
             attachLifecycleOwners(this)
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindowOrReleasedFromPool)
+            // Keep the overlay composition alive across temporary detach/attach cycles
+            // such as screenshot capture, so scroll state and other UI behavior persist.
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 UaiTheme(colorTheme = colorTheme) {
                     ChatPanel(
@@ -816,13 +819,43 @@ class FloatingBubbleService : Service() {
     }
 
     private fun launchScreenshotCapture() {
+        fun suppressChatPanelForCapture(): (() -> Unit) {
+            val container = chatPanelContainer
+            val panel = chatPanelView
+            if (container == null || panel == null || !container.isAttachedToWindow) {
+                return {}
+            }
+
+            val previousDimAmount = panelParams.dimAmount
+            val previousVisibility = container.visibility
+            val previousAlpha = panel.alpha
+
+            panel.animate().cancel()
+            panel.clearFocus()
+            (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.hideSoftInputFromWindow(panel.windowToken, 0)
+
+            panelParams.dimAmount = 0f
+            runCatching { windowManager.updateViewLayout(container, panelParams) }
+            container.visibility = View.INVISIBLE
+            panel.alpha = 0f
+
+            return {
+                if (container.isAttachedToWindow) {
+                    container.visibility = previousVisibility
+                    panel.alpha = previousAlpha
+                    panelParams.dimAmount = previousDimAmount
+                    runCatching { windowManager.updateViewLayout(container, panelParams) }
+                }
+            }
+        }
+
         fun doCapture(projection: MediaProjection) {
             // Wait for the tap ripple animation to finish (~150ms) before detaching the panel.
-            // If we detach mid-ripple, the RippleDrawable's RenderNodeAnimator is left with a
-            // stale target, causing "Target already set!" crash on the next re-attach draw pass.
+            // If we tear down the panel mid-ripple, Samsung/Compose can leave the ripple animator
+            // or panel state in a bad state. Keep the panel attached, but hidden, during capture.
             Handler(Looper.getMainLooper()).postDelayed({
-                hideChatPanel()
-                // Wait for panel close animation, then hide bubble and capture
+                val restorePanel = suppressChatPanelForCapture()
                 Handler(Looper.getMainLooper()).postDelayed({
                     bubbleParams.alpha = 0f
                     bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
@@ -835,17 +868,17 @@ class FloatingBubbleService : Service() {
                                     val (base64, bitmap) = result
                                     pendingImages.add(Triple(base64, bitmap, null))
                                 }
-                                showChatPanel()
+                                restorePanel()
                             }
                         } catch (e: Exception) {
                             android.util.Log.e("UAI_CAP", "capture error: ${e.javaClass.simpleName}: ${e.message}")
                             cachedMediaProjection = null
                             bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
                             bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
-                            showChatPanel()
+                            restorePanel()
                         }
                     }, 150L)
-                }, 300L)
+                }, 120L)
             }, 200L)
         }
 

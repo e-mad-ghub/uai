@@ -3,9 +3,6 @@ package com.example.uai.ui.chat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -27,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.Constraints
@@ -59,30 +57,9 @@ fun ChatPanel(
     onClearAttachment: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val listState = rememberLazyListState()
-
-    val isAtBottom by remember {
-        derivedStateOf {
-            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-            last == null || last.index >= listState.layoutInfo.totalItemsCount - 1
-        }
-    }
-
-    // Scroll to bottom when a new message is added (once per message, not per token)
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
-    }
-
-    // During streaming, keep scrolling to latest content — but only if the user
-    // is already at the bottom (prevents interrupting user-initiated scrolls/flings)
-    val lastMessageContent = messages.lastOrNull()?.content
-    LaunchedEffect(lastMessageContent) {
-        if (messages.lastOrNull()?.isStreaming == true && isAtBottom) {
-            listState.scroll { scrollBy(100_000f) }
-        }
-    }
-
-    val maxMsgHeight = 280.dp
+    val configuration = LocalConfiguration.current
+    val messageListBehavior = rememberChatMessageListBehavior(messages)
+    val maxMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(280.dp, 560.dp)
 
     var agentDropdownExpanded by remember { mutableStateOf(false) }
     var replyToMessage by remember { mutableStateOf<MessageEntity?>(null) }
@@ -170,60 +147,56 @@ fun ChatPanel(
                 }
 
                 // Slot 1: messages list
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surface),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        if (messages.isEmpty()) {
-                            item {
-                                Box(
-                                    modifier = Modifier
-                                        .fillParentMaxWidth()
-                                        .padding(32.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        "Start a conversation with $agentName",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                ChatMessageList(
+                    messages = messages,
+                    isLoading = isLoading,
+                    behavior = messageListBehavior,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface),
+                    messageThumbnails = messageThumbnails,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    emptyContent = {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "Start a conversation with $agentName",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    overlayContent = { isAtBottom ->
+                        if (!isAtBottom && onOpenInApp != null) {
+                            FilledTonalButton(
+                                onClick = onOpenInApp,
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 8.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.OpenInFull,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text("Open in app", style = MaterialTheme.typography.labelSmall)
                             }
                         }
-                        items(messages, key = { it.id }) { message ->
-                            MessageBubble(
-                                message = message,
-                                thumbnails = messageThumbnails[message.id] ?: emptyList(),
-                                onReply = if (!message.isStreaming && message.role == "assistant") {
-                                    { replyToMessage = message }
-                                } else null
-                            )
+                    },
+                    replyActionForMessage = { message ->
+                        if (!message.isStreaming && message.role == "assistant") {
+                            { replyToMessage = message }
+                        } else {
+                            null
                         }
                     }
-                    // "Open in app" pill — appears when user scrolls up into history
-                    if (!isAtBottom && onOpenInApp != null) {
-                        FilledTonalButton(
-                            onClick = onOpenInApp,
-                            modifier = Modifier
-                                .align(Alignment.TopCenter)
-                                .padding(top = 8.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.OpenInFull,
-                                contentDescription = null,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text("Open in app", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
+                )
 
                 // Slot 2: divider + ChatInputBar (unified input chrome)
                 Column(modifier = Modifier.fillMaxWidth()) {

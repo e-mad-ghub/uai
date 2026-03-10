@@ -1,16 +1,30 @@
 package com.example.uai.ui.chat
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import java.io.ByteArrayOutputStream
 
 /**
@@ -87,4 +101,99 @@ fun performScreenCapture(
         DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
         imageReader.surface, null, null
     )
+}
+
+@Composable
+fun rememberScreenCaptureLauncher(
+    onCaptured: (String, ImageBitmap) -> Unit,
+    onError: (String) -> Unit
+): () -> Unit {
+    val context = LocalContext.current
+    val currentContext by rememberUpdatedState(context)
+    val currentOnCaptured by rememberUpdatedState(onCaptured)
+    val currentOnError by rememberUpdatedState(onError)
+    var cachedProjection by remember { mutableStateOf<MediaProjection?>(null) }
+
+    fun captureNow(projection: MediaProjection) {
+        val dm = currentContext.resources.displayMetrics
+        performScreenCapture(
+            projection = projection,
+            widthPx = dm.widthPixels,
+            heightPx = dm.heightPixels,
+            densityDpi = dm.densityDpi
+        ) { result ->
+            if (result != null) {
+                val (base64, bitmap) = result
+                currentOnCaptured(base64, bitmap)
+            } else {
+                currentOnError("Could not capture the screen.")
+            }
+        }
+    }
+
+    val consentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode != Activity.RESULT_OK || result.data == null) {
+            currentOnError("Screen capture was cancelled.")
+            return@rememberLauncherForActivityResult
+        }
+
+        val manager = currentContext.getSystemService(Context.MEDIA_PROJECTION_SERVICE)
+            as? MediaProjectionManager
+        if (manager == null) {
+            currentOnError("Screen capture is unavailable on this device.")
+            return@rememberLauncherForActivityResult
+        }
+
+        val projection = runCatching {
+            manager.getMediaProjection(result.resultCode, result.data!!)
+        }.getOrNull()
+
+        if (projection == null) {
+            currentOnError("Could not start screen capture.")
+            return@rememberLauncherForActivityResult
+        }
+
+        projection.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() {
+                cachedProjection = null
+            }
+        }, Handler(Looper.getMainLooper()))
+
+        cachedProjection = projection
+        captureNow(projection)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            cachedProjection?.stop()
+            cachedProjection = null
+        }
+    }
+
+    return remember(consentLauncher) {
+        {
+            val projection = cachedProjection
+            if (projection != null) {
+                captureNow(projection)
+            } else if (currentContext.findActivity() == null) {
+                currentOnError("Screen capture is unavailable here.")
+            } else {
+                val manager = currentContext.getSystemService(Context.MEDIA_PROJECTION_SERVICE)
+                    as? MediaProjectionManager
+                if (manager == null) {
+                    currentOnError("Screen capture is unavailable on this device.")
+                } else {
+                    consentLauncher.launch(manager.createScreenCaptureIntent())
+                }
+            }
+        }
+    }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

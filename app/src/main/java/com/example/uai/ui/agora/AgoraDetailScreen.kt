@@ -1,17 +1,12 @@
 package com.example.uai.ui.agora
 
-import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.provider.Settings
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -20,13 +15,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
@@ -37,9 +28,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.data.db.MessageEntity
-import com.example.uai.service.FloatingBubbleService
 import com.example.uai.ui.chat.ChatInputBar
+import com.example.uai.ui.chat.ChatMessageList
 import com.example.uai.ui.chat.MessageBubble
+import com.example.uai.ui.chat.rememberChatMessageListBehavior
+import com.example.uai.ui.chat.rememberScreenCaptureLauncher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -137,6 +130,26 @@ fun AgoraDetailScreen(
     // Room settings bottom sheet
     var showSettings by remember { mutableStateOf(false) }
 
+    fun clearAttachment() {
+        pendingImageUri = null
+        pendingImageBase64 = null
+        pendingImageBitmap = null
+        pendingFileName = null
+        pendingFileText = null
+        pendingDocumentBase64 = null
+    }
+
+    val captureScreen = rememberScreenCaptureLauncher(
+        onCaptured = { base64, bitmap ->
+            clearAttachment()
+            pendingImageBase64 = base64
+            pendingImageBitmap = bitmap
+        },
+        onError = { message ->
+            scope.launch { snackbarHostState.showSnackbar(message) }
+        }
+    )
+
     // Error events
     LaunchedEffect(Unit) {
         viewModel.errorEvent.collect { message ->
@@ -199,45 +212,12 @@ fun AgoraDetailScreen(
         }
     }
 
-    // Capture mode: app backgrounds itself, bubble becomes a camera button, tapping it captures
-    val agoraId = viewModel.conversationId
-    LaunchedEffect(Unit) {
-        FloatingBubbleService.screenshotResult.collect { (convId, base64, bitmap) ->
-            if (convId == agoraId) {
-                pendingImageUri = null; pendingImageBase64 = null; pendingImageBitmap = null
-                pendingFileName = null; pendingFileText = null; pendingDocumentBase64 = null
-                pendingImageBase64 = base64
-                pendingImageBitmap = bitmap
-            }
-        }
-    }
-
-    fun doScreenshot() {
-        if (!Settings.canDrawOverlays(context)) {
-            scope.launch { snackbarHostState.showSnackbar("Overlay permission required. Enable it in Settings > Apps > UAI.") }
-            return
-        }
-        FloatingBubbleService.enterCaptureMode(context, agoraId, true)
-        (context as? Activity)?.moveTaskToBack(true)
-    }
-
     // Encode gallery image when URI changes (camera images encoded directly)
     LaunchedEffect(pendingImageUri) {
         val uri = pendingImageUri ?: return@LaunchedEffect
         val (base64, bmp) = withContext(Dispatchers.IO) { encodeImageForApi(context, uri) }
         pendingImageBase64 = base64
         pendingImageBitmap = bmp
-    }
-
-    fun clearAttachment() {
-        pendingImageUri = null
-        pendingImageBase64 = null
-        pendingImageBitmap = null
-        pendingFileName = null
-        pendingFileText = null
-        pendingDocumentBase64 = null
-        @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-        FloatingBubbleService.screenshotResult.resetReplayCache()
     }
 
     fun doSend() {
@@ -249,31 +229,7 @@ fun AgoraDetailScreen(
         clearAttachment()
     }
 
-    // Auto-scroll
-    val listState = rememberLazyListState()
-    val isAtBottom by remember {
-        derivedStateOf {
-            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-            last == null || last.index >= listState.layoutInfo.totalItemsCount - 1
-        }
-    }
-    var autoScrollEnabled by remember { mutableStateOf(true) }
-    val nestedScrollConnection = remember {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.UserInput && available.y > 0) autoScrollEnabled = false
-                return Offset.Zero
-            }
-        }
-    }
-    LaunchedEffect(isAtBottom) { if (isAtBottom) autoScrollEnabled = true }
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) { autoScrollEnabled = true; listState.animateScrollToItem(messages.size - 1) }
-    }
-    val lastMessageContent = messages.lastOrNull()?.content
-    LaunchedEffect(lastMessageContent) {
-        if (messages.lastOrNull()?.isStreaming == true && autoScrollEnabled) listState.scroll { scrollBy(100_000f) }
-    }
+    val messageListBehavior = rememberChatMessageListBehavior(messages)
 
     Scaffold(
         modifier = modifier,
@@ -338,27 +294,19 @@ fun AgoraDetailScreen(
                     }
                 }
             } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.weight(1f).nestedScroll(nestedScrollConnection),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(messages, key = { it.id }) { msg ->
-                        MessageBubble(
-                            message = msg,
-                            onReply = if (msg.role == "assistant" && !msg.isStreaming && msg.agentName != null)
-                                { { replyToMessage = msg } } else null
-                        )
-                    }
-                    if (isLoading && messages.lastOrNull()?.isStreaming != true) {
-                        item {
-                            Row(Modifier.fillMaxWidth()) {
-                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                            }
+                ChatMessageList(
+                    messages = messages,
+                    isLoading = isLoading,
+                    behavior = messageListBehavior,
+                    modifier = Modifier.weight(1f),
+                    replyActionForMessage = { msg ->
+                        if (msg.role == "assistant" && !msg.isStreaming && msg.agentName != null) {
+                            { replyToMessage = msg }
+                        } else {
+                            null
                         }
                     }
-                }
+                )
             }
 
             // Agora-specific reply preview bar (rendered above autocomplete/chips to preserve visual order)
@@ -463,7 +411,7 @@ fun AgoraDetailScreen(
                 onPickCamera = { cameraLauncher.launch(null) },
                 onPickGallery = { imagePicker.launch("image/*") },
                 onPickFile = { filePicker.launch("*/*") },
-                onTakeScreenshot = ::doScreenshot,
+                onTakeScreenshot = captureScreen,
                 onClearAttachment = { clearAttachment() },
                 onStop = { viewModel.stopResponse() },
                 onSend = { doSend() },

@@ -19,7 +19,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -54,6 +56,7 @@ import kotlin.math.roundToInt
 @Composable
 fun MessageBubble(
     message: MessageEntity,
+    thumbnails: List<ImageBitmap> = emptyList(),
     onReply: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -197,9 +200,37 @@ fun MessageBubble(
                         TypingIndicator(color = textColor)
                     } else {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            imageBitmap?.let { bmp ->
-                                Image(
-                                    bitmap = bmp,
+                            when {
+                                thumbnails.isNotEmpty() -> {
+                                    if (thumbnails.size == 1) {
+                                        Image(
+                                            bitmap = thumbnails[0],
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(8.dp)),
+                                            contentScale = ContentScale.FillWidth
+                                        )
+                                    } else {
+                                        Row(
+                                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            thumbnails.forEach { bmp ->
+                                                Image(
+                                                    bitmap = bmp,
+                                                    contentDescription = null,
+                                                    modifier = Modifier
+                                                        .size(110.dp)
+                                                        .clip(RoundedCornerShape(8.dp)),
+                                                    contentScale = ContentScale.Crop
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                imageBitmap != null -> Image(
+                                    bitmap = imageBitmap!!,
                                     contentDescription = null,
                                     modifier = Modifier
                                         .fillMaxWidth()

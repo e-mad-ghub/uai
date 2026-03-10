@@ -1,35 +1,27 @@
 package com.example.uai.ui.conversations
 
+import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.provider.Settings
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -37,7 +29,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -46,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AiProviderType
+import com.example.uai.service.FloatingBubbleService
+import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.MessageBubble
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -71,7 +64,6 @@ fun ConversationDetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     var agentMenuExpanded by remember { mutableStateOf(false) }
-    var attachMenuExpanded by remember { mutableStateOf(false) }
     var replyToMessage by remember { mutableStateOf<MessageEntity?>(null) }
 
     LaunchedEffect(Unit) {
@@ -102,9 +94,13 @@ fun ConversationDetailScreen(
 
     fun clearAttachments() {
         pendingImageUri = null
+        pendingImageBase64 = null
+        pendingImageBitmap = null
         pendingFileName = null
         pendingFileText = null
         pendingDocumentBase64 = null
+        @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+        FloatingBubbleService.screenshotResult.resetReplayCache()
     }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -158,7 +154,28 @@ fun ConversationDetailScreen(
         }
     }
 
-    // Encode gallery image when URI changes (camera images are encoded directly in the launcher)
+    // Capture mode: app backgrounds itself, bubble becomes a camera button, tapping it captures
+    val conversationId = viewModel.conversationId
+    LaunchedEffect(Unit) {
+        FloatingBubbleService.screenshotResult.collect { (convId, base64, bitmap) ->
+            if (convId == conversationId) {
+                clearAttachments()
+                pendingImageBase64 = base64
+                pendingImageBitmap = bitmap
+            }
+        }
+    }
+
+    fun doScreenshot() {
+        if (!Settings.canDrawOverlays(context)) {
+            scope.launch { snackbarHostState.showSnackbar("Overlay permission required. Enable it in Settings > Apps > UAI.") }
+            return
+        }
+        FloatingBubbleService.enterCaptureMode(context, conversationId, false)
+        (context as? Activity)?.moveTaskToBack(true)
+    }
+
+    // Encode gallery image when URI changes (camera images are encoded directly)
     LaunchedEffect(pendingImageUri) {
         val uri = pendingImageUri ?: return@LaunchedEffect
         val (base64, bmp) = withContext(Dispatchers.IO) { encodeImageForApi(context, uri) }
@@ -166,7 +183,7 @@ fun ConversationDetailScreen(
         pendingImageBitmap = bmp
     }
 
-    val hasAttachment = pendingImageUri != null || pendingFileName != null
+    val hasAttachment = pendingImageBitmap != null || pendingFileName != null
 
     fun doSend() {
         val image = pendingImageBase64
@@ -282,152 +299,51 @@ fun ConversationDetailScreen(
                 Text("No active agent. Go to Agents to set one up.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             }
 
-            // Reply preview bar
-            replyToMessage?.let { reply ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .padding(top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Surface(
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer
-                    ) {
-                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                            Text(
-                                activeAgent?.name ?: "Assistant",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                reply.content.take(80) + if (reply.content.length > 80) "…" else "",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                maxLines = 1
-                            )
-                        }
-                    }
-                    IconButton(onClick = { replyToMessage = null }) {
-                        Icon(Icons.Default.Close, "Cancel reply", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-
-            // Attachment preview strip
-            if (hasAttachment) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp).padding(top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (pendingImageBitmap != null) {
-                        Image(
-                            bitmap = pendingImageBitmap!!,
-                            contentDescription = "Selected image",
-                            modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else if (pendingFileName != null) {
-                        Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.height(48.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 12.dp)) {
-                                Icon(
-                                    if (pendingDocumentBase64 != null) Icons.Default.Description else Icons.Default.AttachFile,
-                                    null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(pendingFileName!!, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer, maxLines = 1)
-                            }
-                        }
-                    }
-                    IconButton(onClick = { clearAttachments() }) {
-                        Icon(Icons.Default.Close, "Remove attachment", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-
-            // Input row
-            Surface(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).imePadding(),
-                shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                tonalElevation = 2.dp
+            ChatInputBar(
+                isLoading = isLoading,
+                hasAttachment = hasAttachment,
+                pendingImages = if (pendingImageBitmap != null) listOf(pendingImageBitmap) else emptyList(),
+                pendingFileName = pendingFileName,
+                replyToMessage = replyToMessage,
+                replyLabel = activeAgent?.name ?: "Assistant",
+                onPickCamera = { cameraLauncher.launch(null) },
+                onPickGallery = { imagePicker.launch("image/*") },
+                onPickFile = { filePicker.launch("*/*") },
+                onTakeScreenshot = ::doScreenshot,
+                onClearAttachment = { clearAttachments() },
+                onCancelReply = { replyToMessage = null },
+                onStop = { viewModel.stopResponse() },
+                onSend = { doSend() },
+                sendEnabled = (inputText.isNotBlank() || hasAttachment) && activeAgent != null,
+                modifier = Modifier.imePadding()
             ) {
-                Row(
-                    modifier = Modifier.padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (activeAgent != null) {
-                        Box {
-                            IconButton(onClick = { attachMenuExpanded = true }, enabled = !isLoading) {
-                                Icon(
-                                    Icons.Default.Add, "Attach",
-                                    tint = if (hasAttachment) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            DropdownMenu(expanded = attachMenuExpanded, onDismissRequest = { attachMenuExpanded = false }) {
-                                DropdownMenuItem(
-                                    text = { Text("Camera") },
-                                    leadingIcon = { Icon(Icons.Default.CameraAlt, null) },
-                                    onClick = { cameraLauncher.launch(null); attachMenuExpanded = false }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Photo") },
-                                    leadingIcon = { Icon(Icons.Default.Image, null) },
-                                    onClick = { imagePicker.launch("image/*"); attachMenuExpanded = false }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Document (text / PDF)") },
-                                    leadingIcon = { Icon(Icons.Default.AttachFile, null) },
-                                    onClick = { filePicker.launch("*/*"); attachMenuExpanded = false }
-                                )
-                            }
-                        }
-                    } else {
-                        Spacer(Modifier.width(8.dp))
-                    }
-
-                    TextField(
-                        value = inputText,
-                        onValueChange = viewModel::onInputChange,
-                        modifier = Modifier.weight(1f),
-                        placeholder = {
-                            Text(
-                                when {
-                                    pendingImageUri != null -> "Ask about this image…"
-                                    pendingFileName != null -> "Ask about this file…"
-                                    else -> "Message…"
-                                },
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        },
-                        colors = TextFieldDefaults.colors(
-                            unfocusedContainerColor = Color.Transparent, focusedContainerColor = Color.Transparent,
-                            disabledContainerColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
-                            focusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent
-                        ),
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(onSend = { doSend() }),
-                        maxLines = 5,
-                        enabled = !isLoading
-                    )
-
-                    if (isLoading) {
-                        FilledIconButton(onClick = { viewModel.stopResponse() }, colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.error)) {
-                            Icon(Icons.Default.StopCircle, "Stop")
-                        }
-                    } else {
-                        FilledIconButton(
-                            onClick = { doSend() },
-                            enabled = (inputText.isNotBlank() || hasAttachment) && activeAgent != null
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Send, "Send")
-                        }
-                    }
-                }
+                TextField(
+                    value = inputText,
+                    onValueChange = viewModel::onInputChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = {
+                        Text(
+                            when {
+                                pendingImageBitmap != null -> "Ask about this image…"
+                                pendingFileName != null -> "Ask about this file…"
+                                else -> "Message…"
+                            },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    colors = TextFieldDefaults.colors(
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent
+                    ),
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { doSend() }),
+                    maxLines = 5,
+                    enabled = !isLoading
+                )
             }
         }
     }

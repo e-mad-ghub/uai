@@ -21,7 +21,7 @@ import okhttp3.OkHttpClient
 import java.util.UUID
 
 class ConversationDetailViewModel(
-    private val conversationId: String,
+    val conversationId: String,
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
     private val httpClient: OkHttpClient

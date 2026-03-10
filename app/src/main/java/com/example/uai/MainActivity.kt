@@ -1,5 +1,6 @@
 package com.example.uai
 
+import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -43,6 +44,10 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
+    // Set via onCreate/onNewIntent; consumed once by LaunchedEffect to navigate
+    private var pendingOpenConversationId by mutableStateOf<String?>(null)
+    private var pendingOpenAgoraId by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -56,6 +61,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        intent?.let { handleBubbleIntent(it) }
+
         setContent {
             val colorTheme by container.agentRepository.colorThemeFlow
                 .collectAsState(AppColorTheme.TERRACOTTA)
@@ -64,6 +71,24 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val drawerState = rememberDrawerState(DrawerValue.Closed)
                 val scope = rememberCoroutineScope()
+
+                // Navigate to a specific conversation when requested by the bubble service
+                LaunchedEffect(pendingOpenConversationId) {
+                    pendingOpenConversationId?.let { convId ->
+                        navController.navigate(Routes.conversationDetail(convId)) {
+                            launchSingleTop = true
+                        }
+                        pendingOpenConversationId = null
+                    }
+                }
+                LaunchedEffect(pendingOpenAgoraId) {
+                    pendingOpenAgoraId?.let { agoraId ->
+                        navController.navigate(Routes.agoraDetail(agoraId)) {
+                            launchSingleTop = true
+                        }
+                        pendingOpenAgoraId = null
+                    }
+                }
 
                 val conversations by container.conversationRepository
                     .getAllConversations()
@@ -228,6 +253,26 @@ class MainActivity : ComponentActivity() {
                         container = container
                     )
                 }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleBubbleIntent(intent)
+    }
+
+    private fun handleBubbleIntent(intent: Intent) {
+        when (intent.action) {
+            "com.example.uai.OPEN_CONVERSATION" -> {
+                intent.getStringExtra("conversationId")?.let { pendingOpenConversationId = it }
+            }
+            FloatingBubbleService.ACTION_SCREENSHOT_CAPTURED -> {
+                val convId = intent.getStringExtra(FloatingBubbleService.EXTRA_CONV_ID) ?: return
+                val isAgora = intent.getBooleanExtra(FloatingBubbleService.EXTRA_IS_AGORA, false)
+                if (isAgora) pendingOpenAgoraId = convId
+                else pendingOpenConversationId = convId
             }
         }
     }

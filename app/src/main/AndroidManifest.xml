@@ -48,6 +48,8 @@
         <activity
             android:name=".ui.MediaPickerActivity"
             android:exported="false"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar.Fullscreen" />
 
         <provider

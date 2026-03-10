@@ -77,6 +77,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
@@ -106,6 +107,8 @@ class FloatingBubbleService : Service() {
     // Attachment state
     // Each Triple: (base64, ImageBitmap?, uriStr?)
     private val pendingImages = mutableStateListOf<Triple<String, ImageBitmap?, String?>>()
+    // In-memory thumbnails for sent user messages (messageId → bitmaps); cleared on new conversation
+    private val messageThumbnails = mutableStateMapOf<String, List<ImageBitmap>>()
     private var pendingFileName by mutableStateOf<String?>(null)
     private var pendingFileText by mutableStateOf<String?>(null)
     private var pendingDocumentBase64 by mutableStateOf<String?>(null)
@@ -124,6 +127,11 @@ class FloatingBubbleService : Service() {
     private var currentConversationId: String? = null
     private var streamingJob: Job? = null
     private var cachedMediaProjection: MediaProjection? = null
+
+    // Capture mode: triggered from main app, turns bubble into a capture button
+    private var isCaptureMode by mutableStateOf(false)
+    private var captureForConversationId: String? = null
+    private var captureIsAgora: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -208,6 +216,85 @@ class FloatingBubbleService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_ENTER_CAPTURE_MODE) {
+            val convId = intent.getStringExtra(EXTRA_CONV_ID) ?: return START_STICKY
+            val isAgora = intent.getBooleanExtra(EXTRA_IS_AGORA, false)
+            enterCaptureModeInternal(convId, isAgora)
+        }
+        return START_STICKY
+    }
+
+    private fun enterCaptureModeInternal(convId: String, isAgora: Boolean) {
+        captureForConversationId = convId
+        captureIsAgora = isAgora
+        val projection = cachedMediaProjection
+        if (projection != null) {
+            isCaptureMode = true
+        } else {
+            // Request projection permission — MediaPickerActivity shows briefly for consent
+            MediaPickerActivity.onProjectionConsent = { resultCode, data ->
+                if (resultCode == Activity.RESULT_OK) {
+                    val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                    mpm.getMediaProjection(resultCode, data)?.let { newProjection ->
+                        newProjection.registerCallback(object : MediaProjection.Callback() {
+                            override fun onStop() { cachedMediaProjection = null }
+                        }, Handler(Looper.getMainLooper()))
+                        cachedMediaProjection = newProjection
+                        isCaptureMode = true
+                    }
+                }
+            }
+            startMediaPickerActivity(MediaPickerActivity.ACTION_SCREENSHOT)
+        }
+    }
+
+    private fun doCaptureTap() {
+        val projection = cachedMediaProjection ?: run { isCaptureMode = false; return }
+        val convId = captureForConversationId ?: run { isCaptureMode = false; return }
+        val isAgora = captureIsAgora
+
+        // Hide bubble during capture to not appear in the screenshot
+        bubbleParams.alpha = 0f
+        bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
+
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                performCapture(projection) { result ->
+                    // Restore bubble
+                    bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
+                    bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
+
+                    // Reset capture mode
+                    isCaptureMode = false
+                    captureForConversationId = null
+                    captureIsAgora = false
+
+                    if (result != null) {
+                        val (base64, bitmap) = result
+                        screenshotResult.tryEmit(Triple(convId, base64, bitmap))
+                    }
+
+                    // Bring main app back to the correct conversation
+                    val openIntent = Intent(this, MainActivity::class.java).apply {
+                        action = ACTION_SCREENSHOT_CAPTURED
+                        putExtra(EXTRA_CONV_ID, convId)
+                        putExtra(EXTRA_IS_AGORA, isAgora)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    }
+                    startActivity(openIntent)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("UAI_CAP", "capture mode error: ${e.message}")
+                isCaptureMode = false
+                captureForConversationId = null
+                captureIsAgora = false
+                bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
+                bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
+            }
+        }, 150L)
+    }
+
     // ----- History restore -----
 
     private fun restoreLatestConversation(agent: AgentConfig) {
@@ -254,7 +341,7 @@ class FloatingBubbleService : Service() {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 UaiTheme(colorTheme = colorTheme) {
-                    BubbleContent(isLoading = isLoading)
+                    BubbleContent(isLoading = isLoading, isCaptureMode = isCaptureMode)
                 }
             }
             setupDragAndTap(this)
@@ -323,7 +410,7 @@ class FloatingBubbleService : Service() {
                     removeSafely(dismissZoneView)
                     isDismissTargetActive = false
                     if (!isDragging && !longPressConsumed) {
-                        toggleChatPanel()
+                        if (isCaptureMode) doCaptureTap() else toggleChatPanel()
                     } else if (isDragging) {
                         if (wasOverDismiss) {
                             stopSelf()
@@ -475,10 +562,12 @@ class FloatingBubbleService : Service() {
                         pendingImages = pendingImages.toList(),
                         pendingFileName = pendingFileName,
                         hasAttachment = pendingImages.isNotEmpty() || pendingFileName != null,
+                        messageThumbnails = messageThumbnails,
                         onInputChange = { inputText = it },
                         onSend = ::sendMessage,
                         onStop = ::stopResponse,
                         onClose = ::dismissChatPanelAnimated,
+                        onOpenInApp = ::openInApp,
                         onAgentSelect = { agent ->
                             serviceScope.launch {
                                 (application as UaiApplication).container
@@ -592,11 +681,11 @@ class FloatingBubbleService : Service() {
     private fun showChatPanel() {
         chatPanelContainer?.let {
             if (!it.isAttachedToWindow) {
-                windowManager.addView(it, panelParams)
-                isChatPanelVisible = true
-                // Slide the panel up from the bottom of the screen
+                // Set translationY BEFORE adding to window so the first draw is offscreen (no flash)
                 val screenH = resources.displayMetrics.heightPixels.toFloat()
                 chatPanelView?.translationY = screenH
+                windowManager.addView(it, panelParams)
+                isChatPanelVisible = true
                 chatPanelView?.animate()
                     ?.translationY(0f)
                     ?.setDuration(280)
@@ -614,10 +703,7 @@ class FloatingBubbleService : Service() {
             .translationY(h)
             .setDuration(220)
             .setInterpolator(android.view.animation.AccelerateInterpolator())
-            .withEndAction {
-                panel.translationY = 0f
-                hideChatPanel()
-            }
+            .withEndAction { hideChatPanel() }
             .start()
     }
 
@@ -637,22 +723,24 @@ class FloatingBubbleService : Service() {
 
     private fun launchGalleryPicker() {
         MediaPickerActivity.onImageResult = { uri ->
-            if (uri != null) {
-                serviceScope.launch {
+            serviceScope.launch {
+                if (uri != null) {
                     val (base64, bitmap) = encodeImageFromUri(uri)
                     if (base64 != null) {
                         pendingImages.add(Triple(base64, bitmap, uri.toString()))
                     }
                 }
+                showChatPanel()
             }
         }
+        hideChatPanel()
         startMediaPickerActivity(MediaPickerActivity.ACTION_GALLERY)
     }
 
     private fun launchCameraCapture() {
         MediaPickerActivity.onBitmapResult = { bitmap ->
-            if (bitmap != null) {
-                serviceScope.launch(Dispatchers.IO) {
+            serviceScope.launch(Dispatchers.IO) {
+                if (bitmap != null) {
                     val out = ByteArrayOutputStream()
                     bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
                     val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
@@ -661,8 +749,10 @@ class FloatingBubbleService : Service() {
                         pendingImages.add(Triple(base64, imgBitmap, null))
                     }
                 }
+                withContext(Dispatchers.Main) { showChatPanel() }
             }
         }
+        hideChatPanel()
         startMediaPickerActivity(MediaPickerActivity.ACTION_CAMERA)
     }
 
@@ -670,6 +760,7 @@ class FloatingBubbleService : Service() {
         MediaPickerActivity.onFileResult = { uri ->
             if (uri != null) {
                 serviceScope.launch {
+                    // Process then always restore the panel
                     val mimeType = contentResolver.getType(uri) ?: ""
                     val name = uri.lastPathSegment ?: "file"
                     when {
@@ -714,9 +805,13 @@ class FloatingBubbleService : Service() {
                         }
                         else -> { /* unsupported — silently ignore */ }
                     }
+                    showChatPanel()
                 }
+            } else {
+                showChatPanel() // cancelled
             }
         }
+        hideChatPanel()
         startMediaPickerActivity(MediaPickerActivity.ACTION_FILE)
     }
 
@@ -886,7 +981,19 @@ class FloatingBubbleService : Service() {
         isLoading = false
         currentConversationId = null
         chatMessages.clear()
+        messageThumbnails.clear()
         clearAttachment()
+    }
+
+    private fun openInApp() {
+        val convId = currentConversationId ?: return
+        dismissChatPanelAnimated()
+        val intent = Intent(this, MainActivity::class.java).apply {
+            action = "com.example.uai.OPEN_CONVERSATION"
+            putExtra("conversationId", convId)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        startActivity(intent)
     }
 
     private fun stopResponse() {
@@ -898,7 +1005,6 @@ class FloatingBubbleService : Service() {
     private fun sendMessage(text: String) {
         val agent = activeAgent
         val imageList = pendingImages.toList()
-        android.util.Log.d("UAI_SEND", "sendMessage: imageList.size=${imageList.size}")
         val docBase64 = pendingDocumentBase64
         val fileCtx = pendingFileText?.let { "```\n$it\n```\n\n" } ?: ""
         val fullText = fileCtx + text
@@ -945,6 +1051,9 @@ class FloatingBubbleService : Service() {
                 )
                 container.conversationRepository.insertMessage(userMsg)
                 chatMessages.add(userMsg)
+                // Store in-memory thumbnails so the message bubble can display them
+                val thumbs = imageList.mapNotNull { it.second }
+                if (thumbs.isNotEmpty()) messageThumbnails[userMsg.id] = thumbs
 
                 assistantId = UUID.randomUUID().toString()
                 val assistantMsg = MessageEntity(
@@ -1112,6 +1221,14 @@ class FloatingBubbleService : Service() {
         private const val DISMISS_HIT_DP = 60
         private const val BUBBLE_NORMAL_ALPHA = 0.82f
 
+        const val ACTION_ENTER_CAPTURE_MODE = "com.example.uai.ENTER_CAPTURE_MODE"
+        const val ACTION_SCREENSHOT_CAPTURED = "com.example.uai.SCREENSHOT_CAPTURED"
+        const val EXTRA_CONV_ID = "conversationId"
+        const val EXTRA_IS_AGORA = "isAgora"
+
+        /** Replay-1 flow so collectors that start after emit() still receive the screenshot. */
+        val screenshotResult = MutableSharedFlow<Triple<String, String, androidx.compose.ui.graphics.ImageBitmap>>(replay = 1)
+
         fun startService(context: android.content.Context) {
             val intent = Intent(context, FloatingBubbleService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -1122,6 +1239,18 @@ class FloatingBubbleService : Service() {
 
         fun stopService(context: android.content.Context) {
             context.stopService(Intent(context, FloatingBubbleService::class.java))
+        }
+
+        fun enterCaptureMode(context: android.content.Context, conversationId: String, isAgora: Boolean) {
+            val intent = Intent(context, FloatingBubbleService::class.java).apply {
+                action = ACTION_ENTER_CAPTURE_MODE
+                putExtra(EXTRA_CONV_ID, conversationId)
+                putExtra(EXTRA_IS_AGORA, isAgora)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                context.startForegroundService(intent)
+            else
+                context.startService(intent)
         }
     }
 }

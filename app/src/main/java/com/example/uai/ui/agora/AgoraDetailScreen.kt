@@ -31,8 +31,8 @@ import com.example.uai.data.db.MessageEntity
 import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
 import com.example.uai.ui.chat.MessageBubble
+import com.example.uai.ui.chat.persistImageAttachment
 import com.example.uai.ui.chat.rememberChatMessageListBehavior
-import com.example.uai.ui.chat.rememberScreenCaptureLauncher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -139,17 +139,6 @@ fun AgoraDetailScreen(
         pendingDocumentBase64 = null
     }
 
-    val captureScreen = rememberScreenCaptureLauncher(
-        onCaptured = { base64, bitmap ->
-            clearAttachment()
-            pendingImageBase64 = base64
-            pendingImageBitmap = bitmap
-        },
-        onError = { message ->
-            scope.launch { snackbarHostState.showSnackbar(message) }
-        }
-    )
-
     // Error events
     LaunchedEffect(Unit) {
         viewModel.errorEvent.collect { message ->
@@ -221,12 +210,17 @@ fun AgoraDetailScreen(
     }
 
     fun doSend() {
+        val image = pendingImageBase64
+        val existingImageUri = pendingImageUri?.toString()
+        val doc = pendingDocumentBase64
+        val replyTarget = replyToMessage
         val fileContext = pendingFileText?.let { "```\n$it\n```\n\n" } ?: ""
-        val replyContext = replyToMessage?.let { "> ${it.content.take(200).replace("\n", " ")}\n\n" } ?: ""
+        val replyContext = replyTarget?.let { "> ${it.content.take(200).replace("\n", " ")}\n\n" } ?: ""
         val fullText = replyContext + fileContext + tfv.text
-        viewModel.sendMessage(fullText, pendingImageBase64, pendingImageUri?.toString(), replyToMessage, pendingDocumentBase64)
-        replyToMessage = null
+        val persistedImageUri = image?.let { persistImageAttachment(context, it) }
         clearAttachment()
+        replyToMessage = null
+        viewModel.sendMessage(fullText, image, persistedImageUri ?: existingImageUri, replyTarget, doc)
     }
 
     val messageListBehavior = rememberChatMessageListBehavior(messages)
@@ -411,7 +405,6 @@ fun AgoraDetailScreen(
                 onPickCamera = { cameraLauncher.launch(null) },
                 onPickGallery = { imagePicker.launch("image/*") },
                 onPickFile = { filePicker.launch("*/*") },
-                onTakeScreenshot = captureScreen,
                 onClearAttachment = { clearAttachment() },
                 onStop = { viewModel.stopResponse() },
                 onSend = { doSend() },

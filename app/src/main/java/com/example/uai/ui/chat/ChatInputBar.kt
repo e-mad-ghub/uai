@@ -2,8 +2,11 @@ package com.example.uai.ui.chat
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,8 +36,7 @@ import com.example.uai.data.db.MessageEntity
  * or TextFieldValue-based TextField with the correct weight and keyboard options.
  *
  * [onTakeScreenshot] is optional; when null the screenshot icon button is hidden.
- *   — In the overlay mini-chat: screenshot is an inline icon button (next to "+"), unchanged.
- *   — In the main app / Agora: screenshot triggers capture mode via FloatingBubbleService.
+ *   — Currently it is only enabled in the overlay mini-chat.
  * [modifier] — callers add .imePadding() when inside a Scaffold (not needed for the overlay service).
  */
 @Composable
@@ -53,6 +55,7 @@ fun ChatInputBar(
     onCancelReply: () -> Unit = {},
     onStop: () -> Unit,
     onSend: () -> Unit,
+    disableScreenshotRipple: Boolean = false,
     sendEnabled: Boolean = true,
     modifier: Modifier = Modifier,
     textFieldContent: @Composable RowScope.() -> Unit
@@ -229,12 +232,34 @@ fun ChatInputBar(
 
                 // Screenshot icon button — visible outside "+" dropdown when available
                 if (onTakeScreenshot != null) {
-                    IconButton(onClick = onTakeScreenshot, enabled = !isLoading) {
-                        Icon(
-                            Icons.Default.Screenshot,
-                            contentDescription = "Screenshot",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    if (disableScreenshotRipple) {
+                        val interactionSource = remember { MutableInteractionSource() }
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .clickable(
+                                    enabled = !isLoading,
+                                    interactionSource = interactionSource,
+                                    indication = null,
+                                    onClick = onTakeScreenshot
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Screenshot,
+                                contentDescription = "Screenshot",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        IconButton(onClick = onTakeScreenshot, enabled = !isLoading) {
+                            Icon(
+                                Icons.Default.Screenshot,
+                                contentDescription = "Screenshot",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 

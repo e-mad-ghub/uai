@@ -31,8 +31,8 @@ import com.example.uai.data.model.AiProviderType
 import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
 import com.example.uai.ui.chat.MessageBubble
+import com.example.uai.ui.chat.persistImageAttachment
 import com.example.uai.ui.chat.rememberChatMessageListBehavior
-import com.example.uai.ui.chat.rememberScreenCaptureLauncher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -93,17 +93,6 @@ fun ConversationDetailScreen(
         pendingFileText = null
         pendingDocumentBase64 = null
     }
-
-    val captureScreen = rememberScreenCaptureLauncher(
-        onCaptured = { base64, bitmap ->
-            clearAttachments()
-            pendingImageBase64 = base64
-            pendingImageBitmap = bitmap
-        },
-        onError = { message ->
-            scope.launch { snackbarHostState.showSnackbar(message) }
-        }
-    )
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         pendingFileName = null; pendingFileText = null; pendingDocumentBase64 = null
@@ -168,16 +157,17 @@ fun ConversationDetailScreen(
 
     fun doSend() {
         val image = pendingImageBase64
+        val existingImageUri = pendingImageUri?.toString()
         val doc = pendingDocumentBase64
         val fileContext = pendingFileText?.let { "```\n$it\n```\n\n" } ?: ""
         val replyContext = replyToMessage?.let {
             "> ${it.content.take(200).replace("\n", " ")}\n\n"
         } ?: ""
         val fullText = replyContext + fileContext + inputText
-
-        viewModel.sendMessage(fullText, image, pendingImageUri?.toString(), doc)
+        val persistedImageUri = image?.let { persistImageAttachment(context, it) }
         clearAttachments()
         replyToMessage = null
+        viewModel.sendMessage(fullText, image, persistedImageUri ?: existingImageUri, doc)
     }
 
     val messageListBehavior = rememberChatMessageListBehavior(messages)
@@ -260,7 +250,6 @@ fun ConversationDetailScreen(
                 onPickCamera = { cameraLauncher.launch(null) },
                 onPickGallery = { imagePicker.launch("image/*") },
                 onPickFile = { filePicker.launch("*/*") },
-                onTakeScreenshot = captureScreen,
                 onClearAttachment = { clearAttachments() },
                 onCancelReply = { replyToMessage = null },
                 onStop = { viewModel.stopResponse() },

@@ -25,10 +25,12 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
 
@@ -39,6 +41,8 @@ fun ChatPanel(
     isLoading: Boolean,
     agentName: String,
     agents: List<AgentConfig>,
+    conversations: List<ConversationEntity>,
+    currentConversationId: String?,
     pendingImages: List<Triple<String, ImageBitmap?, String?>>,
     pendingFileName: String?,
     hasAttachment: Boolean,
@@ -49,6 +53,7 @@ fun ChatPanel(
     onClose: () -> Unit,
     onOpenInApp: (() -> Unit)? = null,
     onAgentSelect: (AgentConfig) -> Unit,
+    onConversationSelect: (String?) -> Unit,
     onNewConversation: () -> Unit,
     onPickGallery: () -> Unit,
     onPickCamera: () -> Unit,
@@ -62,7 +67,12 @@ fun ChatPanel(
     val maxMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(280.dp, 560.dp)
 
     var agentDropdownExpanded by remember { mutableStateOf(false) }
+    var conversationDropdownExpanded by remember { mutableStateOf(false) }
     var replyToMessage by remember { mutableStateOf<MessageEntity?>(null) }
+    val currentConversationTitle = conversations
+        .firstOrNull { it.id == currentConversationId }
+        ?.title
+        ?: "Current draft"
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -129,6 +139,76 @@ fun ChatPanel(
                             }
                         }
                         Spacer(Modifier.width(8.dp))
+                        Box {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable(enabled = conversations.isNotEmpty() || currentConversationId == null) {
+                                        conversationDropdownExpanded = true
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = currentConversationTitle,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 120.dp)
+                                )
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = "Select chat",
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = conversationDropdownExpanded,
+                                onDismissRequest = { conversationDropdownExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "Current draft",
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    onClick = {
+                                        conversationDropdownExpanded = false
+                                        onConversationSelect(null)
+                                    }
+                                )
+                                if (conversations.isNotEmpty()) {
+                                    HorizontalDivider()
+                                }
+                                conversations.forEach { conversation ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                conversation.title,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        },
+                                        onClick = {
+                                            conversationDropdownExpanded = false
+                                            onConversationSelect(conversation.id)
+                                        },
+                                        leadingIcon = if (conversation.id == currentConversationId) ({
+                                            Icon(
+                                                Icons.Default.SmartToy,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }) else null
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
                         FilledTonalButton(
                             onClick = onNewConversation,
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
@@ -166,12 +246,13 @@ fun ChatPanel(
                             Text(
                                 "Start a conversation with $agentName",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 56.dp)
                             )
                         }
                     },
                     overlayContent = { isAtBottom ->
-                        if (!isAtBottom && onOpenInApp != null) {
+                        if (messages.isNotEmpty() && !isAtBottom && onOpenInApp != null) {
                             FilledTonalButton(
                                 onClick = onOpenInApp,
                                 modifier = Modifier
@@ -222,6 +303,7 @@ fun ChatPanel(
                             onSend(replyContext + inputText)
                             replyToMessage = null
                         },
+                        disableScreenshotRipple = true,
                         sendEnabled = inputText.isNotBlank() || hasAttachment
                     ) {
                         val placeholder = when {
@@ -291,34 +373,26 @@ fun ChatPanel(
 }
 
 @Composable
-fun BubbleContent(isLoading: Boolean, isCaptureMode: Boolean = false, modifier: Modifier = Modifier) {
+fun BubbleContent(isLoading: Boolean, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxSize()
             .clip(CircleShape)
             .background(
                 Brush.radialGradient(
-                    colors = if (isCaptureMode)
-                        listOf(Color(0xFF1B5E20), Color(0xFF388E3C))
-                    else
-                        listOf(Color(0xFF6750A4), Color(0xFF9C27B0))
+                    colors = listOf(Color(0xFF6750A4), Color(0xFF9C27B0))
                 )
             ),
         contentAlignment = Alignment.Center
     ) {
-        when {
-            isCaptureMode -> Icon(
-                Icons.Default.CameraAlt,
-                contentDescription = "Tap to capture screenshot",
-                tint = Color.White,
-                modifier = Modifier.size(30.dp)
-            )
-            isLoading -> CircularProgressIndicator(
+        if (isLoading) {
+            CircularProgressIndicator(
                 modifier = Modifier.size(28.dp),
                 color = Color.White,
                 strokeWidth = 2.5.dp
             )
-            else -> Icon(
+        } else {
+            Icon(
                 Icons.Default.SmartToy,
                 contentDescription = "AI Chat",
                 tint = Color.White,

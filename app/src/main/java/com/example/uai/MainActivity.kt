@@ -268,12 +268,6 @@ class MainActivity : ComponentActivity() {
             "com.example.uai.OPEN_CONVERSATION" -> {
                 intent.getStringExtra("conversationId")?.let { pendingOpenConversationId = it }
             }
-            FloatingBubbleService.ACTION_SCREENSHOT_CAPTURED -> {
-                val convId = intent.getStringExtra(FloatingBubbleService.EXTRA_CONV_ID) ?: return
-                val isAgora = intent.getBooleanExtra(FloatingBubbleService.EXTRA_IS_AGORA, false)
-                if (isAgora) pendingOpenAgoraId = convId
-                else pendingOpenConversationId = convId
-            }
         }
     }
 }

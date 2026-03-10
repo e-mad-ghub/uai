@@ -81,5 +81,12 @@ class MediaPickerActivity : ComponentActivity() {
         @Volatile var onFileResult: ((Uri?) -> Unit)?                 = null
         /** Called with (resultCode, data) after the user accepts the screen-capture consent. */
         @Volatile var onProjectionConsent: ((Int, Intent) -> Unit)?   = null
+
+        fun clearCallbacks() {
+            onImageResult = null
+            onBitmapResult = null
+            onFileResult = null
+            onProjectionConsent = null
+        }
     }
 }

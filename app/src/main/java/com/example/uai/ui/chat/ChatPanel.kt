@@ -3,10 +3,12 @@ package com.example.uai.ui.chat
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -47,7 +49,7 @@ fun ChatPanel(
     isLoading: Boolean,
     agentName: String,
     agents: List<AgentConfig>,
-    pendingImageBitmap: ImageBitmap?,
+    pendingImages: List<Triple<String, ImageBitmap?, String?>>,
     pendingFileName: String?,
     hasAttachment: Boolean,
     onInputChange: (String) -> Unit,
@@ -200,20 +202,51 @@ fun ChatPanel(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            if (pendingImageBitmap != null) {
-                                Image(
-                                    bitmap = pendingImageBitmap,
-                                    contentDescription = "Attached image",
+                            if (pendingImages.isNotEmpty()) {
+                                // Horizontally scrollable row of image thumbnails
+                                Row(
                                     modifier = Modifier
-                                        .size(56.dp)
-                                        .clip(RoundedCornerShape(8.dp)),
-                                    contentScale = ContentScale.Crop
-                                )
+                                        .weight(1f)
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    for (entry in pendingImages) {
+                                        val bitmap = entry.second
+                                        if (bitmap != null) {
+                                            Image(
+                                                bitmap = bitmap,
+                                                contentDescription = "Attached image",
+                                                modifier = Modifier
+                                                    .size(56.dp)
+                                                    .clip(RoundedCornerShape(8.dp)),
+                                                contentScale = ContentScale.Crop
+                                            )
+                                        } else {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(56.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(MaterialTheme.colorScheme.secondaryContainer),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Image,
+                                                    contentDescription = "Image",
+                                                    modifier = Modifier.size(28.dp),
+                                                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
                             } else if (pendingFileName != null) {
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
                                     color = MaterialTheme.colorScheme.secondaryContainer,
-                                    modifier = Modifier.height(40.dp)
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(40.dp)
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -235,7 +268,6 @@ fun ChatPanel(
                                     }
                                 }
                             }
-                            Spacer(Modifier.weight(1f))
                             IconButton(
                                 onClick = onClearAttachment,
                                 modifier = Modifier.size(28.dp)
@@ -312,9 +344,10 @@ fun ChatPanel(
                             placeholder = {
                                 Text(
                                     when {
-                                        pendingImageBitmap != null -> "Ask about this image…"
-                                        pendingFileName != null    -> "Ask about this file…"
-                                        else                       -> "Message…"
+                                        pendingImages.size > 1 -> "Ask about these images…"
+                                        pendingImages.size == 1 -> "Ask about this image…"
+                                        pendingFileName != null -> "Ask about this file…"
+                                        else                    -> "Message…"
                                     }
                                 )
                             },

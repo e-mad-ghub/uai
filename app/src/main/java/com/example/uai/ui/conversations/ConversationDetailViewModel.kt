@@ -143,7 +143,10 @@ class ConversationDetailViewModel(
             val history = dbHistory.mapIndexed { index, msg ->
                 if (index == dbHistory.lastIndex && msg.role == "user") {
                     when {
-                        imageBase64 != null -> ChatMessage(msg.role, msg.content, imageBase64, "image/jpeg")
+                        imageBase64 != null -> ChatMessage(
+                            msg.role, msg.content,
+                            images = listOf(com.example.uai.ai.ImageAttachment(imageBase64))
+                        )
                         documentBase64 != null -> ChatMessage(msg.role, msg.content, documentBase64 = documentBase64)
                         else -> ChatMessage(msg.role, msg.content)
                     }

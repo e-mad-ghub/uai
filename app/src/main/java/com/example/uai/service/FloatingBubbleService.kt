@@ -61,6 +61,7 @@ import com.example.uai.R
 import com.example.uai.UaiApplication
 import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.ChatMessage
+import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
@@ -103,9 +104,8 @@ class FloatingBubbleService : Service() {
     private var isDismissTargetActive by mutableStateOf(false)
 
     // Attachment state
-    private var pendingImageBase64 by mutableStateOf<String?>(null)
-    private var pendingImageUriStr by mutableStateOf<String?>(null)
-    private var pendingImageBitmap by mutableStateOf<ImageBitmap?>(null)
+    // Each Triple: (base64, ImageBitmap?, uriStr?)
+    private val pendingImages = mutableStateListOf<Triple<String, ImageBitmap?, String?>>()
     private var pendingFileName by mutableStateOf<String?>(null)
     private var pendingFileText by mutableStateOf<String?>(null)
     private var pendingDocumentBase64 by mutableStateOf<String?>(null)
@@ -173,6 +173,8 @@ class FloatingBubbleService : Service() {
             val (x, y) = container.preferences.bubblePosFlow.first()
             bubbleParams.x = x
             bubbleParams.y = y
+            // Reveal the bubble at the correct position, avoiding an initial jump.
+            bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
             bubbleView?.let { windowManager.updateViewLayout(it, bubbleParams) }
         }
 
@@ -227,6 +229,9 @@ class FloatingBubbleService : Service() {
     // ----- Bubble setup -----
 
     private fun setupBubble() {
+        // NOTE: The bubble may disappear on screens where apps use FLAG_SECURE
+        // (e.g. banking apps, Samsung secure folder) or on certain Samsung full-screen
+        // modes. The OS prevents overlays on those screens — this is not a service crash.
         val sizePx = (64 * resources.displayMetrics.density).toInt()
         bubbleParams = WindowManager.LayoutParams(
             sizePx, sizePx,
@@ -239,6 +244,9 @@ class FloatingBubbleService : Service() {
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = 300
+            // Start invisible so the bubble doesn't flash at the default position
+            // before we restore the saved position.
+            alpha = 0f
         }
 
         bubbleView = ComposeView(this).apply {
@@ -441,7 +449,7 @@ class FloatingBubbleService : Service() {
     private fun setupChatPanel() {
         panelParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
             overlayType(),
             WindowManager.LayoutParams.FLAG_DIM_BEHIND,
             PixelFormat.TRANSLUCENT
@@ -451,7 +459,6 @@ class FloatingBubbleService : Service() {
             @Suppress("DEPRECATION")
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
                     WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
-            windowAnimations = android.R.style.Animation_InputMethod
         }
 
         chatPanelView = ComposeView(this).apply {
@@ -465,13 +472,13 @@ class FloatingBubbleService : Service() {
                         isLoading = isLoading,
                         agentName = activeAgent?.name ?: "AI Agent",
                         agents = allAgents,
-                        pendingImageBitmap = pendingImageBitmap,
+                        pendingImages = pendingImages.toList(),
                         pendingFileName = pendingFileName,
-                        hasAttachment = pendingImageBase64 != null || pendingFileName != null,
+                        hasAttachment = pendingImages.isNotEmpty() || pendingFileName != null,
                         onInputChange = { inputText = it },
                         onSend = ::sendMessage,
                         onStop = ::stopResponse,
-                        onClose = ::hideChatPanel,
+                        onClose = ::dismissChatPanelAnimated,
                         onAgentSelect = { agent ->
                             serviceScope.launch {
                                 (application as UaiApplication).container
@@ -489,14 +496,81 @@ class FloatingBubbleService : Service() {
             }
         }
 
-        // Wrap in a FrameLayout that intercepts BACK to close the panel
+        // Wrap in a full-screen FrameLayout. Intercepts BACK to close panel and
+        // touches above the panel to dismiss (tap-outside-to-close).
         chatPanelContainer = object : FrameLayout(this) {
+            private var touchDownRawY = 0f
+            private var touchDownRawX = 0f
+            private var isDragIntercepted = false
+
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
-                    hideChatPanel()
+                    dismissChatPanelAnimated()
                     return true
                 }
                 return super.dispatchKeyEvent(event)
+            }
+
+            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+                when (ev.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        isDragIntercepted = false
+                        touchDownRawY = ev.rawY
+                        touchDownRawX = ev.rawX
+                        chatPanelView?.let { panel ->
+                            val rect = android.graphics.Rect()
+                            panel.getGlobalVisibleRect(rect)
+                            if (ev.rawY.toInt() < rect.top) {
+                                dismissChatPanelAnimated()
+                                return true
+                            }
+                        }
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (!isDragIntercepted) {
+                            val dy = ev.rawY - touchDownRawY
+                            val dx = ev.rawX - touchDownRawX
+                            val slop = 12 * resources.displayMetrics.density
+                            if (dy > slop && dy > kotlin.math.abs(dx)) {
+                                chatPanelView?.let { panel ->
+                                    val rect = android.graphics.Rect()
+                                    panel.getGlobalVisibleRect(rect)
+                                    val headerH = 56 * resources.displayMetrics.density
+                                    if (touchDownRawY <= rect.top + headerH) {
+                                        isDragIntercepted = true
+                                        return true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return super.onInterceptTouchEvent(ev)
+            }
+
+            override fun onTouchEvent(ev: MotionEvent): Boolean {
+                if (!isDragIntercepted) return false
+                val panel = chatPanelView ?: return false
+                when (ev.action) {
+                    MotionEvent.ACTION_MOVE -> {
+                        val dy = ev.rawY - touchDownRawY
+                        panel.translationY = maxOf(0f, dy)
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        val dy = ev.rawY - touchDownRawY
+                        isDragIntercepted = false
+                        if (dy >= panel.height * 0.25f) {
+                            dismissChatPanelAnimated()
+                        } else {
+                            panel.animate()
+                                .translationY(0f)
+                                .setDuration(200)
+                                .setInterpolator(android.view.animation.DecelerateInterpolator())
+                                .start()
+                        }
+                    }
+                }
+                return true
             }
         }.also { container ->
             attachLifecycleOwners(container)
@@ -504,14 +578,15 @@ class FloatingBubbleService : Service() {
                 chatPanelView,
                 FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM
                 )
             )
         }
     }
 
     private fun toggleChatPanel() {
-        if (isChatPanelVisible) hideChatPanel() else showChatPanel()
+        if (isChatPanelVisible) dismissChatPanelAnimated() else showChatPanel()
     }
 
     private fun showChatPanel() {
@@ -519,8 +594,31 @@ class FloatingBubbleService : Service() {
             if (!it.isAttachedToWindow) {
                 windowManager.addView(it, panelParams)
                 isChatPanelVisible = true
+                // Slide the panel up from the bottom of the screen
+                val screenH = resources.displayMetrics.heightPixels.toFloat()
+                chatPanelView?.translationY = screenH
+                chatPanelView?.animate()
+                    ?.translationY(0f)
+                    ?.setDuration(280)
+                    ?.setInterpolator(android.view.animation.DecelerateInterpolator())
+                    ?.start()
             }
         }
+    }
+
+    private fun dismissChatPanelAnimated() {
+        val panel = chatPanelView ?: run { hideChatPanel(); return }
+        val h = panel.height.toFloat().takeIf { it > 0 }
+            ?: resources.displayMetrics.heightPixels.toFloat() / 3f
+        panel.animate()
+            .translationY(h)
+            .setDuration(220)
+            .setInterpolator(android.view.animation.AccelerateInterpolator())
+            .withEndAction {
+                panel.translationY = 0f
+                hideChatPanel()
+            }
+            .start()
     }
 
     private fun hideChatPanel() {
@@ -531,9 +629,7 @@ class FloatingBubbleService : Service() {
     // ----- Attachment handling -----
 
     private fun clearAttachment() {
-        pendingImageBase64 = null
-        pendingImageUriStr = null
-        pendingImageBitmap = null
+        pendingImages.clear()
         pendingFileName = null
         pendingFileText = null
         pendingDocumentBase64 = null
@@ -544,12 +640,9 @@ class FloatingBubbleService : Service() {
             if (uri != null) {
                 serviceScope.launch {
                     val (base64, bitmap) = encodeImageFromUri(uri)
-                    pendingImageBase64 = base64
-                    pendingImageUriStr = uri.toString()
-                    pendingImageBitmap = bitmap
-                    pendingFileName = null
-                    pendingFileText = null
-                    pendingDocumentBase64 = null
+                    if (base64 != null) {
+                        pendingImages.add(Triple(base64, bitmap, uri.toString()))
+                    }
                 }
             }
         }
@@ -565,12 +658,7 @@ class FloatingBubbleService : Service() {
                     val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
                     val imgBitmap = bitmap.asImageBitmap()
                     withContext(Dispatchers.Main) {
-                        pendingImageBase64 = base64
-                        pendingImageUriStr = null
-                        pendingImageBitmap = imgBitmap
-                        pendingFileName = null
-                        pendingFileText = null
-                        pendingDocumentBase64 = null
+                        pendingImages.add(Triple(base64, imgBitmap, null))
                     }
                 }
             }
@@ -587,10 +675,14 @@ class FloatingBubbleService : Service() {
                     when {
                         mimeType.startsWith("image/") -> {
                             val (base64, bitmap) = encodeImageFromUri(uri)
-                            pendingImageBase64 = base64
-                            pendingImageUriStr = uri.toString()
-                            pendingImageBitmap = bitmap
-                            pendingFileName = null
+                            if (base64 != null) {
+                                // File-picked image replaces all existing attachments
+                                pendingImages.clear()
+                                pendingFileName = null
+                                pendingFileText = null
+                                pendingDocumentBase64 = null
+                                pendingImages.add(Triple(base64, bitmap, uri.toString()))
+                            }
                         }
                         mimeType.startsWith("text/") -> {
                             val text = withContext(Dispatchers.IO) {
@@ -599,8 +691,7 @@ class FloatingBubbleService : Service() {
                                 }.getOrNull()
                             }
                             if (text != null) {
-                                pendingImageBase64 = null
-                                pendingImageBitmap = null
+                                pendingImages.clear()
                                 pendingFileName = name
                                 pendingFileText = text
                                 pendingDocumentBase64 = null
@@ -615,8 +706,7 @@ class FloatingBubbleService : Service() {
                                 }.getOrNull()
                             }
                             if (base64 != null) {
-                                pendingImageBase64 = null
-                                pendingImageBitmap = null
+                                pendingImages.clear()
                                 pendingFileName = name
                                 pendingFileText = null
                                 pendingDocumentBase64 = base64
@@ -644,23 +734,18 @@ class FloatingBubbleService : Service() {
                     Handler(Looper.getMainLooper()).postDelayed({
                         try {
                             performCapture(projection) { result ->
-                                bubbleParams.alpha = 1f
+                                bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
                                 bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
                                 if (result != null) {
                                     val (base64, bitmap) = result
-                                    pendingImageBase64 = base64
-                                    pendingImageUriStr = null
-                                    pendingImageBitmap = bitmap
-                                    pendingFileName = null
-                                    pendingFileText = null
-                                    pendingDocumentBase64 = null
+                                    pendingImages.add(Triple(base64, bitmap, null))
                                 }
                                 showChatPanel()
                             }
                         } catch (e: Exception) {
                             android.util.Log.e("UAI_CAP", "capture error: ${e.javaClass.simpleName}: ${e.message}")
                             cachedMediaProjection = null
-                            bubbleParams.alpha = 1f
+                            bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
                             bubbleView?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, bubbleParams) }
                             showChatPanel()
                         }
@@ -812,13 +897,13 @@ class FloatingBubbleService : Service() {
 
     private fun sendMessage(text: String) {
         val agent = activeAgent
-        val imageBase64 = pendingImageBase64
-        val imageUriStr = pendingImageUriStr
+        val imageList = pendingImages.toList()
+        android.util.Log.d("UAI_SEND", "sendMessage: imageList.size=${imageList.size}")
         val docBase64 = pendingDocumentBase64
         val fileCtx = pendingFileText?.let { "```\n$it\n```\n\n" } ?: ""
         val fullText = fileCtx + text
 
-        if ((fullText.isBlank() && imageBase64 == null && docBase64 == null) || isLoading || agent == null) return
+        if ((fullText.isBlank() && imageList.isEmpty() && docBase64 == null) || isLoading || agent == null) return
 
         // Clear attachment before starting the stream (don't wait for it)
         clearAttachment()
@@ -835,7 +920,7 @@ class FloatingBubbleService : Service() {
             try {
                 if (currentConversationId == null) {
                     val title = fullText.trim().ifBlank {
-                        if (docBase64 != null) "Document" else "Image"
+                        if (docBase64 != null) "Document" else if (imageList.isNotEmpty()) "Image" else "Chat"
                     }.take(60)
                     val conv = ConversationEntity(
                         id = UUID.randomUUID().toString(),
@@ -856,7 +941,7 @@ class FloatingBubbleService : Service() {
                     role = "user",
                     content = fullText,
                     createdAt = System.currentTimeMillis(),
-                    imageUri = imageUriStr
+                    imageUri = imageList.firstOrNull()?.third
                 )
                 container.conversationRepository.insertMessage(userMsg)
                 chatMessages.add(userMsg)
@@ -875,7 +960,7 @@ class FloatingBubbleService : Service() {
                 chatMessages.add(assistantMsg)
 
                 // If agent doesn't support vision, insert a capability notice instead of calling API
-                if (imageBase64 != null && !agent.supportsVision) {
+                if (imageList.isNotEmpty() && !agent.supportsVision) {
                     val notice = "I don't support image analysis with \"${agent.model}\". " +
                             "Please switch to a vision-capable model in agent settings."
                     accumulated = notice  // must be non-blank so finally doesn't delete the message
@@ -886,14 +971,17 @@ class FloatingBubbleService : Service() {
                     return@launch
                 }
 
-                // Build history, attaching image/document to the last user message
+                // Build history, attaching images/document to the last user message
                 val allHistory = chatMessages.filter { !it.isStreaming }
                 val history = allHistory.mapIndexed { idx, msg ->
                     if (idx == allHistory.lastIndex && msg.role == "user") {
                         when {
-                            imageBase64 != null -> ChatMessage(msg.role, msg.content, imageBase64, "image/jpeg")
-                            docBase64 != null   -> ChatMessage(msg.role, msg.content, documentBase64 = docBase64)
-                            else                -> ChatMessage(msg.role, msg.content)
+                            imageList.isNotEmpty() -> ChatMessage(
+                                msg.role, msg.content,
+                                images = imageList.map { ImageAttachment(it.first) }
+                            )
+                            docBase64 != null      -> ChatMessage(msg.role, msg.content, documentBase64 = docBase64)
+                            else                   -> ChatMessage(msg.role, msg.content)
                         }
                     } else {
                         ChatMessage(msg.role, msg.content)
@@ -1022,6 +1110,7 @@ class FloatingBubbleService : Service() {
         private const val DISMISS_BOTTOM_PAD_DP = 48
         private const val DISMISS_RADIUS_DP = 30
         private const val DISMISS_HIT_DP = 60
+        private const val BUBBLE_NORMAL_ALPHA = 0.82f
 
         fun startService(context: android.content.Context) {
             val intent = Intent(context, FloatingBubbleService::class.java)

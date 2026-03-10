@@ -3,11 +3,15 @@ package com.example.uai.ai
 import com.example.uai.data.model.AgentConfig
 import kotlinx.coroutines.flow.Flow
 
+data class ImageAttachment(
+    val base64: String,
+    val mimeType: String = "image/jpeg"
+)
+
 data class ChatMessage(
     val role: String,
     val content: String,
-    val imageBase64: String? = null,
-    val imageMimeType: String? = null,
+    val images: List<ImageAttachment> = emptyList(),
     /** Base64-encoded PDF — only sent by providers that support it (Anthropic). */
     val documentBase64: String? = null
 )

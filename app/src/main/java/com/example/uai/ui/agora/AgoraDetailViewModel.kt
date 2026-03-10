@@ -212,7 +212,8 @@ class AgoraDetailViewModel(
                             val userText = userMsg.content + contextSuffix
                             when {
                                 isLastRound && imageBase64 != null ->
-                                    add(ChatMessage("user", userText, imageBase64, "image/jpeg"))
+                                    add(ChatMessage("user", userText,
+                                        images = listOf(com.example.uai.ai.ImageAttachment(imageBase64))))
                                 isLastRound && documentBase64 != null ->
                                     add(ChatMessage("user", userText, documentBase64 = documentBase64))
                                 else ->

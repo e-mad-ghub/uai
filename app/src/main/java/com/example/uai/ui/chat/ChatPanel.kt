@@ -1,5 +1,6 @@
 package com.example.uai.ui.chat
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -24,17 +25,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import com.example.uai.R
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
@@ -386,26 +389,20 @@ fun BubbleContent(isLoading: Boolean, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxSize()
-            .clip(CircleShape)
-            .background(
-                Brush.radialGradient(
-                    colors = listOf(Color(0xFF6750A4), Color(0xFF9C27B0))
-                )
-            ),
+            .clip(RoundedCornerShape(18.dp)),
         contentAlignment = Alignment.Center
     ) {
+        Image(
+            painter = painterResource(R.drawable.floating_bubble_icon),
+            contentDescription = "Screenside Mini Chat",
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
         if (isLoading) {
             CircularProgressIndicator(
                 modifier = Modifier.size(28.dp),
                 color = Color.White,
                 strokeWidth = 2.5.dp
-            )
-        } else {
-            Icon(
-                Icons.Default.SmartToy,
-                contentDescription = "Screenside Mini Chat",
-                tint = Color.White,
-                modifier = Modifier.size(30.dp)
             )
         }
     }

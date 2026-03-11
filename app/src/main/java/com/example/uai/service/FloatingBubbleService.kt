@@ -545,7 +545,7 @@ class FloatingBubbleService : Service() {
                         messages = chatMessages,
                         inputText = inputText,
                         isLoading = isLoading,
-                        agentName = activeAgent?.name ?: "AI Agent",
+                        agentName = activeAgent?.name ?: "Agent",
                         agents = allAgents,
                         conversations = availableConversations,
                         currentConversationId = currentConversationId,

@@ -403,7 +403,7 @@ fun BubbleContent(isLoading: Boolean, modifier: Modifier = Modifier) {
         } else {
             Icon(
                 Icons.Default.SmartToy,
-                contentDescription = "AI Chat",
+                contentDescription = "Screenside Mini Chat",
                 tint = Color.White,
                 modifier = Modifier.size(30.dp)
             )

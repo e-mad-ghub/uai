@@ -9,4 +9,19 @@
     <string name="bubble_channel_description">Shows the persistent Screenside mini chat overlay</string>
     <string name="bubble_notification_title">Screenside Mini Chat</string>
     <string name="bubble_notification_text">Your floating AI sidecar is active</string>
+    <string name="feature_mini_chat">Mini Chat</string>
+    <string name="feature_agents">Agents</string>
+    <string name="feature_rooms">Rooms</string>
+    <string name="feature_room">Room</string>
+    <string name="new_room">New Room</string>
+    <string name="create_room">Create Room</string>
+    <string name="rooms_empty_title">No rooms yet</string>
+    <string name="rooms_empty_message">Tap + to create a room with multiple agents</string>
+    <string name="room_settings">Room settings</string>
+    <string name="room_name">Room name</string>
+    <string name="agents_in_room">Agents in this room</string>
+    <string name="overlay_permission_required">Overlay permission required</string>
+    <string name="overlay_permission_message">Grant "Display over other apps" to use Screenside Mini Chat.</string>
+    <string name="mini_chat_active">Mini Chat is active</string>
+    <string name="mini_chat_inactive">Mini Chat is inactive</string>
 </resources>

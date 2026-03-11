@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -27,6 +28,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.uai.R
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
@@ -243,7 +245,7 @@ fun AgoraDetailScreen(
                 title = {
                     Column {
                         Text(
-                            conversation?.title ?: "Agora Room",
+                            conversation?.title ?: stringResource(R.string.feature_room),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -265,7 +267,7 @@ fun AgoraDetailScreen(
                 },
                 actions = {
                     IconButton(onClick = { showSettings = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Room settings")
+                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.room_settings))
                     }
                 }
             )
@@ -476,18 +478,18 @@ fun AgoraDetailScreen(
                         .padding(bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text("Room settings", style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.room_settings), style = MaterialTheme.typography.titleMedium)
 
                     OutlinedTextField(
                         value = editName,
                         onValueChange = { editName = it },
-                        label = { Text("Room name") },
+                        label = { Text(stringResource(R.string.room_name)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
 
                     Text(
-                        "Agents in this room",
+                        stringResource(R.string.agents_in_room),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

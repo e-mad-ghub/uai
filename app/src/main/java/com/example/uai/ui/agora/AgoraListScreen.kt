@@ -15,10 +15,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.uai.R
 import com.example.uai.data.db.ConversationEntity
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -41,7 +43,7 @@ fun AgoraListScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text("Agora") },
+                title = { Text(stringResource(R.string.feature_rooms)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -53,7 +55,7 @@ fun AgoraListScreen(
             ExtendedFloatingActionButton(
                 onClick = onCreateRoom,
                 icon = { Icon(Icons.Default.Add, null) },
-                text = { Text("New Room") }
+                text = { Text(stringResource(R.string.new_room)) }
             )
         }
     ) { padding ->
@@ -74,12 +76,12 @@ fun AgoraListScreen(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        "No Agora rooms yet",
+                        stringResource(R.string.rooms_empty_title),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        "Tap + to create a room with multiple agents",
+                        stringResource(R.string.rooms_empty_message),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

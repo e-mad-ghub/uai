@@ -149,7 +149,7 @@ class MainActivity : ComponentActivity() {
 
                             Spacer(Modifier.height(6.dp))
 
-                            // New Agora Room button
+                            // New Room button
                             OutlinedButton(
                                 onClick = {
                                     closeDrawer()
@@ -161,13 +161,13 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 Icon(Icons.Default.Groups, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
-                                Text("New Agora Room")
+                                Text(stringResource(R.string.new_room))
                             }
 
                             Spacer(Modifier.height(8.dp))
                             HorizontalDivider()
 
-                            // Conversations list — all chats including Agora rooms
+                            // Conversations list — all chats including Rooms
                             if (conversations.isNotEmpty()) {
                                 Text(
                                     "Recent",
@@ -227,7 +227,7 @@ class MainActivity : ComponentActivity() {
 
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.Default.Person, contentDescription = null) },
-                                label = { Text("Agents") },
+                                label = { Text(stringResource(R.string.feature_agents)) },
                                 selected = currentRoute == Routes.AGENTS,
                                 onClick = {
                                     closeDrawer()
@@ -340,7 +340,7 @@ private fun DrawerConversationItem(
                         color = MaterialTheme.colorScheme.tertiaryContainer
                     ) {
                         Text(
-                            "Agora",
+                            stringResource(R.string.feature_room),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)

@@ -69,10 +69,11 @@ fun ChatPanel(
     var agentDropdownExpanded by remember { mutableStateOf(false) }
     var conversationDropdownExpanded by remember { mutableStateOf(false) }
     var replyToMessage by remember { mutableStateOf<MessageEntity?>(null) }
+    val hasExistingConversations = conversations.isNotEmpty()
     val currentConversationTitle = conversations
         .firstOrNull { it.id == currentConversationId }
         ?.title
-        ?: "Current draft"
+        ?: "New Chat"
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -143,7 +144,7 @@ fun ChatPanel(
                             Row(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(16.dp))
-                                    .clickable(enabled = conversations.isNotEmpty() || currentConversationId == null) {
+                                    .clickable(enabled = hasExistingConversations) {
                                         conversationDropdownExpanded = true
                                     }
                                     .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -156,33 +157,19 @@ fun ChatPanel(
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.widthIn(max = 120.dp)
                                 )
-                                Icon(
-                                    Icons.Default.ArrowDropDown,
-                                    contentDescription = "Select chat",
-                                    modifier = Modifier.size(20.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                if (hasExistingConversations) {
+                                    Icon(
+                                        Icons.Default.ArrowDropDown,
+                                        contentDescription = "Select chat",
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                             DropdownMenu(
                                 expanded = conversationDropdownExpanded,
                                 onDismissRequest = { conversationDropdownExpanded = false }
                             ) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            "Current draft",
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    },
-                                    onClick = {
-                                        conversationDropdownExpanded = false
-                                        onConversationSelect(null)
-                                    }
-                                )
-                                if (conversations.isNotEmpty()) {
-                                    HorizontalDivider()
-                                }
                                 conversations.forEach { conversation ->
                                     DropdownMenuItem(
                                         text = {

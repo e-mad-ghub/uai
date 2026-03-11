@@ -14,6 +14,34 @@ import androidx.compose.ui.graphics.asImageBitmap
 import java.io.ByteArrayOutputStream
 
 /**
+ * Converts a captured bitmap into the attachment payload used by chat messages.
+ * The input bitmap is treated as owned by this function and may be recycled.
+ */
+fun encodeBitmapForAttachment(bitmap: Bitmap): Pair<String, ImageBitmap> {
+    val widthPx = bitmap.width
+    val heightPx = bitmap.height
+    val scale = maxOf(1, maxOf(widthPx, heightPx) / 1024)
+    val scaled = if (scale > 1) {
+        Bitmap.createScaledBitmap(
+            bitmap,
+            maxOf(1, widthPx / scale),
+            maxOf(1, heightPx / scale),
+            true
+        ).also {
+            if (it !== bitmap) {
+                bitmap.recycle()
+            }
+        }
+    } else {
+        bitmap
+    }
+
+    val out = ByteArrayOutputStream()
+    scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+    return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP) to scaled.asImageBitmap()
+}
+
+/**
  * Shared screen capture implementation used by both the floating bubble service
  * and the in-app screens (ConversationDetailScreen, AgoraDetailScreen).
  *
@@ -62,16 +90,7 @@ fun performScreenCapture(
                 raw.copyPixelsFromBuffer(plane.buffer)
                 val cropped = Bitmap.createBitmap(raw, 0, 0, widthPx, heightPx)
                 raw.recycle()
-
-                val scale = maxOf(1, maxOf(widthPx, heightPx) / 1024)
-                val scaled = if (scale > 1) {
-                    Bitmap.createScaledBitmap(cropped, widthPx / scale, heightPx / scale, true)
-                        .also { if (it !== cropped) cropped.recycle() }
-                } else cropped
-
-                val out = ByteArrayOutputStream()
-                scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
-                result = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP) to scaled.asImageBitmap()
+                result = encodeBitmapForAttachment(cropped)
             } catch (e: Exception) {
                 android.util.Log.e("ScreenCapture", "capture error: ${e.javaClass.simpleName}: ${e.message}", e)
             } finally {

@@ -28,6 +28,7 @@ import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -844,6 +845,7 @@ class FloatingBubbleService : Service() {
 
         val reopenPanel = forcePanelVisible ?: pendingPanelRestoreAfterExternalFlow
         pendingPanelRestoreAfterExternalFlow = false
+        overlaySurfaceState = OverlaySurfaceState.BubbleVisible
 
         if (dismissZoneView == null) {
             setupDismissZone()
@@ -854,6 +856,11 @@ class FloatingBubbleService : Service() {
         if (!reopenPanel && bubbleView == null) {
             setupBubble()
         }
+
+        android.util.Log.d(
+            "UAI_CAP",
+            "restoring overlays after external flow: flow=$flowGeneration reopenPanel=$reopenPanel"
+        )
 
         if (reopenPanel) {
             showChatPanel()
@@ -1025,6 +1032,93 @@ class FloatingBubbleService : Service() {
     }
 
     private fun launchScreenshotCapture() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            launchAccessibilityScreenshotCapture()
+            return
+        }
+        launchMediaProjectionScreenshotCapture()
+    }
+
+    private fun launchAccessibilityScreenshotCapture() {
+        if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
+        if (!MiniChatScreenshotAccessibilityService.isAvailable()) {
+            minimizeChatPanelToBubble(immediate = true)
+            Toast.makeText(
+                this,
+                getString(R.string.mini_chat_screenshot_accessibility_hint),
+                Toast.LENGTH_LONG
+            ).show()
+            MiniChatScreenshotAccessibilityService.openSettings(this)
+            return
+        }
+
+        isOverlayScreenshotCaptureInProgress = true
+        android.util.Log.d("UAI_CAP", "accessibility screenshot requested")
+        serviceScope.launch {
+            // Let the screenshot button tap fully unwind before removing the panel window.
+            delay(140L)
+            if (!isOverlayScreenshotCaptureInProgress) return@launch
+
+            val flowGeneration = suspendOverlaysForExternalFlow(reopenPanelOnReturn = true)
+            android.util.Log.d("UAI_CAP", "overlay suspended for accessibility screenshot: flow=$flowGeneration")
+
+            screenshotRestoreJob?.cancel()
+            screenshotRestoreJob = serviceScope.launch {
+                delay(6_000L)
+                if (isOverlayScreenshotCaptureInProgress && flowGeneration == externalFlowGeneration) {
+                    android.util.Log.w("UAI_CAP", "accessibility capture restore timeout; rebuilding overlay")
+                    restoreOverlaysAfterExternalFlow(
+                        flowGeneration = flowGeneration,
+                        forcePanelVisible = true
+                    )
+                }
+            }
+
+            delay(180L)
+            val started = MiniChatScreenshotAccessibilityService.requestScreenshot { outcome ->
+                serviceScope.launch {
+                    when (outcome) {
+                        is AccessibilityScreenCaptureOutcome.Success -> {
+                            android.util.Log.d("UAI_CAP", "accessibility screenshot success")
+                            val persistedUri = withContext(Dispatchers.IO) {
+                                persistImageAttachment(applicationContext, outcome.base64)
+                            }
+                            pendingImages.add(Triple(outcome.base64, outcome.bitmap, persistedUri))
+                        }
+                        is AccessibilityScreenCaptureOutcome.Error -> {
+                            android.util.Log.e("UAI_CAP", "accessibility capture error: ${outcome.message}")
+                            Toast.makeText(
+                                applicationContext,
+                                getString(R.string.mini_chat_screenshot_capture_error, outcome.message),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                    restoreOverlaysAfterExternalFlow(
+                        flowGeneration = flowGeneration,
+                        forcePanelVisible = true
+                    )
+                }
+            }
+
+            if (!started) {
+                android.util.Log.e("UAI_CAP", "accessibility screenshot service unavailable at capture time")
+                restoreOverlaysAfterExternalFlow(
+                    flowGeneration = flowGeneration,
+                    forcePanelVisible = true
+                )
+                minimizeChatPanelToBubble(immediate = true)
+                Toast.makeText(
+                    applicationContext,
+                    getString(R.string.mini_chat_screenshot_accessibility_hint),
+                    Toast.LENGTH_LONG
+                ).show()
+                MiniChatScreenshotAccessibilityService.openSettings(applicationContext)
+            }
+        }
+    }
+
+    private fun launchMediaProjectionScreenshotCapture() {
         if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
         isOverlayScreenshotCaptureInProgress = true
 

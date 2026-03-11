@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -27,6 +28,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.uai.data.db.MessageEntity
@@ -49,8 +51,12 @@ class ChatMessageListBehavior internal constructor(
 
 @Composable
 fun rememberChatMessageListBehavior(
-    messages: List<MessageEntity>
+    messages: List<MessageEntity>,
+    compactViewportExpandDragThreshold: Dp = 56.dp
 ): ChatMessageListBehavior {
+    val expandThresholdPx = with(LocalDensity.current) {
+        compactViewportExpandDragThreshold.toPx()
+    }
     val listState = rememberSaveable(saver = LazyListState.Saver) {
         LazyListState()
     }
@@ -62,15 +68,25 @@ fun rememberChatMessageListBehavior(
 
     var autoScrollEnabled by rememberSaveable { mutableStateOf(true) }
     var isBrowsingHistory by rememberSaveable { mutableStateOf(false) }
+    var pendingHistoryExpansion by rememberSaveable { mutableStateOf(false) }
+    var accumulatedUpwardDragPx by rememberSaveable { mutableStateOf(0f) }
     var lastSeenConversationId by rememberSaveable { mutableStateOf<String?>(null) }
     var lastSeenMessageId by rememberSaveable { mutableStateOf<String?>(null) }
-    val nestedScrollConnection = remember {
+    var lastViewportHeight by rememberSaveable { mutableStateOf<Int?>(null) }
+    val nestedScrollConnection = remember(expandThresholdPx) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (source == NestedScrollSource.UserInput) {
                     if (available.y > 0f) {
                         autoScrollEnabled = false
-                        isBrowsingHistory = true
+                        if (!isBrowsingHistory) {
+                            accumulatedUpwardDragPx += available.y
+                            if (accumulatedUpwardDragPx >= expandThresholdPx) {
+                                pendingHistoryExpansion = true
+                            }
+                        }
+                    } else if (available.y < 0f && !isBrowsingHistory && listState.canScrollForward) {
+                        accumulatedUpwardDragPx = (accumulatedUpwardDragPx + available.y).coerceAtLeast(0f)
                     }
                 }
                 return Offset.Zero
@@ -84,6 +100,22 @@ fun rememberChatMessageListBehavior(
         if (isAtBottom && !listState.isScrollInProgress) {
             autoScrollEnabled = true
             isBrowsingHistory = false
+            pendingHistoryExpansion = false
+            accumulatedUpwardDragPx = 0f
+        }
+    }
+
+    LaunchedEffect(pendingHistoryExpansion, isAtBottom) {
+        if (pendingHistoryExpansion && !isAtBottom) {
+            isBrowsingHistory = true
+            pendingHistoryExpansion = false
+            accumulatedUpwardDragPx = 0f
+        }
+    }
+
+    LaunchedEffect(listState.isScrollInProgress, isBrowsingHistory, pendingHistoryExpansion) {
+        if (!listState.isScrollInProgress && !isBrowsingHistory && !pendingHistoryExpansion) {
+            accumulatedUpwardDragPx = 0f
         }
     }
 
@@ -92,6 +124,8 @@ fun rememberChatMessageListBehavior(
         if (currentConversationId == null) {
             lastSeenConversationId = null
             lastSeenMessageId = null
+            pendingHistoryExpansion = false
+            accumulatedUpwardDragPx = 0f
             return@LaunchedEffect
         }
 
@@ -104,6 +138,8 @@ fun rememberChatMessageListBehavior(
         if (latestMessage.id != lastSeenMessageId && latestMessage.role == "user") {
             autoScrollEnabled = true
             isBrowsingHistory = false
+            pendingHistoryExpansion = false
+            accumulatedUpwardDragPx = 0f
             listState.scrollToConversationEnd()
         }
 
@@ -130,6 +166,25 @@ fun rememberChatMessageListBehavior(
             listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
         }.collect {
             listState.scrollToConversationEnd()
+        }
+    }
+
+    LaunchedEffect(listState, autoScrollEnabled, isAtBottom) {
+        snapshotFlow {
+            listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
+        }.collect { viewportHeight ->
+            val previousViewportHeight = lastViewportHeight
+            lastViewportHeight = viewportHeight
+
+            if (previousViewportHeight == null) return@collect
+            if (autoScrollEnabled || isAtBottom) return@collect
+
+            val viewportDelta = viewportHeight - previousViewportHeight
+            if (viewportDelta != 0) {
+                // The mini chat panel grows upward from the bottom. Compensate the list scroll
+                // by the same amount so the text the user is reading stays visually anchored.
+                listState.scrollBy(-viewportDelta.toFloat())
+            }
         }
     }
 

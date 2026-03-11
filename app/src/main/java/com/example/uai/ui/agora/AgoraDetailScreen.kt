@@ -32,6 +32,7 @@ import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
 import com.example.uai.ui.chat.MessageBubble
 import com.example.uai.ui.chat.persistImageAttachment
+import com.example.uai.ui.chat.rememberCameraPermissionRequester
 import com.example.uai.ui.chat.rememberChatMessageListBehavior
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -174,6 +175,15 @@ fun AgoraDetailScreen(
             }
         }
     }
+
+    val requestCameraPermission = rememberCameraPermissionRequester(
+        onGranted = { cameraLauncher.launch(null) },
+        onDenied = {
+            scope.launch {
+                snackbarHostState.showSnackbar("Camera permission is required to take a photo.")
+            }
+        }
+    )
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -402,7 +412,7 @@ fun AgoraDetailScreen(
                 pendingImages = if (pendingImageBitmap != null) listOf(pendingImageBitmap) else emptyList(),
                 pendingFileName = pendingFileName,
                 replyToMessage = null, // Rendered manually above to preserve Agora visual order
-                onPickCamera = { cameraLauncher.launch(null) },
+                onPickCamera = requestCameraPermission,
                 onPickGallery = { imagePicker.launch("image/*") },
                 onPickFile = { filePicker.launch("*/*") },
                 onClearAttachment = { clearAttachment() },

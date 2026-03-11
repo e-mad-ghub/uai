@@ -32,6 +32,7 @@ import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
 import com.example.uai.ui.chat.MessageBubble
 import com.example.uai.ui.chat.persistImageAttachment
+import com.example.uai.ui.chat.rememberCameraPermissionRequester
 import com.example.uai.ui.chat.rememberChatMessageListBehavior
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -114,6 +115,15 @@ fun ConversationDetailScreen(
             }
         }
     }
+
+    val requestCameraPermission = rememberCameraPermissionRequester(
+        onGranted = { cameraLauncher.launch(null) },
+        onDenied = {
+            scope.launch {
+                snackbarHostState.showSnackbar("Camera permission is required to take a photo.")
+            }
+        }
+    )
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -247,7 +257,7 @@ fun ConversationDetailScreen(
                 pendingFileName = pendingFileName,
                 replyToMessage = replyToMessage,
                 replyLabel = activeAgent?.name ?: "Assistant",
-                onPickCamera = { cameraLauncher.launch(null) },
+                onPickCamera = requestCameraPermission,
                 onPickGallery = { imagePicker.launch("image/*") },
                 onPickFile = { filePicker.launch("*/*") },
                 onClearAttachment = { clearAttachments() },

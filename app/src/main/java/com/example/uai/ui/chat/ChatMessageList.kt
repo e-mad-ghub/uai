@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,6 +34,7 @@ import com.example.uai.data.db.MessageEntity
 class ChatMessageListBehavior internal constructor(
     val listState: LazyListState,
     val isAtBottom: Boolean,
+    val shouldUseCompactViewport: Boolean,
     internal val nestedScrollConnection: NestedScrollConnection
 )
 
@@ -47,25 +47,31 @@ fun rememberChatMessageListBehavior(
     }
     val isAtBottom by remember(listState) {
         derivedStateOf {
-            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-            last == null || last.index >= listState.layoutInfo.totalItemsCount - 1
+            !listState.canScrollForward
         }
     }
 
     var autoScrollEnabled by rememberSaveable { mutableStateOf(true) }
+    var isBrowsingHistory by rememberSaveable { mutableStateOf(false) }
     val nestedScrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.UserInput && available.y > 0f) {
-                    autoScrollEnabled = false
+                if (source == NestedScrollSource.UserInput) {
+                    if (available.y > 0f) {
+                        autoScrollEnabled = false
+                        isBrowsingHistory = true
+                    }
                 }
                 return Offset.Zero
             }
         }
     }
 
-    LaunchedEffect(isAtBottom) {
-        if (isAtBottom) autoScrollEnabled = true
+    LaunchedEffect(isAtBottom, listState.isScrollInProgress) {
+        if (isAtBottom && !listState.isScrollInProgress) {
+            autoScrollEnabled = true
+            isBrowsingHistory = false
+        }
     }
 
     LaunchedEffect(messages.size) {
@@ -81,10 +87,11 @@ fun rememberChatMessageListBehavior(
         }
     }
 
-    return remember(listState, isAtBottom, nestedScrollConnection) {
+    return remember(listState, isAtBottom, isBrowsingHistory, nestedScrollConnection) {
         ChatMessageListBehavior(
             listState = listState,
             isAtBottom = isAtBottom,
+            shouldUseCompactViewport = !isBrowsingHistory,
             nestedScrollConnection = nestedScrollConnection
         )
     }

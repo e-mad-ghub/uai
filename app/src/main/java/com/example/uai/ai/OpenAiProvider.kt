@@ -64,14 +64,16 @@ class OpenAiProvider(
                 add(mapOf("role" to "system", "content" to config.systemPrompt))
             }
             addAll(messages.map { msg ->
-                val content: Any = if (msg.imageBase64 != null) {
+                val content: Any = if (msg.images.isNotEmpty()) {
                     buildList {
-                        add(mapOf(
-                            "type" to "image_url",
-                            "image_url" to mapOf(
-                                "url" to "data:${msg.imageMimeType ?: "image/jpeg"};base64,${msg.imageBase64}"
-                            )
-                        ))
+                        for (img in msg.images) {
+                            add(mapOf(
+                                "type" to "image_url",
+                                "image_url" to mapOf(
+                                    "url" to "data:${img.mimeType};base64,${img.base64}"
+                                )
+                            ))
+                        }
                         if (msg.content.isNotBlank()) {
                             add(mapOf("type" to "text", "text" to msg.content))
                         }

@@ -6,12 +6,19 @@ import android.animation.ValueAnimator
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.graphics.Point
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.util.Base64
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.KeyEvent
@@ -19,7 +26,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
+import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -34,6 +43,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
@@ -46,11 +57,16 @@ import com.example.uai.R
 import com.example.uai.UaiApplication
 import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.ChatMessage
+import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AppColorTheme
+import com.example.uai.ui.MediaPickerActivity
+import com.example.uai.ui.OverlayScreenCaptureActivity
+import com.example.uai.ui.OverlayScreenCaptureOutcome
+import com.example.uai.ui.chat.persistImageAttachment
 import com.example.uai.ui.chat.BubbleContent
 import com.example.uai.ui.chat.ChatPanel
 import com.example.uai.ui.theme.UaiTheme
@@ -60,16 +76,24 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.util.UUID
 import kotlin.math.abs
 
 class FloatingBubbleService : Service() {
+
+    private enum class OverlaySurfaceState {
+        BubbleVisible,
+        PanelVisible,
+        ExternalFlow
+    }
 
     private lateinit var windowManager: WindowManager
     private val lifecycleOwner = ServiceLifecycleOwner()
@@ -81,8 +105,19 @@ class FloatingBubbleService : Service() {
     private var isLoading by mutableStateOf(false)
     private var activeAgent: AgentConfig? by mutableStateOf(null)
     private var allAgents by mutableStateOf<List<AgentConfig>>(emptyList())
+    private var availableConversations by mutableStateOf<List<ConversationEntity>>(emptyList())
     private var colorTheme by mutableStateOf(AppColorTheme.TERRACOTTA)
     private var isDismissTargetActive by mutableStateOf(false)
+
+    // Attachment state
+    // Each Triple: (base64, ImageBitmap?, uriStr?)
+    private val pendingImages = mutableStateListOf<Triple<String, ImageBitmap?, String?>>()
+    // In-memory thumbnails for sent user messages (messageId → bitmaps); cleared on new conversation
+    private val messageThumbnails = mutableStateMapOf<String, List<ImageBitmap>>()
+    private var pendingFileName by mutableStateOf<String?>(null)
+    private var pendingFileText by mutableStateOf<String?>(null)
+    private var pendingDocumentBase64 by mutableStateOf<String?>(null)
+    private var isOverlayScreenshotCaptureInProgress = false
 
     private var bubbleView: ComposeView? = null
     private var chatPanelView: ComposeView? = null
@@ -95,8 +130,30 @@ class FloatingBubbleService : Service() {
     private lateinit var bubbleParams: WindowManager.LayoutParams
     private lateinit var panelParams: WindowManager.LayoutParams
 
+    private var allConversations: List<ConversationEntity> = emptyList()
+    private var hasConversationSnapshot = false
     private var currentConversationId: String? = null
+    private var currentConversationMessagesJob: Job? = null
+    private var prefersDraftConversation = false
+    private var screenshotRestoreJob: Job? = null
     private var streamingJob: Job? = null
+    private var isChatPanelAnimating = false
+    private var overlaySurfaceState = OverlaySurfaceState.BubbleVisible
+    private var pendingPanelRestoreAfterExternalFlow = false
+    private var panelTransitionGeneration = 0L
+    private var externalFlowGeneration = 0L
+    private val systemDialogsReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != Intent.ACTION_CLOSE_SYSTEM_DIALOGS) return
+            if (overlaySurfaceState == OverlaySurfaceState.ExternalFlow || isOverlayScreenshotCaptureInProgress) {
+                pendingPanelRestoreAfterExternalFlow = false
+                return
+            }
+            serviceScope.launch {
+                minimizeChatPanelToBubble(immediate = true)
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -111,6 +168,7 @@ class FloatingBubbleService : Service() {
         setupBubble()
         setupChatPanel()
         setupDismissZone()
+        registerSystemDialogReceiver()
 
         container.preferences.colorThemeFlow
             .onEach { colorTheme = it }
@@ -122,25 +180,18 @@ class FloatingBubbleService : Service() {
             .catch { }
             .launchIn(serviceScope)
 
-        // Agent observer: only restore history on initial load (service first start).
-        // Switching agents mid-session keeps the current conversation — just swaps the AI.
-        var previousAgentId: String? = null
         container.agentRepository.activeAgentFlow
             .onEach { agent ->
-                val newId = agent?.id
-                if (newId != previousAgentId) {
-                    val wasInitialLoad = previousAgentId == null
-                    previousAgentId = newId
+                val previousAgentId = activeAgent?.id
+                activeAgent = agent
+                if (agent?.id != previousAgentId) {
                     streamingJob?.cancel()
                     streamingJob = null
                     isLoading = false
-                    if (wasInitialLoad && agent != null) {
-                        // First emission after service start — restore latest conversation
-                        restoreLatestConversation(agent)
+                    if (hasConversationSnapshot) {
+                        synchronizeConversationSelection()
                     }
-                    // When switching agents mid-session: keep chatMessages + conversationId
                 }
-                activeAgent = agent
             }
             .catch { }
             .launchIn(serviceScope)
@@ -149,42 +200,110 @@ class FloatingBubbleService : Service() {
             val (x, y) = container.preferences.bubblePosFlow.first()
             bubbleParams.x = x
             bubbleParams.y = y
+            // Reveal the bubble at the correct position, avoiding an initial jump.
+            bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
             bubbleView?.let { windowManager.updateViewLayout(it, bubbleParams) }
         }
+
+        container.conversationRepository.getAllConversations()
+            .onEach { conversations ->
+                allConversations = conversations
+                hasConversationSnapshot = true
+                synchronizeConversationSelection()
+            }
+            .catch { }
+            .launchIn(serviceScope)
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        MediaPickerActivity.clearCallbacks()
+        OverlayScreenCaptureActivity.clearPendingRequest()
+        unregisterSystemDialogReceiver()
         lifecycleOwner.onDestroy()
         serviceScope.cancel()
-        removeSafely(chatPanelContainer)
-        removeSafely(dismissZoneView)
-        removeSafely(bubbleView)
+        screenshotRestoreJob?.cancel()
+        currentConversationMessagesJob?.cancel()
+        removeSafely(chatPanelContainer, immediate = true)
+        removeSafely(dismissZoneView, immediate = true)
+        removeSafely(bubbleView, immediate = true)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // ----- History restore -----
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
-    private fun restoreLatestConversation(agent: AgentConfig) {
-        serviceScope.launch {
-            val container = (application as UaiApplication).container
-            val latest = container.conversationRepository.getAllConversations().first()
-                .filter { !it.isAgora && it.agentId == agent.id }
-                .maxByOrNull { it.updatedAt } ?: return@launch
-            val messages = container.conversationRepository
-                .getMessagesList(latest.id)
-                .filter { !it.isStreaming }
-            if (messages.isNotEmpty() && activeAgent?.id == agent.id) {
-                currentConversationId = latest.id
-                chatMessages.addAll(messages)
+    // ----- Conversation sync -----
+
+    private fun conversationsForActiveAgent(): List<ConversationEntity> {
+        val agentId = activeAgent?.id ?: return emptyList()
+        return allConversations
+            .filter { !it.isAgora && it.agentId == agentId }
+            .sortedWith(compareByDescending<ConversationEntity> { it.isPinned }.thenByDescending { it.updatedAt })
+    }
+
+    private fun synchronizeConversationSelection() {
+        availableConversations = conversationsForActiveAgent()
+        val currentConversation = currentConversationId?.let { id ->
+            availableConversations.firstOrNull { it.id == id }
+        }
+
+        when {
+            activeAgent == null -> {
+                prefersDraftConversation = true
+                switchConversation(null, force = currentConversationId != null || chatMessages.isNotEmpty())
+            }
+            currentConversation != null -> {
+                if (currentConversationMessagesJob == null) {
+                    switchConversation(currentConversation.id, force = true)
+                }
+            }
+            prefersDraftConversation -> {
+                switchConversation(null, force = currentConversationId != null || chatMessages.isNotEmpty())
+            }
+            else -> {
+                val fallback = availableConversations.firstOrNull()
+                prefersDraftConversation = fallback == null && hasConversationSnapshot
+                switchConversation(fallback?.id, force = true)
             }
         }
+    }
+
+    private fun switchConversation(conversationId: String?, force: Boolean = false) {
+        if (!force && currentConversationId == conversationId) return
+
+        currentConversationMessagesJob?.cancel()
+        currentConversationMessagesJob = null
+        currentConversationId = conversationId
+        inputText = ""
+        clearAttachment()
+        messageThumbnails.clear()
+
+        if (conversationId == null) {
+            chatMessages.clear()
+            return
+        }
+
+        val container = (application as UaiApplication).container
+        currentConversationMessagesJob = container.conversationRepository
+            .getMessages(conversationId)
+            .onEach { messages ->
+                chatMessages.clear()
+                chatMessages.addAll(messages)
+            }
+            .catch {
+                currentConversationId = null
+                chatMessages.clear()
+            }
+            .launchIn(serviceScope)
     }
 
     // ----- Bubble setup -----
 
     private fun setupBubble() {
+        // NOTE: The bubble may disappear on screens where apps use FLAG_SECURE
+        // (e.g. banking apps, Samsung secure folder) or on certain Samsung full-screen
+        // modes. The OS prevents overlays on those screens — this is not a service crash.
         val sizePx = (64 * resources.displayMetrics.density).toInt()
         bubbleParams = WindowManager.LayoutParams(
             sizePx, sizePx,
@@ -197,11 +316,14 @@ class FloatingBubbleService : Service() {
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = 300
+            // Start invisible so the bubble doesn't flash at the default position
+            // before we restore the saved position.
+            alpha = 0f
         }
 
         bubbleView = ComposeView(this).apply {
             attachLifecycleOwners(this)
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 UaiTheme(colorTheme = colorTheme) {
                     BubbleContent(isLoading = isLoading)
@@ -223,7 +345,7 @@ class FloatingBubbleService : Service() {
         val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onLongPress(e: MotionEvent) {
                 longPressConsumed = true
-                removeSafely(dismissZoneView)
+                removeSafely(dismissZoneView, immediate = true)
                 isDismissTargetActive = false
                 val intent = Intent(this@FloatingBubbleService, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -270,13 +392,13 @@ class FloatingBubbleService : Service() {
                 }
                 MotionEvent.ACTION_UP -> {
                     val wasOverDismiss = isDismissTargetActive
-                    removeSafely(dismissZoneView)
+                    removeSafely(dismissZoneView, immediate = true)
                     isDismissTargetActive = false
                     if (!isDragging && !longPressConsumed) {
                         toggleChatPanel()
                     } else if (isDragging) {
                         if (wasOverDismiss) {
-                            stopSelf()
+                            disableBubbleFromDismissZone()
                         } else {
                             val dm = resources.displayMetrics
                             val sizePx = (64 * dm.density).toInt()
@@ -288,7 +410,7 @@ class FloatingBubbleService : Service() {
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    removeSafely(dismissZoneView)
+                    removeSafely(dismissZoneView, immediate = true)
                     isDismissTargetActive = false
                     longPressConsumed = false
                     if (isDragging) {
@@ -352,11 +474,12 @@ class FloatingBubbleService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            alpha = 0.79f
         }
 
         dismissZoneView = ComposeView(this).apply {
             attachLifecycleOwners(this)
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 UaiTheme(colorTheme = colorTheme) {
                     val circleSize by animateDpAsState(
@@ -399,7 +522,7 @@ class FloatingBubbleService : Service() {
     private fun setupChatPanel() {
         panelParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
             overlayType(),
             WindowManager.LayoutParams.FLAG_DIM_BEHIND,
             PixelFormat.TRANSLUCENT
@@ -409,12 +532,13 @@ class FloatingBubbleService : Service() {
             @Suppress("DEPRECATION")
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
                     WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
-            windowAnimations = android.R.style.Animation_InputMethod
         }
 
         chatPanelView = ComposeView(this).apply {
             attachLifecycleOwners(this)
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            // Keep the overlay composition alive across temporary detach/attach cycles
+            // such as screenshot capture, so scroll state and other UI behavior persist.
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 UaiTheme(colorTheme = colorTheme) {
                     ChatPanel(
@@ -423,60 +547,652 @@ class FloatingBubbleService : Service() {
                         isLoading = isLoading,
                         agentName = activeAgent?.name ?: "AI Agent",
                         agents = allAgents,
+                        conversations = availableConversations,
+                        currentConversationId = currentConversationId,
+                        pendingImages = pendingImages.toList(),
+                        pendingFileName = pendingFileName,
+                        hasAttachment = pendingImages.isNotEmpty() || pendingFileName != null,
+                        messageThumbnails = messageThumbnails,
                         onInputChange = { inputText = it },
                         onSend = ::sendMessage,
                         onStop = ::stopResponse,
-                        onClose = ::hideChatPanel,
+                        onClose = ::dismissChatPanelAnimated,
+                        onOpenInApp = ::openInApp,
                         onAgentSelect = { agent ->
                             serviceScope.launch {
                                 (application as UaiApplication).container
                                     .agentRepository.setActiveAgent(agent.id)
                             }
                         },
-                        onNewConversation = ::startNewConversation
+                        onConversationSelect = { conversationId ->
+                            prefersDraftConversation = conversationId == null
+                            switchConversation(
+                                conversationId,
+                                force = conversationId != currentConversationId
+                            )
+                        },
+                        onNewConversation = ::startNewConversation,
+                        onPickGallery = ::launchGalleryPicker,
+                        onPickCamera = ::launchCameraCapture,
+                        onPickFile = ::launchFilePicker,
+                        onTakeScreenshot = ::launchScreenshotCapture,
+                        onClearAttachment = ::clearAttachment
                     )
                 }
             }
         }
 
-        // Wrap in a FrameLayout that intercepts BACK to close the panel
+        // Wrap in a full-screen FrameLayout. Intercepts BACK to close panel and
+        // touches above the panel to dismiss (tap-outside-to-close).
         chatPanelContainer = object : FrameLayout(this) {
+            private var touchDownRawY = 0f
+            private var touchDownRawX = 0f
+            private var isDragIntercepted = false
+
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
-                    hideChatPanel()
+                    dismissChatPanelAnimated()
                     return true
                 }
                 return super.dispatchKeyEvent(event)
             }
+
+            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+                when (ev.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        isDragIntercepted = false
+                        touchDownRawY = ev.rawY
+                        touchDownRawX = ev.rawX
+                        chatPanelView?.let { panel ->
+                            val rect = android.graphics.Rect()
+                            panel.getGlobalVisibleRect(rect)
+                            if (!rect.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
+                                dismissChatPanelAnimated()
+                                return true
+                            }
+                        }
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (!isDragIntercepted) {
+                            val dy = ev.rawY - touchDownRawY
+                            val dx = ev.rawX - touchDownRawX
+                            val slop = 12 * resources.displayMetrics.density
+                            if (dy > slop && dy > kotlin.math.abs(dx)) {
+                                chatPanelView?.let { panel ->
+                                    val rect = android.graphics.Rect()
+                                    panel.getGlobalVisibleRect(rect)
+                                    val headerH = 56 * resources.displayMetrics.density
+                                    if (touchDownRawY <= rect.top + headerH) {
+                                        isDragIntercepted = true
+                                        return true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return super.onInterceptTouchEvent(ev)
+            }
+
+            override fun onTouchEvent(ev: MotionEvent): Boolean {
+                if (!isDragIntercepted) return false
+                val panel = chatPanelView ?: return false
+                when (ev.action) {
+                    MotionEvent.ACTION_MOVE -> {
+                        val dy = ev.rawY - touchDownRawY
+                        panel.translationY = maxOf(0f, dy)
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        val dy = ev.rawY - touchDownRawY
+                        isDragIntercepted = false
+                        if (dy >= panel.height * 0.25f) {
+                            dismissChatPanelAnimated()
+                        } else {
+                            panel.animate()
+                                .translationY(0f)
+                                .setDuration(200)
+                                .setInterpolator(android.view.animation.DecelerateInterpolator())
+                                .start()
+                        }
+                    }
+                }
+                return true
+            }
         }.also { container ->
-            // Lifecycle owners must be on the root view added to WindowManager
             attachLifecycleOwners(container)
             container.addView(
                 chatPanelView,
                 FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM
                 )
             )
         }
     }
 
     private fun toggleChatPanel() {
-        if (isChatPanelVisible) hideChatPanel() else showChatPanel()
+        if (isOverlayScreenshotCaptureInProgress || isChatPanelAnimating) return
+        when {
+            overlaySurfaceState == OverlaySurfaceState.ExternalFlow -> return
+            overlaySurfaceState == OverlaySurfaceState.PanelVisible ||
+                    chatPanelContainer?.isAttachedToWindow == true -> dismissChatPanelAnimated()
+            else -> showChatPanel()
+        }
     }
 
-    private fun showChatPanel() {
-        chatPanelContainer?.let {
-            if (!it.isAttachedToWindow) {
-                windowManager.addView(it, panelParams)
-                isChatPanelVisible = true
+    private fun restoreChatPanelWindowState() {
+        panelParams.flags = WindowManager.LayoutParams.FLAG_DIM_BEHIND
+        panelParams.dimAmount = 0.4f
+        panelParams.alpha = 1f
+        chatPanelContainer?.alpha = 1f
+        chatPanelView?.let { panel ->
+            panel.animate().cancel()
+            panel.alpha = 1f
+        }
+        chatPanelContainer?.let { container ->
+            if (container.isAttachedToWindow) {
+                runCatching { windowManager.updateViewLayout(container, panelParams) }
             }
         }
     }
 
-    private fun hideChatPanel() {
-        removeSafely(chatPanelContainer)
+    private fun showChatPanel() {
+        if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
+        if (chatPanelView == null || chatPanelContainer == null) {
+            setupChatPanel()
+        }
+
+        restoreChatPanelWindowState()
+        hideBubbleWindow(immediate = true)
+        chatPanelContainer?.let { container ->
+            isChatPanelVisible = true
+            isChatPanelAnimating = false
+            if (!container.isAttachedToWindow) {
+                // Set translationY BEFORE adding to window so the first draw is offscreen (no flash)
+                val screenH = resources.displayMetrics.heightPixels.toFloat()
+                chatPanelView?.translationY = screenH
+                windowManager.addView(container, panelParams)
+                isChatPanelAnimating = true
+                val transitionGeneration = nextPanelTransitionGeneration()
+                chatPanelView?.animate()
+                    ?.translationY(0f)
+                    ?.setDuration(280)
+                    ?.setInterpolator(android.view.animation.DecelerateInterpolator())
+                    ?.withEndAction {
+                        if (panelTransitionGeneration != transitionGeneration) return@withEndAction
+                        isChatPanelAnimating = false
+                        overlaySurfaceState = OverlaySurfaceState.PanelVisible
+                    }
+                    ?.start()
+            } else {
+                nextPanelTransitionGeneration()
+                chatPanelView?.animate()?.cancel()
+                chatPanelView?.translationY = 0f
+                overlaySurfaceState = OverlaySurfaceState.PanelVisible
+            }
+        }
+    }
+
+    private fun dismissChatPanelAnimated() {
+        if (overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
+        if (isChatPanelAnimating && !isChatPanelVisible) return
+        val panel = chatPanelView ?: run { hideChatPanel(immediate = true); return }
+        if (chatPanelContainer?.isAttachedToWindow != true) {
+            hideChatPanel(immediate = true)
+            return
+        }
+        val h = panel.height.toFloat().takeIf { it > 0 }
+            ?: resources.displayMetrics.heightPixels.toFloat() / 3f
         isChatPanelVisible = false
+        isChatPanelAnimating = true
+        val transitionGeneration = nextPanelTransitionGeneration()
+        panel.animate().cancel()
+        panel.animate()
+            .translationY(h)
+            .setDuration(220)
+            .setInterpolator(android.view.animation.AccelerateInterpolator())
+            .withEndAction {
+                if (panelTransitionGeneration != transitionGeneration) return@withEndAction
+                hideChatPanel(immediate = true)
+            }
+            .start()
+    }
+
+    private fun hideChatPanel(
+        immediate: Boolean = false,
+        restoreBubble: Boolean = true
+    ) {
+        nextPanelTransitionGeneration()
+        clearChatPanelInteractionState()
+        removeSafely(chatPanelContainer, immediate = immediate)
+        chatPanelView?.disposeComposition()
+        chatPanelContainer = null
+        chatPanelView = null
+        isChatPanelVisible = false
+        isChatPanelAnimating = false
+        overlaySurfaceState = if (restoreBubble) {
+            OverlaySurfaceState.BubbleVisible
+        } else {
+            OverlaySurfaceState.ExternalFlow
+        }
+        if (restoreBubble) {
+            ensureBubbleVisible()
+        }
+    }
+
+    private fun minimizeChatPanelToBubble(immediate: Boolean = true) {
+        removeSafely(dismissZoneView, immediate = true)
+        isDismissTargetActive = false
+        hideChatPanel(immediate = immediate, restoreBubble = true)
+    }
+
+    private fun ensureBubbleVisible() {
+        if (!::bubbleParams.isInitialized) return
+        if (bubbleView == null) {
+            setupBubble()
+        }
+        bubbleParams.flags = BUBBLE_WINDOW_FLAGS
+        bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
+        bubbleView?.let { bubble ->
+            if (bubble.isAttachedToWindow) {
+                runCatching { windowManager.updateViewLayout(bubble, bubbleParams) }
+            } else {
+                runCatching { windowManager.addView(bubble, bubbleParams) }
+            }
+        }
+        overlaySurfaceState = OverlaySurfaceState.BubbleVisible
+    }
+
+    private fun hideBubbleWindow(immediate: Boolean = true) {
+        removeSafely(bubbleView, immediate = immediate)
+    }
+
+    private fun clearChatPanelInteractionState() {
+        chatPanelView?.animate()?.cancel()
+        chatPanelView?.clearFocus()
+        chatPanelContainer?.clearFocus()
+        chatPanelView?.translationY = 0f
+        (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+            ?.hideSoftInputFromWindow(chatPanelView?.windowToken ?: chatPanelContainer?.windowToken, 0)
+    }
+
+    private fun suspendOverlaysForExternalFlow(reopenPanelOnReturn: Boolean): Long {
+        externalFlowGeneration += 1
+        val flowGeneration = externalFlowGeneration
+        pendingPanelRestoreAfterExternalFlow =
+            reopenPanelOnReturn && (
+                    overlaySurfaceState == OverlaySurfaceState.PanelVisible ||
+                            isChatPanelVisible ||
+                            chatPanelContainer?.isAttachedToWindow == true
+                    )
+        removeSafely(dismissZoneView, immediate = true)
+        isDismissTargetActive = false
+        hideChatPanel(immediate = true, restoreBubble = false)
+        hideBubbleWindow(immediate = true)
+        overlaySurfaceState = OverlaySurfaceState.ExternalFlow
+        return flowGeneration
+    }
+
+    private fun restoreOverlaysAfterExternalFlow(
+        flowGeneration: Long,
+        forcePanelVisible: Boolean? = null
+    ) {
+        if (flowGeneration != externalFlowGeneration) return
+        screenshotRestoreJob?.cancel()
+        screenshotRestoreJob = null
+        isOverlayScreenshotCaptureInProgress = false
+
+        val reopenPanel = forcePanelVisible ?: pendingPanelRestoreAfterExternalFlow
+        pendingPanelRestoreAfterExternalFlow = false
+        overlaySurfaceState = OverlaySurfaceState.BubbleVisible
+
+        if (dismissZoneView == null) {
+            setupDismissZone()
+        }
+        if (chatPanelView == null || chatPanelContainer == null) {
+            setupChatPanel()
+        }
+        if (!reopenPanel && bubbleView == null) {
+            setupBubble()
+        }
+
+        android.util.Log.d(
+            "UAI_CAP",
+            "restoring overlays after external flow: flow=$flowGeneration reopenPanel=$reopenPanel"
+        )
+
+        if (reopenPanel) {
+            showChatPanel()
+        } else {
+            ensureBubbleVisible()
+        }
+    }
+
+    private fun registerSystemDialogReceiver() {
+        val filter = IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(systemDialogsReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(systemDialogsReceiver, filter)
+        }
+    }
+
+    private fun unregisterSystemDialogReceiver() {
+        runCatching { unregisterReceiver(systemDialogsReceiver) }
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (overlaySurfaceState == OverlaySurfaceState.ExternalFlow || isOverlayScreenshotCaptureInProgress) {
+            pendingPanelRestoreAfterExternalFlow = false
+        } else {
+            minimizeChatPanelToBubble(immediate = true)
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
+    private fun disableBubbleFromDismissZone() {
+        MediaPickerActivity.clearCallbacks()
+        hideChatPanel(immediate = true)
+        removeSafely(dismissZoneView, immediate = true)
+        isDismissTargetActive = false
+
+        serviceScope.launch {
+            (application as UaiApplication).container.agentRepository.setBubbleEnabled(false)
+            stopSelf()
+        }
+    }
+
+    // ----- Attachment handling -----
+
+    private fun clearAttachment() {
+        pendingImages.clear()
+        pendingFileName = null
+        pendingFileText = null
+        pendingDocumentBase64 = null
+    }
+
+    private fun launchGalleryPicker() {
+        MediaPickerActivity.clearCallbacks()
+        val flowGeneration = suspendOverlaysForExternalFlow(reopenPanelOnReturn = true)
+        MediaPickerActivity.onImageResult = { uri ->
+            serviceScope.launch {
+                if (uri != null) {
+                    val (base64, bitmap) = encodeImageFromUri(uri)
+                    if (base64 != null) {
+                        val persistedUri = withContext(Dispatchers.IO) {
+                            persistImageAttachment(applicationContext, base64)
+                        } ?: uri.toString()
+                        pendingImages.add(Triple(base64, bitmap, persistedUri))
+                    }
+                }
+                restoreOverlaysAfterExternalFlow(
+                    flowGeneration = flowGeneration,
+                    forcePanelVisible = true
+                )
+            }
+        }
+        startMediaPickerActivity(MediaPickerActivity.ACTION_GALLERY)
+    }
+
+    private fun launchCameraCapture() {
+        MediaPickerActivity.clearCallbacks()
+        val flowGeneration = suspendOverlaysForExternalFlow(reopenPanelOnReturn = true)
+        MediaPickerActivity.onBitmapResult = { bitmap ->
+            serviceScope.launch(Dispatchers.IO) {
+                if (bitmap != null) {
+                    val out = ByteArrayOutputStream()
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                    val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+                    val imgBitmap = bitmap.asImageBitmap()
+                    val persistedUri = persistImageAttachment(applicationContext, base64)
+                    withContext(Dispatchers.Main) {
+                        pendingImages.add(Triple(base64, imgBitmap, persistedUri))
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    restoreOverlaysAfterExternalFlow(
+                        flowGeneration = flowGeneration,
+                        forcePanelVisible = true
+                    )
+                }
+            }
+        }
+        startMediaPickerActivity(MediaPickerActivity.ACTION_CAMERA)
+    }
+
+    private fun launchFilePicker() {
+        MediaPickerActivity.clearCallbacks()
+        val flowGeneration = suspendOverlaysForExternalFlow(reopenPanelOnReturn = true)
+        MediaPickerActivity.onFileResult = { uri ->
+            if (uri != null) {
+                serviceScope.launch {
+                    // Process then always restore the panel
+                    val mimeType = contentResolver.getType(uri) ?: ""
+                    val name = uri.lastPathSegment ?: "file"
+                    when {
+                        mimeType.startsWith("image/") -> {
+                            val (base64, bitmap) = encodeImageFromUri(uri)
+                            if (base64 != null) {
+                                // File-picked image replaces all existing attachments
+                                pendingImages.clear()
+                                pendingFileName = null
+                                pendingFileText = null
+                                pendingDocumentBase64 = null
+                                val persistedUri = withContext(Dispatchers.IO) {
+                                    persistImageAttachment(applicationContext, base64)
+                                } ?: uri.toString()
+                                pendingImages.add(Triple(base64, bitmap, persistedUri))
+                            }
+                        }
+                        mimeType.startsWith("text/") -> {
+                            val text = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
+                                }.getOrNull()
+                            }
+                            if (text != null) {
+                                pendingImages.clear()
+                                pendingFileName = name
+                                pendingFileText = text
+                                pendingDocumentBase64 = null
+                            }
+                        }
+                        mimeType == "application/pdf" -> {
+                            val base64 = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    contentResolver.openInputStream(uri)?.use {
+                                        Base64.encodeToString(it.readBytes(), Base64.NO_WRAP)
+                                    }
+                                }.getOrNull()
+                            }
+                            if (base64 != null) {
+                                pendingImages.clear()
+                                pendingFileName = name
+                                pendingFileText = null
+                                pendingDocumentBase64 = base64
+                            }
+                        }
+                        else -> { /* unsupported — silently ignore */ }
+                    }
+                    restoreOverlaysAfterExternalFlow(
+                        flowGeneration = flowGeneration,
+                        forcePanelVisible = true
+                    )
+                }
+            } else {
+                restoreOverlaysAfterExternalFlow(
+                    flowGeneration = flowGeneration,
+                    forcePanelVisible = true
+                )
+            }
+        }
+        startMediaPickerActivity(MediaPickerActivity.ACTION_FILE)
+    }
+
+    private fun launchScreenshotCapture() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            launchAccessibilityScreenshotCapture()
+            return
+        }
+        launchMediaProjectionScreenshotCapture()
+    }
+
+    private fun launchAccessibilityScreenshotCapture() {
+        if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
+        if (!MiniChatScreenshotAccessibilityService.isAvailable()) {
+            minimizeChatPanelToBubble(immediate = true)
+            Toast.makeText(
+                this,
+                getString(R.string.mini_chat_screenshot_accessibility_hint),
+                Toast.LENGTH_LONG
+            ).show()
+            MiniChatScreenshotAccessibilityService.openSettings(this)
+            return
+        }
+
+        isOverlayScreenshotCaptureInProgress = true
+        android.util.Log.d("UAI_CAP", "accessibility screenshot requested")
+        serviceScope.launch {
+            // Let the screenshot button tap fully unwind before removing the panel window.
+            delay(140L)
+            if (!isOverlayScreenshotCaptureInProgress) return@launch
+
+            val flowGeneration = suspendOverlaysForExternalFlow(reopenPanelOnReturn = true)
+            android.util.Log.d("UAI_CAP", "overlay suspended for accessibility screenshot: flow=$flowGeneration")
+
+            screenshotRestoreJob?.cancel()
+            screenshotRestoreJob = serviceScope.launch {
+                delay(6_000L)
+                if (isOverlayScreenshotCaptureInProgress && flowGeneration == externalFlowGeneration) {
+                    android.util.Log.w("UAI_CAP", "accessibility capture restore timeout; rebuilding overlay")
+                    restoreOverlaysAfterExternalFlow(
+                        flowGeneration = flowGeneration,
+                        forcePanelVisible = true
+                    )
+                }
+            }
+
+            delay(180L)
+            val started = MiniChatScreenshotAccessibilityService.requestScreenshot { outcome ->
+                serviceScope.launch {
+                    when (outcome) {
+                        is AccessibilityScreenCaptureOutcome.Success -> {
+                            android.util.Log.d("UAI_CAP", "accessibility screenshot success")
+                            val persistedUri = withContext(Dispatchers.IO) {
+                                persistImageAttachment(applicationContext, outcome.base64)
+                            }
+                            pendingImages.add(Triple(outcome.base64, outcome.bitmap, persistedUri))
+                        }
+                        is AccessibilityScreenCaptureOutcome.Error -> {
+                            android.util.Log.e("UAI_CAP", "accessibility capture error: ${outcome.message}")
+                            Toast.makeText(
+                                applicationContext,
+                                getString(R.string.mini_chat_screenshot_capture_error, outcome.message),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                    restoreOverlaysAfterExternalFlow(
+                        flowGeneration = flowGeneration,
+                        forcePanelVisible = true
+                    )
+                }
+            }
+
+            if (!started) {
+                android.util.Log.e("UAI_CAP", "accessibility screenshot service unavailable at capture time")
+                restoreOverlaysAfterExternalFlow(
+                    flowGeneration = flowGeneration,
+                    forcePanelVisible = true
+                )
+                minimizeChatPanelToBubble(immediate = true)
+                Toast.makeText(
+                    applicationContext,
+                    getString(R.string.mini_chat_screenshot_accessibility_hint),
+                    Toast.LENGTH_LONG
+                ).show()
+                MiniChatScreenshotAccessibilityService.openSettings(applicationContext)
+            }
+        }
+    }
+
+    private fun launchMediaProjectionScreenshotCapture() {
+        if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
+        isOverlayScreenshotCaptureInProgress = true
+
+        val flowGeneration = suspendOverlaysForExternalFlow(reopenPanelOnReturn = true)
+
+        screenshotRestoreJob?.cancel()
+        screenshotRestoreJob = serviceScope.launch {
+            delay(12_000L)
+            if (isOverlayScreenshotCaptureInProgress && flowGeneration == externalFlowGeneration) {
+                android.util.Log.w("UAI_CAP", "overlay capture restore timeout; rebuilding overlay")
+                restoreOverlaysAfterExternalFlow(
+                    flowGeneration = flowGeneration,
+                    forcePanelVisible = true
+                )
+            }
+        }
+
+        val launchResult = runCatching {
+            OverlayScreenCaptureActivity.start(applicationContext) { outcome ->
+                serviceScope.launch {
+                    if (outcome is OverlayScreenCaptureOutcome.Success) {
+                        val persistedUri = withContext(Dispatchers.IO) {
+                            persistImageAttachment(applicationContext, outcome.base64)
+                        }
+                        pendingImages.add(Triple(outcome.base64, outcome.bitmap, persistedUri))
+                    } else if (outcome is OverlayScreenCaptureOutcome.Error) {
+                        android.util.Log.e("UAI_CAP", "overlay capture error: ${outcome.message}")
+                    }
+                    restoreOverlaysAfterExternalFlow(
+                        flowGeneration = flowGeneration,
+                        forcePanelVisible = true
+                    )
+                }
+            }
+        }
+        if (launchResult.isFailure) {
+            serviceScope.launch {
+                android.util.Log.e(
+                    "UAI_CAP",
+                    "failed to launch overlay capture activity",
+                    launchResult.exceptionOrNull()
+                )
+                restoreOverlaysAfterExternalFlow(
+                    flowGeneration = flowGeneration,
+                    forcePanelVisible = true
+                )
+            }
+        }
+    }
+
+    private fun startMediaPickerActivity(action: String) {
+        val intent = Intent(this, MediaPickerActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            putExtra(MediaPickerActivity.EXTRA_ACTION, action)
+        }
+        startActivity(intent)
+    }
+
+    private suspend fun encodeImageFromUri(uri: Uri): Pair<String?, ImageBitmap?> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+                val scale = maxOf(1, maxOf(opts.outWidth, opts.outHeight) / 1024)
+                val opts2 = BitmapFactory.Options().apply { inSampleSize = scale }
+                val bmp = contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it, null, opts2)
+                } ?: return@withContext null to null
+                val out = ByteArrayOutputStream()
+                bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+                base64 to bmp.asImageBitmap()
+            } catch (_: Exception) { null to null }
+        }
     }
 
     // ----- Message sending -----
@@ -484,9 +1200,31 @@ class FloatingBubbleService : Service() {
     private fun startNewConversation() {
         streamingJob?.cancel()
         streamingJob = null
+        currentConversationMessagesJob?.cancel()
+        currentConversationMessagesJob = null
+        inputText = ""
         isLoading = false
         currentConversationId = null
+        prefersDraftConversation = true
+        isOverlayScreenshotCaptureInProgress = false
+        pendingPanelRestoreAfterExternalFlow = false
+        removeSafely(dismissZoneView, immediate = true)
+        isDismissTargetActive = false
+        restoreChatPanelWindowState()
         chatMessages.clear()
+        messageThumbnails.clear()
+        clearAttachment()
+    }
+
+    private fun openInApp() {
+        val convId = currentConversationId ?: return
+        minimizeChatPanelToBubble(immediate = true)
+        val intent = Intent(this, MainActivity::class.java).apply {
+            action = "com.example.uai.OPEN_CONVERSATION"
+            putExtra("conversationId", convId)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        startActivity(intent)
     }
 
     private fun stopResponse() {
@@ -497,7 +1235,15 @@ class FloatingBubbleService : Service() {
 
     private fun sendMessage(text: String) {
         val agent = activeAgent
-        if (text.isBlank() || isLoading || agent == null) return
+        val imageList = pendingImages.toList()
+        val docBase64 = pendingDocumentBase64
+        val fileCtx = pendingFileText?.let { "```\n$it\n```\n\n" } ?: ""
+        val fullText = fileCtx + text
+
+        if ((fullText.isBlank() && imageList.isEmpty() && docBase64 == null) || isLoading || agent == null) return
+
+        // Clear attachment before starting the stream (don't wait for it)
+        clearAttachment()
 
         val container = (application as UaiApplication).container
 
@@ -510,28 +1256,40 @@ class FloatingBubbleService : Service() {
 
             try {
                 if (currentConversationId == null) {
+                    val title = fullText.trim().ifBlank {
+                        if (docBase64 != null) "Document" else if (imageList.isNotEmpty()) "Image" else "Chat"
+                    }.take(60)
                     val conv = ConversationEntity(
                         id = UUID.randomUUID().toString(),
-                        title = text.take(60),
+                        title = title,
                         agentId = agent.id,
                         agentName = agent.name,
                         createdAt = System.currentTimeMillis(),
                         updatedAt = System.currentTimeMillis()
                     )
                     container.conversationRepository.upsertConversation(conv)
-                    currentConversationId = conv.id
+                    prefersDraftConversation = false
+                    switchConversation(conv.id, force = true)
                 }
                 val convId = currentConversationId!!
+                val persistedImageUri = imageList.firstOrNull()?.third
+                    ?: imageList.firstOrNull()?.first?.let {
+                        withContext(Dispatchers.IO) { persistImageAttachment(applicationContext, it) }
+                    }
 
                 val userMsg = MessageEntity(
                     id = UUID.randomUUID().toString(),
                     conversationId = convId,
                     role = "user",
-                    content = text,
-                    createdAt = System.currentTimeMillis()
+                    content = fullText,
+                    createdAt = System.currentTimeMillis(),
+                    imageUri = persistedImageUri
                 )
                 container.conversationRepository.insertMessage(userMsg)
                 chatMessages.add(userMsg)
+                // Store in-memory thumbnails so the message bubble can display them
+                val thumbs = imageList.mapNotNull { it.second }
+                if (thumbs.isNotEmpty()) messageThumbnails[userMsg.id] = thumbs
 
                 assistantId = UUID.randomUUID().toString()
                 val assistantMsg = MessageEntity(
@@ -546,9 +1304,34 @@ class FloatingBubbleService : Service() {
                 container.conversationRepository.insertMessage(assistantMsg)
                 chatMessages.add(assistantMsg)
 
-                val history = chatMessages
-                    .filter { !it.isStreaming }
-                    .map { ChatMessage(it.role, it.content) }
+                // If agent doesn't support vision, insert a capability notice instead of calling API
+                if (imageList.isNotEmpty() && !agent.supportsVision) {
+                    val notice = "I don't support image analysis with \"${agent.model}\". " +
+                            "Please switch to a vision-capable model in agent settings."
+                    accumulated = notice  // must be non-blank so finally doesn't delete the message
+                    val idx = chatMessages.indexOfFirst { it.id == assistantId }
+                    if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = notice, isStreaming = false)
+                    container.conversationRepository.updateMessageContent(assistantId, notice, false)
+                    container.conversationRepository.touchConversation(convId)
+                    return@launch
+                }
+
+                // Build history, attaching images/document to the last user message
+                val allHistory = chatMessages.filter { !it.isStreaming }
+                val history = allHistory.mapIndexed { idx, msg ->
+                    if (idx == allHistory.lastIndex && msg.role == "user") {
+                        when {
+                            imageList.isNotEmpty() -> ChatMessage(
+                                msg.role, msg.content,
+                                images = imageList.map { ImageAttachment(it.first) }
+                            )
+                            docBase64 != null      -> ChatMessage(msg.role, msg.content, documentBase64 = docBase64)
+                            else                   -> ChatMessage(msg.role, msg.content)
+                        }
+                    } else {
+                        ChatMessage(msg.role, msg.content)
+                    }
+                }
 
                 val provider = AiProviderFactory.create(agent, container.okHttpClient)
 
@@ -569,7 +1352,9 @@ class FloatingBubbleService : Service() {
                                 container.conversationRepository.touchConversation(convId)
                             }
                             is StreamChunk.Error -> {
-                                val errContent = "$accumulated\n[Error: ${chunk.cause.message}]"
+                                val errContent = if (accumulated.isBlank()) "[Error: ${chunk.cause.message}]"
+                                                 else "$accumulated\n[Error: ${chunk.cause.message}]"
+                                accumulated = errContent  // must be non-blank so finally doesn't delete the message
                                 if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = errContent, isStreaming = false)
                                 container.conversationRepository.updateMessageContent(id, errContent, false)
                             }
@@ -617,8 +1402,17 @@ class FloatingBubbleService : Service() {
         view.setViewTreeSavedStateRegistryOwner(lifecycleOwner)
     }
 
-    private fun removeSafely(view: View?) {
-        if (view != null && view.isAttachedToWindow) windowManager.removeView(view)
+    private fun removeSafely(view: View?, immediate: Boolean = false) {
+        if (view != null && view.isAttachedToWindow) {
+            runCatching {
+                if (immediate) windowManager.removeViewImmediate(view) else windowManager.removeView(view)
+            }
+        }
+    }
+
+    private fun nextPanelTransitionGeneration(): Long {
+        panelTransitionGeneration += 1
+        return panelTransitionGeneration
     }
 
     private fun saveBubblePosition() {
@@ -650,7 +1444,16 @@ class FloatingBubbleService : Service() {
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            startForeground(
+                NOTIFICATION_ID, notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID, notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
@@ -661,6 +1464,11 @@ class FloatingBubbleService : Service() {
         private const val DISMISS_BOTTOM_PAD_DP = 48
         private const val DISMISS_RADIUS_DP = 30
         private const val DISMISS_HIT_DP = 60
+        private const val BUBBLE_NORMAL_ALPHA = 0.82f
+        private val BUBBLE_WINDOW_FLAGS =
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
 
         fun startService(context: android.content.Context) {
             val intent = Intent(context, FloatingBubbleService::class.java)

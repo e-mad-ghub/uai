@@ -83,15 +83,17 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
             .filter { it.role != "system" }
             .map { msg ->
                 val content: Any = when {
-                    msg.imageBase64 != null -> buildList {
-                        add(mapOf(
-                            "type" to "image",
-                            "source" to mapOf(
-                                "type" to "base64",
-                                "media_type" to (msg.imageMimeType ?: "image/jpeg"),
-                                "data" to msg.imageBase64
-                            )
-                        ))
+                    msg.images.isNotEmpty() -> buildList {
+                        for (img in msg.images) {
+                            add(mapOf(
+                                "type" to "image",
+                                "source" to mapOf(
+                                    "type" to "base64",
+                                    "media_type" to img.mimeType,
+                                    "data" to img.base64
+                                )
+                            ))
+                        }
                         if (msg.content.isNotBlank()) {
                             add(mapOf("type" to "text", "text" to msg.content))
                         }

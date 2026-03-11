@@ -23,7 +23,7 @@ import okhttp3.OkHttpClient
 import java.util.UUID
 
 class AgoraDetailViewModel(
-    private val conversationId: String,
+    val conversationId: String,
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
     private val httpClient: OkHttpClient
@@ -212,7 +212,8 @@ class AgoraDetailViewModel(
                             val userText = userMsg.content + contextSuffix
                             when {
                                 isLastRound && imageBase64 != null ->
-                                    add(ChatMessage("user", userText, imageBase64, "image/jpeg"))
+                                    add(ChatMessage("user", userText,
+                                        images = listOf(com.example.uai.ai.ImageAttachment(imageBase64))))
                                 isLastRound && documentBase64 != null ->
                                     add(ChatMessage("user", userText, documentBase64 = documentBase64))
                                 else ->

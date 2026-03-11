@@ -16,7 +16,10 @@ import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.*
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,11 +71,22 @@ fun ChatPanel(
     val messageListBehavior = rememberChatMessageListBehavior(messages)
     val expandedMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(280.dp, 560.dp)
     val compactMsgHeight = (expandedMsgHeight * 0.5f).coerceAtLeast(160.dp)
-    val animatedMaxMsgHeight by animateDpAsState(
-        targetValue = if (messageListBehavior.shouldUseCompactViewport) compactMsgHeight else expandedMsgHeight,
-        animationSpec = tween(durationMillis = 220),
-        label = "miniChatMessageAreaHeight"
+    val compactViewportTransition = updateTransition(
+        targetState = messageListBehavior.shouldUseCompactViewport,
+        label = "miniChatCompactViewport"
     )
+    val animatedMaxMsgHeight by compactViewportTransition.animateDp(
+        transitionSpec = {
+            if (false isTransitioningTo true) {
+                tween(durationMillis = 340, easing = FastOutSlowInEasing)
+            } else {
+                tween(durationMillis = 400, easing = FastOutSlowInEasing)
+            }
+        },
+        label = "miniChatMessageAreaHeight"
+    ) { useCompactViewport ->
+        if (useCompactViewport) compactMsgHeight else expandedMsgHeight
+    }
 
     var agentDropdownExpanded by remember { mutableStateOf(false) }
     var conversationDropdownExpanded by remember { mutableStateOf(false) }

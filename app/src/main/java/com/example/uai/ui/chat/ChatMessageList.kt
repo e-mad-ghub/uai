@@ -1,5 +1,7 @@
 package com.example.uai.ui.chat
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -28,7 +30,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.uai.data.db.MessageEntity
@@ -45,18 +46,11 @@ private suspend fun LazyListState.scrollToConversationEnd() {
 class ChatMessageListBehavior internal constructor(
     val listState: LazyListState,
     val isAtBottom: Boolean,
-    val shouldUseCompactViewport: Boolean,
     internal val nestedScrollConnection: NestedScrollConnection
 )
 
 @Composable
-fun rememberChatMessageListBehavior(
-    messages: List<MessageEntity>,
-    compactViewportExpandDragThreshold: Dp = 56.dp
-): ChatMessageListBehavior {
-    val expandThresholdPx = with(LocalDensity.current) {
-        compactViewportExpandDragThreshold.toPx()
-    }
+fun rememberChatMessageListBehavior(messages: List<MessageEntity>): ChatMessageListBehavior {
     val listState = rememberSaveable(saver = LazyListState.Saver) {
         LazyListState()
     }
@@ -67,27 +61,14 @@ fun rememberChatMessageListBehavior(
     }
 
     var autoScrollEnabled by rememberSaveable { mutableStateOf(true) }
-    var isBrowsingHistory by rememberSaveable { mutableStateOf(false) }
-    var pendingHistoryExpansion by rememberSaveable { mutableStateOf(false) }
-    var accumulatedUpwardDragPx by rememberSaveable { mutableStateOf(0f) }
     var lastSeenConversationId by rememberSaveable { mutableStateOf<String?>(null) }
     var lastSeenMessageId by rememberSaveable { mutableStateOf<String?>(null) }
     var lastViewportHeight by rememberSaveable { mutableStateOf<Int?>(null) }
-    val nestedScrollConnection = remember(expandThresholdPx) {
+    val nestedScrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.UserInput) {
-                    if (available.y > 0f) {
-                        autoScrollEnabled = false
-                        if (!isBrowsingHistory) {
-                            accumulatedUpwardDragPx += available.y
-                            if (accumulatedUpwardDragPx >= expandThresholdPx) {
-                                pendingHistoryExpansion = true
-                            }
-                        }
-                    } else if (available.y < 0f && !isBrowsingHistory && listState.canScrollForward) {
-                        accumulatedUpwardDragPx = (accumulatedUpwardDragPx + available.y).coerceAtLeast(0f)
-                    }
+                if (source == NestedScrollSource.UserInput && available.y > 0f) {
+                    autoScrollEnabled = false
                 }
                 return Offset.Zero
             }
@@ -99,23 +80,6 @@ fun rememberChatMessageListBehavior(
     LaunchedEffect(isAtBottom, listState.isScrollInProgress) {
         if (isAtBottom && !listState.isScrollInProgress) {
             autoScrollEnabled = true
-            isBrowsingHistory = false
-            pendingHistoryExpansion = false
-            accumulatedUpwardDragPx = 0f
-        }
-    }
-
-    LaunchedEffect(pendingHistoryExpansion, isAtBottom) {
-        if (pendingHistoryExpansion && !isAtBottom) {
-            isBrowsingHistory = true
-            pendingHistoryExpansion = false
-            accumulatedUpwardDragPx = 0f
-        }
-    }
-
-    LaunchedEffect(listState.isScrollInProgress, isBrowsingHistory, pendingHistoryExpansion) {
-        if (!listState.isScrollInProgress && !isBrowsingHistory && !pendingHistoryExpansion) {
-            accumulatedUpwardDragPx = 0f
         }
     }
 
@@ -124,8 +88,6 @@ fun rememberChatMessageListBehavior(
         if (currentConversationId == null) {
             lastSeenConversationId = null
             lastSeenMessageId = null
-            pendingHistoryExpansion = false
-            accumulatedUpwardDragPx = 0f
             return@LaunchedEffect
         }
 
@@ -137,9 +99,6 @@ fun rememberChatMessageListBehavior(
 
         if (latestMessage.id != lastSeenMessageId && latestMessage.role == "user") {
             autoScrollEnabled = true
-            isBrowsingHistory = false
-            pendingHistoryExpansion = false
-            accumulatedUpwardDragPx = 0f
             listState.scrollToConversationEnd()
         }
 
@@ -188,16 +147,16 @@ fun rememberChatMessageListBehavior(
         }
     }
 
-    return remember(listState, isAtBottom, isBrowsingHistory, nestedScrollConnection) {
+    return remember(listState, isAtBottom, nestedScrollConnection) {
         ChatMessageListBehavior(
             listState = listState,
             isAtBottom = isAtBottom,
-            shouldUseCompactViewport = !isBrowsingHistory,
             nestedScrollConnection = nestedScrollConnection
         )
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatMessageList(
     messages: List<MessageEntity>,
@@ -205,6 +164,8 @@ fun ChatMessageList(
     behavior: ChatMessageListBehavior,
     modifier: Modifier = Modifier,
     messageThumbnails: Map<String, List<ImageBitmap>> = emptyMap(),
+    onBackgroundDoubleTap: (() -> Unit)? = null,
+    onMessageDoubleTap: (() -> Unit)? = null,
     contentPadding: PaddingValues = PaddingValues(12.dp),
     verticalSpacing: Dp = 6.dp,
     emptyContent: (@Composable () -> Unit)? = null,
@@ -216,7 +177,17 @@ fun ChatMessageList(
             state = behavior.listState,
             modifier = Modifier
                 .fillMaxSize()
-                .nestedScroll(behavior.nestedScrollConnection),
+                .nestedScroll(behavior.nestedScrollConnection)
+                .then(
+                    if (onBackgroundDoubleTap != null) {
+                        Modifier.combinedClickable(
+                            onClick = {},
+                            onDoubleClick = onBackgroundDoubleTap
+                        )
+                    } else {
+                        Modifier
+                    }
+                ),
             contentPadding = contentPadding,
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(verticalSpacing)
         ) {
@@ -228,6 +199,7 @@ fun ChatMessageList(
                 MessageBubble(
                     message = message,
                     thumbnails = messageThumbnails[message.id] ?: emptyList(),
+                    onDoubleTap = onMessageDoubleTap,
                     onReply = replyActionForMessage(message)
                 )
             }

@@ -557,6 +557,7 @@ class FloatingBubbleService : Service() {
                         onSend = ::sendMessage,
                         onStop = ::stopResponse,
                         onClose = ::dismissChatPanelAnimated,
+                        onMinimize = ::dismissChatPanelAnimated,
                         onOpenInApp = ::openInApp,
                         onAgentSelect = { agent ->
                             serviceScope.launch {

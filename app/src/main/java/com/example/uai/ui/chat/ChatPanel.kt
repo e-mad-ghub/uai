@@ -4,7 +4,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -16,11 +15,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.*
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateDp
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.updateTransition
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +53,7 @@ fun ChatPanel(
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onClose: () -> Unit,
+    onMinimize: () -> Unit,
     onOpenInApp: (() -> Unit)? = null,
     onAgentSelect: (AgentConfig) -> Unit,
     onConversationSelect: (String?) -> Unit,
@@ -72,24 +67,7 @@ fun ChatPanel(
 ) {
     val configuration = LocalConfiguration.current
     val messageListBehavior = rememberChatMessageListBehavior(messages)
-    val expandedMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(280.dp, 560.dp)
-    val compactMsgHeight = (expandedMsgHeight * 0.5f).coerceAtLeast(160.dp)
-    val compactViewportTransition = updateTransition(
-        targetState = messageListBehavior.shouldUseCompactViewport,
-        label = "miniChatCompactViewport"
-    )
-    val animatedMaxMsgHeight by compactViewportTransition.animateDp(
-        transitionSpec = {
-            if (false isTransitioningTo true) {
-                tween(durationMillis = 340, easing = FastOutSlowInEasing)
-            } else {
-                tween(durationMillis = 400, easing = FastOutSlowInEasing)
-            }
-        },
-        label = "miniChatMessageAreaHeight"
-    ) { useCompactViewport ->
-        if (useCompactViewport) compactMsgHeight else expandedMsgHeight
-    }
+    val maxMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(280.dp, 560.dp)
 
     var agentDropdownExpanded by remember { mutableStateOf(false) }
     var conversationDropdownExpanded by remember { mutableStateOf(false) }
@@ -247,6 +225,8 @@ fun ChatPanel(
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.surface),
                     messageThumbnails = messageThumbnails,
+                    onBackgroundDoubleTap = onMinimize,
+                    onMessageDoubleTap = onMinimize,
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     emptyContent = {
                         Box(
@@ -363,7 +343,7 @@ fun ChatPanel(
             val footerP: Placeable = measurables[2].measure(unbounded)
 
             val minMsgPx = 100.dp.roundToPx()
-            val maxMsgPx = animatedMaxMsgHeight.roundToPx()
+            val maxMsgPx = maxMsgHeight.roundToPx()
             val remaining = if (constraints.maxHeight == Constraints.Infinity) {
                 maxMsgPx
             } else {

@@ -13,7 +13,7 @@ class OpenRouterProvider(client: OkHttpClient) : AiProvider by OpenAiProvider(
         .addInterceptor { chain ->
             val request = chain.request().newBuilder()
                 .header("HTTP-Referer", "https://uai.app")
-                .header("X-Title", "UAI")
+                .header("X-Title", "Screenside")
                 .build()
             chain.proceed(request)
         }

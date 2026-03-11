@@ -116,7 +116,7 @@ class AgentEditViewModel(
                             }
                             if (agent.provider == AiProviderType.OPENROUTER) {
                                 header("HTTP-Referer", "https://uai.app")
-                                header("X-Title", "UAI")
+                                header("X-Title", "Screenside")
                             }
                         }
                         .post(requestBody.toRequestBody("application/json".toMediaType()))

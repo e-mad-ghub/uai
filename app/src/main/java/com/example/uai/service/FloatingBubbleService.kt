@@ -1436,8 +1436,8 @@ class FloatingBubbleService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val notification: Notification = NotificationCompat.Builder(this, UaiApplication.BUBBLE_CHANNEL_ID)
-            .setContentTitle("UAI Chat")
-            .setContentText("AI chat bubble is active")
+            .setContentTitle(getString(R.string.bubble_notification_title))
+            .setContentText(getString(R.string.bubble_notification_text))
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)

@@ -20,10 +20,10 @@ class UaiApplication : Application() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 BUBBLE_CHANNEL_ID,
-                "AI Chat Bubble",
+                getString(R.string.bubble_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Shows the persistent AI chat bubble overlay"
+                description = getString(R.string.bubble_channel_description)
             }
             getSystemService(NotificationManager::class.java)
                 .createNotificationChannel(channel)

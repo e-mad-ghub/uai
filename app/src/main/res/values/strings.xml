@@ -1,8 +1,12 @@
 <resources>
-    <string name="app_name">uai</string>
-    <string name="mini_chat_screenshot_accessibility_title">UAI Screenshot Helper</string>
+    <string name="app_name">Screenside</string>
+    <string name="mini_chat_screenshot_accessibility_title">Screenside Screenshot Helper</string>
     <string name="mini_chat_screenshot_accessibility_summary">Lets the mini chat capture the current screen and attach it to the selected chat.</string>
-    <string name="mini_chat_screenshot_accessibility_description">Allows UAI to capture screenshots for the floating mini chat without reopening the overlay or asking for screen-recording permission on every shot.</string>
-    <string name="mini_chat_screenshot_accessibility_hint">Enable the UAI Screenshot Helper in Accessibility settings for stable mini-chat screenshots.</string>
+    <string name="mini_chat_screenshot_accessibility_description">Allows Screenside to capture screenshots for the floating mini chat without reopening the overlay or asking for screen-recording permission on every shot.</string>
+    <string name="mini_chat_screenshot_accessibility_hint">Enable the Screenside Screenshot Helper in Accessibility settings for stable mini-chat screenshots.</string>
     <string name="mini_chat_screenshot_capture_error">Screenshot failed. %1$s</string>
+    <string name="bubble_channel_name">Screenside Bubble</string>
+    <string name="bubble_channel_description">Shows the persistent Screenside mini chat overlay</string>
+    <string name="bubble_notification_title">Screenside Mini Chat</string>
+    <string name="bubble_notification_text">Your floating AI sidecar is active</string>
 </resources>

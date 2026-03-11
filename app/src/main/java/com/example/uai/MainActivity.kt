@@ -28,6 +28,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -119,7 +120,10 @@ class MainActivity : ComponentActivity() {
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                                 Spacer(Modifier.width(10.dp))
-                                Text("UAI", style = MaterialTheme.typography.titleLarge)
+                                Text(
+                                    stringResource(R.string.app_name),
+                                    style = MaterialTheme.typography.titleLarge
+                                )
                             }
 
                             // New Chat button

@@ -111,7 +111,7 @@ class MiniChatScreenshotAccessibilityService : AccessibilityService() {
                 ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR ->
                     "Android could not capture the screen."
                 ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS ->
-                    "Enable the UAI screenshot accessibility service to capture the screen."
+                    "Enable the Screenside screenshot accessibility service to capture the screen."
                 ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT ->
                     "Please wait a moment and try the screenshot again."
                 ERROR_TAKE_SCREENSHOT_INVALID_DISPLAY ->

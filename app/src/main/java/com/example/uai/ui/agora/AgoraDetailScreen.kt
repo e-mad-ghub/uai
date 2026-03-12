@@ -290,7 +290,7 @@ fun AgoraDetailScreen(
                         )
                         Text(
                             if (participantNames.isEmpty())
-                                "No agents in this room yet. Tap ⚙ to add agents."
+                                "No agents in this council room yet. Tap ⚙ to add agents."
                             else
                                 "All agents reply by default.\nType @Name or tap a chip to address one.",
                             style = MaterialTheme.typography.bodyMedium,

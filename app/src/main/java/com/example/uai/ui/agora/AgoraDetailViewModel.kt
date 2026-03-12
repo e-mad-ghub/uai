@@ -113,7 +113,7 @@ class AgoraDetailViewModel(
                 // Guard: no agents in room
                 if (allAgents.isEmpty()) {
                     _errorEvent.trySend(
-                        "No agents in this room. Tap the settings icon to add agents."
+                        "No agents in this council room. Tap the settings icon to add agents."
                     )
                     return@launch
                 }

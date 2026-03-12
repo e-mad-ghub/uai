@@ -374,7 +374,7 @@ fun BubbleContent(isLoading: Boolean, modifier: Modifier = Modifier) {
     ) {
         Image(
             painter = painterResource(R.drawable.floating_bubble_icon),
-            contentDescription = "Screenside Mini Chat",
+            contentDescription = "SideAgent Mini Chat",
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop
         )

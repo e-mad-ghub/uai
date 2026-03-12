@@ -49,7 +49,8 @@ fun AppNavGraph(
             )
             ConversationDetailScreen(
                 viewModel = vm,
-                openDrawer = openDrawer
+                openDrawer = openDrawer,
+                onOpenAssistants = { navController.navigate(Routes.AGENTS) { launchSingleTop = true } }
             )
         }
 
@@ -68,7 +69,8 @@ fun AppNavGraph(
             )
             ConversationDetailScreen(
                 viewModel = vm,
-                openDrawer = openDrawer
+                openDrawer = openDrawer,
+                onOpenAssistants = { navController.navigate(Routes.AGENTS) { launchSingleTop = true } }
             )
         }
 

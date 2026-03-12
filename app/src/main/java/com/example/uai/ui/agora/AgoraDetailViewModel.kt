@@ -9,6 +9,7 @@ import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
+import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
 import com.google.gson.Gson
@@ -160,7 +161,7 @@ class AgoraDetailViewModel(
 
                     // If this agent can't handle the attachment, say so and skip the API call
                     val unsupportedMsg: String? = when {
-                        imageBase64 != null && !agent.supportsVision ->
+                        imageBase64 != null && !agent.canHandleImageRequests() ->
                             "I don't support image analysis with \"${agent.model}\"."
                         documentBase64 != null && agent.provider != AiProviderType.ANTHROPIC ->
                             "I don't support PDF documents. PDF upload requires a model with document analysis capabilities."
@@ -283,6 +284,13 @@ class AgoraDetailViewModel(
                                     is StreamChunk.Token -> {
                                         accumulated = (accumulated + chunk.text).stripNamePrefix()
                                         repo.updateMessageContent(assistantId, accumulated, true)
+                                    }
+                                    is StreamChunk.ModelSelection -> {
+                                        repo.updateMessageResponseModel(
+                                            assistantId,
+                                            chunk.modelId,
+                                            chunk.viaFallback
+                                        )
                                     }
                                     is StreamChunk.Done -> {}
                                     is StreamChunk.Error -> {

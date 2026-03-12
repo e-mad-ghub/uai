@@ -10,7 +10,7 @@
     <string name="bubble_notification_title">SideAgent Mini Chat</string>
     <string name="bubble_notification_text">Your floating AI sidecar is active</string>
     <string name="feature_mini_chat">Mini Chat</string>
-    <string name="feature_agents">Agents</string>
+    <string name="feature_agents">Assistants</string>
     <string name="feature_rooms">Council</string>
     <string name="feature_room">Council Room</string>
     <string name="new_room">New Council Room</string>

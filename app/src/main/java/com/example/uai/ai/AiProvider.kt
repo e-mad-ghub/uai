@@ -37,8 +37,10 @@ fun httpErrorMessage(code: Int): String {
 interface AiProvider {
     /**
      * Returns a cold Flow that streams the AI response token-by-token.
-     * Emits StreamChunk.Token for each fragment, StreamChunk.Done on completion,
-     * StreamChunk.Error on failure. The Flow runs on Dispatchers.IO.
+     * Emits StreamChunk.Token for each fragment, StreamChunk.ModelSelection
+     * when a provider chooses the concrete model for the response,
+     * StreamChunk.Done on completion, and StreamChunk.Error on failure.
+     * The Flow runs on Dispatchers.IO.
      */
     fun streamResponse(messages: List<ChatMessage>, config: AgentConfig): Flow<StreamChunk>
 }

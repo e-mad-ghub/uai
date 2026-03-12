@@ -9,14 +9,15 @@ import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.channels.Channel
 import okhttp3.OkHttpClient
 import java.util.UUID
 
@@ -119,7 +120,7 @@ class ConversationDetailViewModel(
             )
 
             // If the agent doesn't support the attachment type, say so in the chat
-            if (imageBase64 != null && !agent.supportsVision) {
+            if (imageBase64 != null && !agent.canHandleImageRequests()) {
                 repo.updateMessageContent(
                     assistantId,
                     "I don't support image analysis with \"${agent.model}\". Please switch to a vision-capable model in agent settings.",
@@ -165,6 +166,13 @@ class ConversationDetailViewModel(
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
                                 repo.updateMessageContent(assistantId, accumulated, true)
+                            }
+                            is StreamChunk.ModelSelection -> {
+                                repo.updateMessageResponseModel(
+                                    assistantId,
+                                    chunk.modelId,
+                                    chunk.viaFallback
+                                )
                             }
                             is StreamChunk.Done -> {
                                 repo.updateMessageContent(assistantId, accumulated, false)

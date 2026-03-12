@@ -11,9 +11,9 @@ enum class AiProviderType(val displayName: String) {
 data class AgentConfig(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "New Agent",
-    val provider: AiProviderType = AiProviderType.OPENAI,
+    val provider: AiProviderType = AiProviderType.OPENROUTER,
     val apiKey: String = "",
-    val model: String = "gpt-4o",
+    val model: String = OPENROUTER_FREE_ROUTER_MODEL,
     val systemPrompt: String = "You are a helpful assistant.",
     val temperature: Float = 0.7f
 ) {
@@ -23,10 +23,12 @@ data class AgentConfig(
         AiProviderType.ANTHROPIC -> !model.contains("claude-2") && !model.contains("instant")
         AiProviderType.OPENROUTER -> {
             val m = model.lowercase()
+            model == OPENROUTER_FREE_ROUTER_MODEL ||
             m.contains("gpt-4o") || m.contains("gpt-4-turbo") ||
             m.contains("claude-3") || m.contains("claude-sonnet") ||
             m.contains("claude-opus") || m.contains("claude-haiku") ||
-            m.contains("gemini") || m.contains("vision") ||
+            m.contains("gemini") || m.contains("gemma-3") ||
+            m.contains("vision") || m.contains("-vl") ||
             m.contains("llava") || m.contains("pixtral")
         }
     }
@@ -51,11 +53,12 @@ data class AgentConfig(
                 "claude-haiku-4-5-20251001"
             ),
             AiProviderType.OPENROUTER to listOf(
-                "openai/gpt-4o",
-                "anthropic/claude-3.5-sonnet",
+                OPENROUTER_FREE_ROUTER_MODEL,
                 "meta-llama/llama-3.3-70b-instruct:free",
-                "google/gemini-2.0-flash-exp:free",
-                "deepseek/deepseek-r1:free"
+                "openai/gpt-oss-20b:free",
+                "google/gemma-3-12b-it:free",
+                "openai/gpt-4o",
+                "anthropic/claude-3.5-sonnet"
             ),
         )
     }

@@ -34,8 +34,9 @@ class AgentsViewModel(private val repo: AgentRepository) : ViewModel() {
             val current = uiState.value.agents.toMutableList()
             current.removeIf { it.id == agent.id }
             repo.saveAgentList(current)
-            // Clear active if deleted
-            if (uiState.value.activeAgentId == agent.id) repo.setActiveAgent(null)
+            if (uiState.value.activeAgentId == agent.id) {
+                repo.setActiveAgent(current.firstOrNull()?.id)
+            }
         }
     }
 

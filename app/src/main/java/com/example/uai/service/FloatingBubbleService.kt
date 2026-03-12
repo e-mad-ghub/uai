@@ -61,6 +61,7 @@ import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
+import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AppColorTheme
 import com.example.uai.ui.MediaPickerActivity
@@ -92,7 +93,8 @@ class FloatingBubbleService : Service() {
     private enum class OverlaySurfaceState {
         BubbleVisible,
         PanelVisible,
-        ExternalFlow
+        ExternalFlow,
+        AppForegroundSuppressed
     }
 
     private lateinit var windowManager: WindowManager
@@ -108,6 +110,7 @@ class FloatingBubbleService : Service() {
     private var availableConversations by mutableStateOf<List<ConversationEntity>>(emptyList())
     private var colorTheme by mutableStateOf(AppColorTheme.TERRACOTTA)
     private var isDismissTargetActive by mutableStateOf(false)
+    private var isAppUiVisible = false
 
     // Attachment state
     // Each Triple: (base64, ImageBitmap?, uriStr?)
@@ -157,8 +160,10 @@ class FloatingBubbleService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        val container = (application as UaiApplication).container
+        val app = application as UaiApplication
+        val container = app.container
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        isAppUiVisible = app.isAppUiVisible.value
 
         lifecycleOwner.onCreate()
         lifecycleOwner.onStart()
@@ -172,6 +177,15 @@ class FloatingBubbleService : Service() {
 
         container.preferences.colorThemeFlow
             .onEach { colorTheme = it }
+            .catch { }
+            .launchIn(serviceScope)
+
+        app.isAppUiVisible
+            .onEach { visible ->
+                isAppUiVisible = visible
+                if (visible) suppressOverlaysWhileAppVisible()
+                else restoreOverlayAfterAppHidden()
+            }
             .catch { }
             .launchIn(serviceScope)
 
@@ -201,8 +215,10 @@ class FloatingBubbleService : Service() {
             bubbleParams.x = x
             bubbleParams.y = y
             // Reveal the bubble at the correct position, avoiding an initial jump.
-            bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
-            bubbleView?.let { windowManager.updateViewLayout(it, bubbleParams) }
+            bubbleParams.alpha = if (isAppUiVisible) 0f else BUBBLE_NORMAL_ALPHA
+            bubbleView?.takeIf { it.isAttachedToWindow }?.let {
+                runCatching { windowManager.updateViewLayout(it, bubbleParams) }
+            }
         }
 
         container.conversationRepository.getAllConversations()
@@ -673,7 +689,7 @@ class FloatingBubbleService : Service() {
     }
 
     private fun toggleChatPanel() {
-        if (isOverlayScreenshotCaptureInProgress || isChatPanelAnimating) return
+        if (isOverlayScreenshotCaptureInProgress || isChatPanelAnimating || isAppUiVisible) return
         when {
             overlaySurfaceState == OverlaySurfaceState.ExternalFlow -> return
             overlaySurfaceState == OverlaySurfaceState.PanelVisible ||
@@ -699,7 +715,7 @@ class FloatingBubbleService : Service() {
     }
 
     private fun showChatPanel() {
-        if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
+        if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow || isAppUiVisible) return
         if (chatPanelView == null || chatPanelContainer == null) {
             setupChatPanel()
         }
@@ -790,6 +806,10 @@ class FloatingBubbleService : Service() {
 
     private fun ensureBubbleVisible() {
         if (!::bubbleParams.isInitialized) return
+        if (isAppUiVisible) {
+            overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
+            return
+        }
         if (bubbleView == null) {
             setupBubble()
         }
@@ -863,11 +883,43 @@ class FloatingBubbleService : Service() {
             "restoring overlays after external flow: flow=$flowGeneration reopenPanel=$reopenPanel"
         )
 
+        if (isAppUiVisible) {
+            suppressOverlaysWhileAppVisible()
+            return
+        }
+
         if (reopenPanel) {
             showChatPanel()
         } else {
             ensureBubbleVisible()
         }
+    }
+
+    private fun suppressOverlaysWhileAppVisible() {
+        if (overlaySurfaceState == OverlaySurfaceState.ExternalFlow || isOverlayScreenshotCaptureInProgress) {
+            return
+        }
+        removeSafely(dismissZoneView, immediate = true)
+        isDismissTargetActive = false
+        clearChatPanelInteractionState()
+        removeSafely(chatPanelContainer, immediate = true)
+        chatPanelView?.disposeComposition()
+        chatPanelContainer = null
+        chatPanelView = null
+        isChatPanelVisible = false
+        isChatPanelAnimating = false
+        hideBubbleWindow(immediate = true)
+        overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
+    }
+
+    private fun restoreOverlayAfterAppHidden() {
+        if (overlaySurfaceState != OverlaySurfaceState.AppForegroundSuppressed || isOverlayScreenshotCaptureInProgress) {
+            return
+        }
+        if (bubbleView == null) {
+            setupBubble()
+        }
+        ensureBubbleVisible()
     }
 
     private fun registerSystemDialogReceiver() {
@@ -1306,7 +1358,7 @@ class FloatingBubbleService : Service() {
                 chatMessages.add(assistantMsg)
 
                 // If agent doesn't support vision, insert a capability notice instead of calling API
-                if (imageList.isNotEmpty() && !agent.supportsVision) {
+                if (imageList.isNotEmpty() && !agent.canHandleImageRequests()) {
                     val notice = "I don't support image analysis with \"${agent.model}\". " +
                             "Please switch to a vision-capable model in agent settings."
                     accumulated = notice  // must be non-blank so finally doesn't delete the message
@@ -1346,6 +1398,19 @@ class FloatingBubbleService : Service() {
                                 accumulated += chunk.text
                                 if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = accumulated)
                                 container.conversationRepository.updateMessageContent(id, accumulated, true)
+                            }
+                            is StreamChunk.ModelSelection -> {
+                                if (idx != -1) {
+                                    chatMessages[idx] = chatMessages[idx].copy(
+                                        responseModelId = chunk.modelId,
+                                        responseModelIsFallback = chunk.viaFallback
+                                    )
+                                }
+                                container.conversationRepository.updateMessageResponseModel(
+                                    id,
+                                    chunk.modelId,
+                                    chunk.viaFallback
+                                )
                             }
                             is StreamChunk.Done -> {
                                 if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(isStreaming = false)

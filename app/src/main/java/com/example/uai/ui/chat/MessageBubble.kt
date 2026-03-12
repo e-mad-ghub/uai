@@ -205,10 +205,21 @@ fun MessageBubble(
                     .then(interactionModifier)
             ) {
                 Box(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    if (!isUser && message.isStreaming && message.content.isEmpty()) {
-                        TypingIndicator(color = textColor)
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (!isUser && message.responseModelId != null) {
+                            Text(
+                                text = if (message.responseModelIsFallback) {
+                                    "Fallback via ${message.responseModelId}"
+                                } else {
+                                    "Model: ${message.responseModelId}"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        if (!isUser && message.isStreaming && message.content.isEmpty()) {
+                            TypingIndicator(color = textColor)
+                        } else {
                             when {
                                 thumbnails.isNotEmpty() -> {
                                     if (thumbnails.size == 1) {

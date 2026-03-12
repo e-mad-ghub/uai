@@ -1,19 +1,46 @@
 package com.example.uai
 
+import android.app.Activity
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.os.Bundle
 import android.os.Build
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class UaiApplication : Application() {
 
     lateinit var container: AppContainer
         private set
+    private val _isAppUiVisible = MutableStateFlow(false)
+    val isAppUiVisible: StateFlow<Boolean> = _isAppUiVisible.asStateFlow()
+    private var startedActivityCount = 0
 
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
         createNotificationChannel()
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityStarted(activity: Activity) {
+                startedActivityCount += 1
+                _isAppUiVisible.value = true
+            }
+
+            override fun onActivityStopped(activity: Activity) {
+                startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
+                _isAppUiVisible.value = startedActivityCount > 0
+            }
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
+                _isAppUiVisible.value = true
+            }
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+        })
     }
 
     private fun createNotificationChannel() {

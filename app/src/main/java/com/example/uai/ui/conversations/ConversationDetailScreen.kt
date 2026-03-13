@@ -41,6 +41,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import android.widget.Toast
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,6 +78,12 @@ fun ConversationDetailScreen(
             }
             kotlinx.coroutines.delay(5_000)
             job.cancel()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.assistantRepairEvent.collect { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
         }
     }
 

@@ -100,6 +100,11 @@ class FloatingBubbleService : Service() {
         AppForegroundSuppressed
     }
 
+    private data class PendingAssistantRepairToast(
+        val conversationId: String,
+        val message: String
+    )
+
     private lateinit var windowManager: WindowManager
     private val lifecycleOwner = ServiceLifecycleOwner()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -141,6 +146,7 @@ class FloatingBubbleService : Service() {
     private var currentConversationMessagesJob: Job? = null
     private var prefersDraftConversation = false
     private var draftAgentId: String? = null
+    private var pendingAssistantRepairToast: PendingAssistantRepairToast? = null
     private var screenshotRestoreJob: Job? = null
     private var streamingJob: Job? = null
     private var isChatPanelAnimating = false
@@ -148,6 +154,8 @@ class FloatingBubbleService : Service() {
     private var pendingPanelRestoreAfterExternalFlow = false
     private var panelTransitionGeneration = 0L
     private var externalFlowGeneration = 0L
+    private var repairInFlightKey: String? = null
+    private var lastAssistantRepairNotificationKey: String? = null
     private val systemDialogsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != Intent.ACTION_CLOSE_SYSTEM_DIALOGS) return
@@ -193,7 +201,12 @@ class FloatingBubbleService : Service() {
             .launchIn(serviceScope)
 
         container.agentRepository.agentsFlow
-            .onEach { allAgents = it }
+            .onEach { agents ->
+                allAgents = agents
+                if (hasConversationSnapshot) {
+                    synchronizeConversationSelection()
+                }
+            }
             .catch { }
             .launchIn(serviceScope)
 
@@ -259,36 +272,138 @@ class FloatingBubbleService : Service() {
             .sortedWith(compareByDescending<ConversationEntity> { it.isPinned }.thenByDescending { it.updatedAt })
     }
 
+    private fun resolvedDefaultAgent(): AgentConfig? {
+        val currentDefault = activeAgent ?: return null
+        return currentDefault.takeIf { candidate ->
+            allAgents.any { it.id == candidate.id }
+        }
+    }
+
+    private fun fallbackAgentForCurrentContext(): AgentConfig? =
+        resolvedDefaultAgent() ?: allAgents.firstOrNull()
+
     private fun selectedAgentForCurrentContext(): AgentConfig? {
         currentConversationEntity()?.let { conversation ->
             return allAgents.firstOrNull { it.id == conversation.agentId }
+                ?: fallbackAgentForCurrentContext()
         }
 
         val draftAgentId = draftAgentId
         if (draftAgentId != null) {
             return allAgents.firstOrNull { it.id == draftAgentId }
+                ?: fallbackAgentForCurrentContext()
         }
 
-        return activeAgent
+        return fallbackAgentForCurrentContext()
+    }
+
+    private fun queueOrShowAssistantRepairToast(conversationId: String, message: String) {
+        val pendingToast = PendingAssistantRepairToast(conversationId, message)
+        if (isChatPanelToastVisible() && currentConversationId == conversationId) {
+            pendingAssistantRepairToast = null
+            Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
+        } else {
+            pendingAssistantRepairToast = pendingToast
+        }
+    }
+
+    private fun flushPendingAssistantRepairToast() {
+        if (!isChatPanelToastVisible()) return
+        val pendingToast = pendingAssistantRepairToast ?: return
+        if (pendingToast.conversationId != currentConversationId) return
+        pendingAssistantRepairToast = null
+        Toast.makeText(applicationContext, pendingToast.message, Toast.LENGTH_LONG).show()
+    }
+
+    private fun isChatPanelToastVisible(): Boolean {
+        return overlaySurfaceState == OverlaySurfaceState.PanelVisible ||
+                (isChatPanelVisible && chatPanelContainer?.isAttachedToWindow == true)
+    }
+
+    private fun repairCurrentConversationAssignmentIfNeeded(conversation: ConversationEntity) {
+        val assignedAgent = allAgents.firstOrNull { it.id == conversation.agentId }
+        when {
+            assignedAgent != null -> {
+                val syncKey = "sync:${conversation.id}:${assignedAgent.id}:${assignedAgent.name}"
+                if (conversation.agentName == assignedAgent.name || repairInFlightKey == syncKey) return
+                repairInFlightKey = syncKey
+                val container = (application as UaiApplication).container
+                serviceScope.launch {
+                    try {
+                        container.conversationRepository.upsertConversation(
+                            conversation.copy(agentName = assignedAgent.name)
+                        )
+                    } finally {
+                        if (repairInFlightKey == syncKey) {
+                            repairInFlightKey = null
+                        }
+                    }
+                }
+            }
+
+            else -> {
+                val fallbackAgent = fallbackAgentForCurrentContext() ?: return
+                val repairKey = "repair:${conversation.id}:${conversation.agentId}:${fallbackAgent.id}"
+                if (repairInFlightKey == repairKey) return
+                repairInFlightKey = repairKey
+                val container = (application as UaiApplication).container
+                serviceScope.launch {
+                    try {
+                        if (resolvedDefaultAgent() == null) {
+                            container.agentRepository.setActiveAgent(fallbackAgent.id)
+                        }
+                        container.conversationRepository.upsertConversation(
+                            conversation.copy(
+                                agentId = fallbackAgent.id,
+                                agentName = fallbackAgent.name
+                            )
+                        )
+                        if (lastAssistantRepairNotificationKey != repairKey) {
+                            lastAssistantRepairNotificationKey = repairKey
+                            queueOrShowAssistantRepairToast(
+                                conversationId = conversation.id,
+                                message = "This chat's previous assistant is no longer available. Switched to ${fallbackAgent.name}."
+                            )
+                        }
+                    } finally {
+                        if (repairInFlightKey == repairKey) {
+                            repairInFlightKey = null
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun synchronizeConversationSelection() {
         availableConversations = conversationsForOverlay()
         val currentConversation = currentConversationEntity()
+        val fallbackAgent = fallbackAgentForCurrentContext()
+
+        if (draftAgentId != null && allAgents.none { it.id == draftAgentId }) {
+            draftAgentId = fallbackAgent?.id
+            if (resolvedDefaultAgent() == null && fallbackAgent != null) {
+                serviceScope.launch {
+                    (application as UaiApplication).container.agentRepository.setActiveAgent(fallbackAgent.id)
+                }
+            }
+        }
 
         when {
             currentConversation != null -> {
                 if (currentConversationMessagesJob == null) {
                     switchConversation(currentConversation.id, force = true)
+                } else {
+                    repairCurrentConversationAssignmentIfNeeded(currentConversation)
                 }
             }
             prefersDraftConversation -> {
                 switchConversation(null, force = currentConversationId != null || chatMessages.isNotEmpty())
             }
             else -> {
-                val fallback = availableConversations.firstOrNull()
-                prefersDraftConversation = fallback == null && hasConversationSnapshot
-                switchConversation(fallback?.id, force = true)
+                val fallbackConversation = availableConversations.firstOrNull()
+                prefersDraftConversation = fallbackConversation == null && hasConversationSnapshot
+                switchConversation(fallbackConversation?.id, force = true)
             }
         }
     }
@@ -307,6 +422,9 @@ class FloatingBubbleService : Service() {
             chatMessages.clear()
             return
         }
+
+        currentConversationEntity()?.let(::repairCurrentConversationAssignmentIfNeeded)
+        flushPendingAssistantRepairToast()
 
         val container = (application as UaiApplication).container
         currentConversationMessagesJob = container.conversationRepository
@@ -759,6 +877,7 @@ class FloatingBubbleService : Service() {
                         if (panelTransitionGeneration != transitionGeneration) return@withEndAction
                         isChatPanelAnimating = false
                         overlaySurfaceState = OverlaySurfaceState.PanelVisible
+                        flushPendingAssistantRepairToast()
                     }
                     ?.start()
             } else {
@@ -766,6 +885,7 @@ class FloatingBubbleService : Service() {
                 chatPanelView?.animate()?.cancel()
                 chatPanelView?.translationY = 0f
                 overlaySurfaceState = OverlaySurfaceState.PanelVisible
+                flushPendingAssistantRepairToast()
             }
         }
     }

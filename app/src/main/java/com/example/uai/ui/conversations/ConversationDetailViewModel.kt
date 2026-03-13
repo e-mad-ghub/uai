@@ -30,6 +30,11 @@ class ConversationDetailViewModel(
     private val openRouterCatalogRepository: OpenRouterCatalogRepository
 ) : ViewModel() {
 
+    private data class RepairResolution(
+        val resolvedDefaultAgent: AgentConfig?,
+        val fallbackAgent: AgentConfig?
+    )
+
     val conversation = repo.getConversation(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
@@ -50,10 +55,19 @@ class ConversationDetailViewModel(
         defaultAgent,
         draftAgentId
     ) { conversation, agents, defaultAgent, draftAgentId ->
+        val resolvedDefaultAgent = resolveRepairResolution(agents, defaultAgent).resolvedDefaultAgent
         when {
-            conversation != null -> agents.firstOrNull { it.id == conversation.agentId }
-            draftAgentId != null -> agents.firstOrNull { it.id == draftAgentId }
-            else -> defaultAgent
+            conversation != null -> {
+                agents.firstOrNull { it.id == conversation.agentId }
+                    ?: resolvedDefaultAgent
+                    ?: agents.firstOrNull()
+            }
+            draftAgentId != null -> {
+                agents.firstOrNull { it.id == draftAgentId }
+                    ?: resolvedDefaultAgent
+                    ?: agents.firstOrNull()
+            }
+            else -> resolvedDefaultAgent ?: agents.firstOrNull()
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
@@ -66,7 +80,35 @@ class ConversationDetailViewModel(
     private val _errorEvent = Channel<String>(Channel.BUFFERED)
     val errorEvent = _errorEvent.receiveAsFlow()
 
+    private val _assistantRepairEvent = Channel<String>(Channel.BUFFERED)
+    val assistantRepairEvent = _assistantRepairEvent.receiveAsFlow()
+
     private var streamingJob: Job? = null
+    private var repairInFlightKey: String? = null
+    private var lastAssistantRepairNotificationKey: String? = null
+
+    init {
+        viewModelScope.launch {
+            combine(conversation, agents, defaultAgent) { conversation, agents, defaultAgent ->
+                val resolution = resolveRepairResolution(agents, defaultAgent)
+                Triple(conversation, agents, resolution)
+            }.collect { (conversation, agents, resolution) ->
+                when {
+                    conversation != null -> repairConversationAssignmentIfNeeded(
+                        conversation = conversation,
+                        agents = agents,
+                        resolution = resolution
+                    )
+                    draftAgentId.value != null && agents.none { it.id == draftAgentId.value } -> {
+                        draftAgentId.value = resolution.fallbackAgent?.id
+                        if (resolution.resolvedDefaultAgent == null && resolution.fallbackAgent != null) {
+                            agentRepo.setActiveAgent(resolution.fallbackAgent.id)
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     fun onInputChange(text: String) { _inputText.value = text }
 
@@ -91,6 +133,67 @@ class ConversationDetailViewModel(
     fun stopResponse() {
         streamingJob?.cancel()
         streamingJob = null
+    }
+
+    private suspend fun repairConversationAssignmentIfNeeded(
+        conversation: ConversationEntity,
+        agents: List<AgentConfig>,
+        resolution: RepairResolution
+    ) {
+        val assignedAgent = agents.firstOrNull { it.id == conversation.agentId }
+        when {
+            assignedAgent != null -> {
+                val syncKey = "sync:${conversation.id}:${assignedAgent.id}:${assignedAgent.name}"
+                if (conversation.agentName != assignedAgent.name && repairInFlightKey != syncKey) {
+                    repairInFlightKey = syncKey
+                    try {
+                        repo.upsertConversation(
+                            conversation.copy(agentName = assignedAgent.name)
+                        )
+                    } finally {
+                        repairInFlightKey = null
+                    }
+                }
+            }
+            resolution.fallbackAgent != null -> {
+                val fallbackAgent = resolution.fallbackAgent
+                val repairKey = "repair:${conversation.id}:${conversation.agentId}:${fallbackAgent.id}"
+                if (repairInFlightKey == repairKey) return
+                repairInFlightKey = repairKey
+                try {
+                    if (resolution.resolvedDefaultAgent == null) {
+                        agentRepo.setActiveAgent(fallbackAgent.id)
+                    }
+                    repo.upsertConversation(
+                        conversation.copy(
+                            agentId = fallbackAgent.id,
+                            agentName = fallbackAgent.name
+                        )
+                    )
+                    if (lastAssistantRepairNotificationKey != repairKey) {
+                        lastAssistantRepairNotificationKey = repairKey
+                        _assistantRepairEvent.trySend(
+                            "This chat's previous assistant is no longer available. Switched to ${fallbackAgent.name}."
+                        )
+                    }
+                } finally {
+                    repairInFlightKey = null
+                }
+            }
+        }
+    }
+
+    private fun resolveRepairResolution(
+        agents: List<AgentConfig>,
+        defaultAgent: AgentConfig?
+    ): RepairResolution {
+        val resolvedDefaultAgent = defaultAgent?.takeIf { candidate ->
+            agents.any { it.id == candidate.id }
+        }
+        return RepairResolution(
+            resolvedDefaultAgent = resolvedDefaultAgent,
+            fallbackAgent = resolvedDefaultAgent ?: agents.firstOrNull()
+        )
     }
 
     fun sendMessage(

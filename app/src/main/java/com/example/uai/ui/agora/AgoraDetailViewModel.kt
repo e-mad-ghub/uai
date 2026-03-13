@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.ChatMessage
+import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
@@ -28,7 +29,8 @@ class AgoraDetailViewModel(
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
     private val httpClient: OkHttpClient,
-    private val openRouterCatalogRepository: OpenRouterCatalogRepository
+    private val openRouterCatalogRepository: OpenRouterCatalogRepository,
+    private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore
 ) : ViewModel() {
 
     val conversation = repo.getConversation(conversationId)
@@ -272,7 +274,12 @@ class AgoraDetailViewModel(
 
                     var accumulated = ""
                     try {
-                        AiProviderFactory.create(agoraAgent, httpClient, openRouterCatalogRepository)
+                        AiProviderFactory.create(
+                            config = agoraAgent,
+                            client = httpClient,
+                            openRouterCatalogRepository = openRouterCatalogRepository,
+                            openRouterBestFreeRoutingStateStore = openRouterBestFreeRoutingStateStore
+                        )
                             .streamResponse(history, agoraAgent)
                             .catch { e -> emit(StreamChunk.Error(e)) }
                             .collect { chunk ->
@@ -338,7 +345,8 @@ class AgoraDetailViewModel(
         private val repo: ConversationRepository,
         private val agentRepo: AgentRepository,
         private val httpClient: OkHttpClient,
-        private val openRouterCatalogRepository: OpenRouterCatalogRepository
+        private val openRouterCatalogRepository: OpenRouterCatalogRepository,
+        private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
@@ -347,7 +355,8 @@ class AgoraDetailViewModel(
                 repo,
                 agentRepo,
                 httpClient,
-                openRouterCatalogRepository
+                openRouterCatalogRepository,
+                openRouterBestFreeRoutingStateStore
             ) as T
     }
 }

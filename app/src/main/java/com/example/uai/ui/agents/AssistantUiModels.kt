@@ -4,9 +4,9 @@ import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.OPENROUTER_FREE_ROUTER_MODEL
 import com.example.uai.data.model.OpenRouterCatalogEntry
+import com.example.uai.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.isOpenRouterFreeModel
-import com.example.uai.data.model.preferredOpenRouterFastFreeModel
 import com.example.uai.data.model.preferredOpenRouterReasoningFreeModel
 import com.example.uai.data.model.preferredOpenRouterVisionFreeModel
 
@@ -255,11 +255,6 @@ fun recommendedModelChoices(
             )
         }
         AiProviderType.OPENROUTER -> {
-            val fastFreeModel = preferredOpenRouterFastFreeModel(
-                catalogEntries = openRouterCatalogEntries,
-                fetchedOpenRouterModels = fetchedProviderModels,
-                freeModelIds = freeModelIds
-            )
             val reasoningFreeModel = preferredOpenRouterReasoningFreeModel(
                 catalogEntries = openRouterCatalogEntries,
                 fetchedOpenRouterModels = fetchedProviderModels,
@@ -272,12 +267,20 @@ fun recommendedModelChoices(
             )
             val knownChoices = listOf(
                 RecommendedModelChoice(
-                    id = fastFreeModel,
+                    id = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
                     label = "Best free",
-                    description = "Best zero-cost option for chat and images. SideAgent automatically uses the best available free model for the request.",
+                    description = "SideAgent chooses the best available free model for each chat, file, or vision request, and reroutes automatically when needed.",
                     isRecommended = true,
                     isFree = true,
-                    supportsVision = AgentConfig(provider = provider, model = fastFreeModel).canHandleImageRequests(),
+                    supportsVision = true,
+                    supportsDocuments = true
+                ),
+                RecommendedModelChoice(
+                    id = OPENROUTER_FREE_ROUTER_MODEL,
+                    label = "OpenRouter router",
+                    description = "Lets OpenRouter choose a compatible free model from its own free router.",
+                    isFree = true,
+                    supportsVision = true,
                     supportsDocuments = true
                 ),
                 RecommendedModelChoice(
@@ -314,7 +317,10 @@ fun recommendedModelChoices(
                 knownChoices
             } else {
                 val available = fetchedProviderModels.toSet()
-                knownChoices.filter { it.id in available }.ifEmpty {
+                knownChoices.filter {
+                    it.id in available ||
+                        it.id == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
+                }.ifEmpty {
                     knownChoices
                 }
             }
@@ -366,5 +372,6 @@ fun assistantCapabilities(agent: AgentConfig): List<String> = buildList {
     if (agent.canHandleImageRequests()) add("Images")
     if (agent.supportsDocuments) add("Documents")
     if (agent.provider == AiProviderType.OPENROUTER && isOpenRouterFreeModel(agent.model)) add("Free")
+    if (agent.provider == AiProviderType.OPENROUTER && agent.model == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL) add("Adaptive")
     if (agent.provider == AiProviderType.OPENROUTER && agent.model == OPENROUTER_FREE_ROUTER_MODEL) add("Auto route")
 }

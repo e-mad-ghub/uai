@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.ChatMessage
+import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
@@ -27,7 +28,8 @@ class ConversationDetailViewModel(
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
     private val httpClient: OkHttpClient,
-    private val openRouterCatalogRepository: OpenRouterCatalogRepository
+    private val openRouterCatalogRepository: OpenRouterCatalogRepository,
+    private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore
 ) : ViewModel() {
 
     private data class RepairResolution(
@@ -293,7 +295,12 @@ class ConversationDetailViewModel(
 
             var accumulated = ""
             try {
-                AiProviderFactory.create(agent, httpClient, openRouterCatalogRepository)
+                AiProviderFactory.create(
+                    config = agent,
+                    client = httpClient,
+                    openRouterCatalogRepository = openRouterCatalogRepository,
+                    openRouterBestFreeRoutingStateStore = openRouterBestFreeRoutingStateStore
+                )
                     .streamResponse(history, agent)
                     .catch { e -> emit(StreamChunk.Error(e)) }
                     .collect { chunk ->
@@ -342,7 +349,8 @@ class ConversationDetailViewModel(
         private val repo: ConversationRepository,
         private val agentRepo: AgentRepository,
         private val httpClient: OkHttpClient,
-        private val openRouterCatalogRepository: OpenRouterCatalogRepository
+        private val openRouterCatalogRepository: OpenRouterCatalogRepository,
+        private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
@@ -351,7 +359,8 @@ class ConversationDetailViewModel(
                 repo,
                 agentRepo,
                 httpClient,
-                openRouterCatalogRepository
+                openRouterCatalogRepository,
+                openRouterBestFreeRoutingStateStore
             ) as T
     }
 }

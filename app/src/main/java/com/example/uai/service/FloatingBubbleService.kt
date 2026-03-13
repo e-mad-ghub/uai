@@ -1543,9 +1543,10 @@ class FloatingBubbleService : Service() {
                 }
 
                 val provider = AiProviderFactory.create(
-                    agent,
-                    container.okHttpClient,
-                    container.openRouterCatalogRepository
+                    config = agent,
+                    client = container.okHttpClient,
+                    openRouterCatalogRepository = container.openRouterCatalogRepository,
+                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
                 )
 
                 provider.streamResponse(history, agent)

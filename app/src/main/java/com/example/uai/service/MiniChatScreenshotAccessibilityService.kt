@@ -3,6 +3,7 @@ package com.example.uai.service
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
 import android.accessibilityservice.AccessibilityService.ScreenshotResult
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -86,6 +87,25 @@ class MiniChatScreenshotAccessibilityService : AccessibilityService() {
         private var instance: MiniChatScreenshotAccessibilityService? = null
 
         fun isAvailable(): Boolean = instance != null
+
+        fun isEnabled(context: Context): Boolean {
+            val enabledServices = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ).orEmpty()
+            if (enabledServices.isBlank()) return false
+
+            val component = ComponentName(context, MiniChatScreenshotAccessibilityService::class.java)
+            val flattened = component.flattenToString()
+            val shortFlattened = component.flattenToShortString()
+
+            return enabledServices
+                .split(':')
+                .any { serviceName ->
+                    serviceName.equals(flattened, ignoreCase = true) ||
+                        serviceName.equals(shortFlattened, ignoreCase = true)
+                }
+        }
 
         fun openSettings(context: Context) {
             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {

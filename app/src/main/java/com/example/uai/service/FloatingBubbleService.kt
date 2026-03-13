@@ -1095,13 +1095,23 @@ class FloatingBubbleService : Service() {
     private fun launchAccessibilityScreenshotCapture() {
         if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
         if (!MiniChatScreenshotAccessibilityService.isAvailable()) {
+            val accessibilityHelperEnabled =
+                MiniChatScreenshotAccessibilityService.isEnabled(this)
             minimizeChatPanelToBubble(immediate = true)
             Toast.makeText(
                 this,
-                getString(R.string.mini_chat_screenshot_accessibility_hint),
+                getString(
+                    if (accessibilityHelperEnabled) {
+                        R.string.mini_chat_screenshot_accessibility_wait
+                    } else {
+                        R.string.mini_chat_screenshot_accessibility_hint
+                    }
+                ),
                 Toast.LENGTH_LONG
             ).show()
-            MiniChatScreenshotAccessibilityService.openSettings(this)
+            if (!accessibilityHelperEnabled) {
+                MiniChatScreenshotAccessibilityService.openSettings(this)
+            }
             return
         }
 
@@ -1155,6 +1165,8 @@ class FloatingBubbleService : Service() {
             }
 
             if (!started) {
+                val accessibilityHelperEnabled =
+                    MiniChatScreenshotAccessibilityService.isEnabled(applicationContext)
                 android.util.Log.e("UAI_CAP", "accessibility screenshot service unavailable at capture time")
                 restoreOverlaysAfterExternalFlow(
                     flowGeneration = flowGeneration,
@@ -1163,10 +1175,18 @@ class FloatingBubbleService : Service() {
                 minimizeChatPanelToBubble(immediate = true)
                 Toast.makeText(
                     applicationContext,
-                    getString(R.string.mini_chat_screenshot_accessibility_hint),
+                    getString(
+                        if (accessibilityHelperEnabled) {
+                            R.string.mini_chat_screenshot_accessibility_wait
+                        } else {
+                            R.string.mini_chat_screenshot_accessibility_hint
+                        }
+                    ),
                     Toast.LENGTH_LONG
                 ).show()
-                MiniChatScreenshotAccessibilityService.openSettings(applicationContext)
+                if (!accessibilityHelperEnabled) {
+                    MiniChatScreenshotAccessibilityService.openSettings(applicationContext)
+                }
             }
         }
     }

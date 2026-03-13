@@ -238,7 +238,7 @@ class MainActivity : ComponentActivity() {
 
                             NavigationDrawerItem(
                                 icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                                label = { Text("Settings") },
+                                label = { Text(stringResource(R.string.settings_title)) },
                                 selected = currentRoute == Routes.SETTINGS,
                                 onClick = {
                                     closeDrawer()

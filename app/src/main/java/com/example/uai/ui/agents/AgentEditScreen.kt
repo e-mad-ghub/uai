@@ -22,10 +22,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
@@ -44,6 +42,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.res.stringResource
+import com.example.uai.R
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.canHandleImageRequests
@@ -63,6 +63,9 @@ fun AgentEditScreen(
     val providerModels by viewModel.providerModels.collectAsStateWithLifecycle()
     val isLoadingModels by viewModel.isLoadingModels.collectAsStateWithLifecycle()
     val connectionTestState by viewModel.connectionTestState.collectAsStateWithLifecycle()
+    val nameValidationMessage by viewModel.nameValidationMessage.collectAsStateWithLifecycle()
+    val apiKeyValidationMessage by viewModel.apiKeyValidationMessage.collectAsStateWithLifecycle()
+    val saveValidationMessage by viewModel.saveValidationMessage.collectAsStateWithLifecycle()
     val providerInfo = remember(agent.provider) { providerUiInfo(agent.provider) }
     val uriHandler = LocalUriHandler.current
     val recommendedModels = remember(agent.provider, openRouterCatalogEntries, providerModels, freeModelIds, agent.model) {
@@ -76,8 +79,21 @@ fun AgentEditScreen(
     }
     val selectedModelChoice = recommendedModels.firstOrNull { it.id == agent.model }
         ?: recommendedModels.first()
-    val canSave = remember(agent.name, agent.apiKey, agent.model) {
-        agent.name.isNotBlank() && agent.model.isNotBlank()
+    val canSave = saveValidationMessage == null
+    val saveButtonLabel = when {
+        viewModel.isEditing -> stringResource(R.string.assistants_save_changes)
+        viewModel.isDuplicating -> stringResource(R.string.assistants_save_duplicate_assistant)
+        else -> stringResource(R.string.assistants_save_and_use)
+    }
+    val saveHelperText = saveValidationMessage ?: when {
+        viewModel.isEditing -> stringResource(R.string.assistants_bottom_edit)
+        viewModel.isDuplicating -> stringResource(R.string.assistants_bottom_duplicate)
+        else -> stringResource(R.string.assistants_bottom_create)
+    }
+    val saveHelperColor = if (saveValidationMessage != null) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
     }
 
     var showApiKey by rememberSaveable { mutableStateOf(false) }
@@ -94,11 +110,20 @@ fun AgentEditScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(if (viewModel.isEditing) "Edit Assistant" else "Create Assistant")
+                    Text(
+                        when {
+                            viewModel.isEditing -> stringResource(R.string.assistants_edit_title)
+                            viewModel.isDuplicating -> stringResource(R.string.assistants_duplicate_title)
+                            else -> stringResource(R.string.assistants_create_title)
+                        }
+                    )
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back)
+                        )
                     }
                 }
             )
@@ -114,20 +139,19 @@ fun AgentEditScreen(
                 ) {
                     Button(
                         onClick = {
-                            viewModel.save(setActiveAfterSave = !viewModel.isEditing)
+                            viewModel.save(
+                                setActiveAfterSave = !viewModel.isEditing && !viewModel.isDuplicating
+                            )
                         },
                         enabled = canSave,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(if (viewModel.isEditing) "Save changes" else "Save and use assistant")
+                        Text(saveButtonLabel)
                     }
                     Text(
-                        if (viewModel.isEditing)
-                            "Changes apply to future chats with this assistant."
-                        else
-                            "You can always add more assistants later.",
+                        saveHelperText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = saveHelperColor,
                         modifier = Modifier.padding(horizontal = 4.dp)
                     )
                 }
@@ -162,15 +186,19 @@ fun AgentEditScreen(
                     }
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            if (viewModel.isEditing) "Refine how this assistant behaves"
-                            else "Start with a simple setup",
+                            when {
+                                viewModel.isEditing -> stringResource(R.string.assistants_hero_edit_title)
+                                viewModel.isDuplicating -> stringResource(R.string.assistants_hero_duplicate_title)
+                                else -> stringResource(R.string.assistants_hero_create_title)
+                            },
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            if (viewModel.isEditing)
-                                "Keep the basics easy to understand. Advanced instructions are still available below."
-                            else
-                                "Choose your provider, connect it, and SideAgent will use this assistant in new chats.",
+                            when {
+                                viewModel.isEditing -> stringResource(R.string.assistants_hero_edit_body)
+                                viewModel.isDuplicating -> stringResource(R.string.assistants_hero_duplicate_body)
+                                else -> stringResource(R.string.assistants_hero_create_body)
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -179,20 +207,24 @@ fun AgentEditScreen(
             }
 
             SetupSection(
-                title = "Basic setup",
-                description = "This is all most customers need."
+                title = stringResource(R.string.assistants_section_basic_title),
+                description = stringResource(R.string.assistants_section_basic_body)
             ) {
                 OutlinedTextField(
                     value = agent.name,
                     onValueChange = { viewModel.update { copy(name = it) } },
-                    label = { Text("Assistant name") },
-                    placeholder = { Text("General Assistant") },
+                    label = { Text(stringResource(R.string.assistants_field_name)) },
+                    placeholder = { Text(stringResource(R.string.assistants_field_name_placeholder)) },
                     modifier = Modifier.fillMaxWidth(),
+                    isError = nameValidationMessage != null,
+                    supportingText = {
+                        Text(nameValidationMessage ?: stringResource(R.string.assistants_field_name_hint))
+                    },
                     singleLine = true
                 )
 
                 Text(
-                    "Provider",
+                    stringResource(R.string.assistants_provider_label),
                     style = MaterialTheme.typography.labelLarge
                 )
                 Row(
@@ -209,28 +241,40 @@ fun AgentEditScreen(
                                     fetchedProviderModels = if (type == agent.provider) providerModels else emptyList(),
                                     freeModelIds = freeModelIds
                                 )
-                                viewModel.update { copy(provider = type, model = defaultModel) }
+                                viewModel.switchProvider(type, defaultModel)
                             },
                             label = { Text(type.displayName) }
                         )
                     }
                 }
+                Text(
+                    stringResource(R.string.assistants_provider_change_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 ProviderInfoCard(info = providerInfo)
 
                 OutlinedTextField(
                     value = agent.apiKey,
                     onValueChange = { viewModel.update { copy(apiKey = it) } },
-                    label = { Text("API key") },
+                    label = { Text(stringResource(R.string.assistants_field_api_key)) },
                     placeholder = { Text(providerInfo.apiKeyPlaceholder) },
                     modifier = Modifier.fillMaxWidth(),
+                    isError = apiKeyValidationMessage != null,
                     visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     supportingText = {
-                        Text(providerInfo.apiKeyHint)
+                        Text(apiKeyValidationMessage ?: providerInfo.apiKeyHint)
                     },
                     trailingIcon = {
                         TextButton(onClick = { showApiKey = !showApiKey }) {
-                            Text(if (showApiKey) "Hide" else "Show")
+                            Text(
+                                if (showApiKey) {
+                                    stringResource(R.string.assistants_action_hide)
+                                } else {
+                                    stringResource(R.string.assistants_action_show)
+                                }
+                            )
                         }
                     },
                     singleLine = true
@@ -268,9 +312,9 @@ fun AgentEditScreen(
                             strokeWidth = 2.dp
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("Testing availability…")
+                        Text(stringResource(R.string.assistants_testing_availability))
                     } else {
-                        Text("Test availability")
+                        Text(stringResource(R.string.assistants_test_availability))
                     }
                 }
 
@@ -278,8 +322,8 @@ fun AgentEditScreen(
             }
 
             SetupSection(
-                title = "Advanced settings",
-                description = "Only open this when you want to fine-tune model behavior."
+                title = stringResource(R.string.assistants_section_advanced_title),
+                description = stringResource(R.string.assistants_section_advanced_body)
             ) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -295,11 +339,11 @@ fun AgentEditScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    "Custom instructions and model tuning",
+                                    stringResource(R.string.assistants_advanced_card_title),
                                     style = MaterialTheme.typography.titleSmall
                                 )
                                 Text(
-                                    "Use a raw model ID, add detailed guidance, or tune creativity.",
+                                    stringResource(R.string.assistants_advanced_card_body),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -307,7 +351,11 @@ fun AgentEditScreen(
                             IconButton(onClick = { advancedExpanded = !advancedExpanded }) {
                                 Icon(
                                     imageVector = if (advancedExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                    contentDescription = if (advancedExpanded) "Collapse advanced settings" else "Expand advanced settings"
+                                    contentDescription = if (advancedExpanded) {
+                                        stringResource(R.string.assistants_advanced_collapse)
+                                    } else {
+                                        stringResource(R.string.assistants_advanced_expand)
+                                    }
                                 )
                             }
                         }
@@ -331,9 +379,9 @@ fun AgentEditScreen(
                                 OutlinedTextField(
                                     value = agent.systemPrompt,
                                     onValueChange = { viewModel.update { copy(systemPrompt = it) } },
-                                    label = { Text("System prompt") },
+                                    label = { Text(stringResource(R.string.assistants_field_system_prompt)) },
                                     supportingText = {
-                                        Text("Use this to shape tone, role, and answer style.")
+                                        Text(stringResource(R.string.assistants_field_system_prompt_hint))
                                     },
                                     modifier = Modifier.fillMaxWidth(),
                                     minLines = 4,
@@ -341,7 +389,10 @@ fun AgentEditScreen(
                                 )
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text(
-                                        "Creativity: ${"%.1f".format(agent.temperature)}",
+                                        stringResource(
+                                            R.string.assistants_creativity_label,
+                                            agent.temperature
+                                        ),
                                         style = MaterialTheme.typography.labelLarge
                                     )
                                     Slider(
@@ -355,12 +406,12 @@ fun AgentEditScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(
-                                            "Precise",
+                                            stringResource(R.string.assistants_creativity_precise),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         Text(
-                                            "Creative",
+                                            stringResource(R.string.assistants_creativity_creative),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -544,10 +595,7 @@ private fun CapabilityRow(agent: AgentConfig) {
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         assistantCapabilities(agent).forEach { capability ->
-            AssistChip(
-                onClick = {},
-                label = { Text(capability) }
-            )
+            CapabilityBadge(label = capability)
         }
     }
 }
@@ -612,12 +660,13 @@ private fun RecommendedModelSelector(
             value = selectedModel.label,
             onValueChange = {},
             readOnly = true,
-            label = { Text("Recommended model") },
+            label = { Text(stringResource(R.string.assistants_recommended_model_label)) },
             supportingText = {
                 Text(
                     buildString {
                         if (selectedModel.isRecommended) {
-                            append("Recommended. ")
+                            append(stringResource(R.string.assistants_recommended_tag))
+                            append(". ")
                         }
                         append(selectedModel.description)
                     }
@@ -643,14 +692,14 @@ private fun RecommendedModelSelector(
                                 Text(choice.label)
                                 if (choice.isRecommended) {
                                     Text(
-                                        "Recommended",
+                                        stringResource(R.string.assistants_recommended_tag),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.tertiary
                                     )
                                 }
                                 if (choice.isFree) {
                                     Text(
-                                        "Free",
+                                        stringResource(R.string.assistants_free_tag),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary
                                     )
@@ -696,13 +745,13 @@ private fun RawModelSelector(
             label = {
                 Text(
                     if (isLoadingModels)
-                        "Custom model ID (loading…)"
+                        stringResource(R.string.assistants_custom_model_loading_label)
                     else
-                        "Custom model ID"
+                        stringResource(R.string.assistants_custom_model_label)
                 )
             },
             supportingText = {
-                Text("Use this only if you want a specific raw model name.")
+                Text(stringResource(R.string.assistants_custom_model_hint))
             },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier
@@ -720,7 +769,10 @@ private fun RawModelSelector(
                         ) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                             Text(
-                                "Fetching models from ${provider.displayName}…",
+                                stringResource(
+                                    R.string.assistants_custom_model_fetching,
+                                    provider.displayName
+                                ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -745,7 +797,7 @@ private fun RawModelSelector(
                                 Text(model)
                                 if (isFree) {
                                     Text(
-                                        "Free",
+                                        stringResource(R.string.assistants_free_tag),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary
                                     )
@@ -755,10 +807,14 @@ private fun RawModelSelector(
                                 buildString {
                                     append(
                                         when {
-                                            config.canHandleImageRequests() && config.supportsDocuments -> "Images and documents"
-                                            config.canHandleImageRequests() -> "Images"
-                                            config.supportsDocuments -> "Documents"
-                                            else -> "Text chat"
+                                            config.canHandleImageRequests() && config.supportsDocuments ->
+                                                stringResource(R.string.assistants_capability_images_documents)
+                                            config.canHandleImageRequests() ->
+                                                stringResource(R.string.assistants_capability_images)
+                                            config.supportsDocuments ->
+                                                stringResource(R.string.assistants_capability_documents)
+                                            else ->
+                                                stringResource(R.string.assistants_capability_text_chat)
                                         }
                                     )
                                 },
@@ -771,5 +827,20 @@ private fun RawModelSelector(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun CapabilityBadge(label: String) {
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.secondaryContainer
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSecondaryContainer
+        )
     }
 }

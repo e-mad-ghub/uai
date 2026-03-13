@@ -20,13 +20,18 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.UUID
 
 sealed class ConnectionTestState {
     object Idle : ConnectionTestState()
@@ -40,18 +45,23 @@ sealed class ConnectionTestState {
 class AgentEditViewModel(
     private val repo: AgentRepository,
     private val agentId: String?,
+    private val duplicateFromAgentId: String?,
     private val httpClient: OkHttpClient,
     private val openRouterCatalogRepository: OpenRouterCatalogRepository,
     private val providerModelCatalogRepository: ProviderModelCatalogRepository
 ) : ViewModel() {
 
     val isEditing: Boolean = agentId != null
+    val isDuplicating: Boolean = agentId == null && duplicateFromAgentId != null
 
     private val _agent = MutableStateFlow(AgentConfig())
     val agent: StateFlow<AgentConfig> = _agent
 
     private val _isSaved = MutableStateFlow(false)
     val isSaved: StateFlow<Boolean> = _isSaved
+
+    private val _allAgents = MutableStateFlow<List<AgentConfig>>(emptyList())
+    val allAgents: StateFlow<List<AgentConfig>> = _allAgents
 
     private val _openRouterModels = MutableStateFlow<List<String>>(emptyList())
     val openRouterModels: StateFlow<List<String>> = _openRouterModels
@@ -71,17 +81,60 @@ class AgentEditViewModel(
     private val _connectionTestState = MutableStateFlow<ConnectionTestState>(ConnectionTestState.Idle)
     val connectionTestState: StateFlow<ConnectionTestState> = _connectionTestState
 
+    val nameValidationMessage: StateFlow<String?> = combine(_agent, _allAgents) { draft, agents ->
+        validateName(draft, agents)
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        validateName(_agent.value, _allAgents.value)
+    )
+
+    val apiKeyValidationMessage: StateFlow<String?> = _agent.map { draft ->
+        validateApiKey(draft)
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        validateApiKey(_agent.value)
+    )
+
+    val saveValidationMessage: StateFlow<String?> = combine(_agent, _allAgents) { draft, agents ->
+        validateDraft(draft, agents)
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        validateDraft(_agent.value, _allAgents.value)
+    )
+
     private var openAiModels: List<String> = emptyList()
     private var anthropicModels: List<String> = emptyList()
     private var modelRefreshJob: Job? = null
 
     init {
+        viewModelScope.launch {
+            repo.agentsFlow.collect { agents ->
+                _allAgents.value = agents
+            }
+        }
         if (agentId != null) {
             viewModelScope.launch {
                 val found = repo.agentsFlow.first().firstOrNull { it.id == agentId }
                 if (found != null) {
                     _agent.value = found
                     updateCurrentProviderModels(found.provider)
+                    scheduleCurrentProviderModelRefresh(force = true)
+                }
+            }
+        } else if (duplicateFromAgentId != null) {
+            viewModelScope.launch {
+                val existingAgents = repo.agentsFlow.first()
+                val source = existingAgents.firstOrNull { it.id == duplicateFromAgentId }
+                if (source != null) {
+                    val duplicated = source.copy(
+                        id = UUID.randomUUID().toString(),
+                        name = generateDuplicateName(source.name, existingAgents)
+                    )
+                    _agent.value = duplicated
+                    updateCurrentProviderModels(duplicated.provider)
                     scheduleCurrentProviderModelRefresh(force = true)
                 }
             }
@@ -133,8 +186,8 @@ class AgentEditViewModel(
     }
 
     fun save(setActiveAfterSave: Boolean = false) {
-        val draft = _agent.value
-        if (draft.name.isBlank() || draft.model.isBlank()) return
+        val draft = _agent.value.normalizedForSave()
+        if (validateDraft(draft, _allAgents.value) != null) return
         viewModelScope.launch {
             val current = repo.agentsFlow.first().toMutableList()
             val idx = current.indexOfFirst { it.id == draft.id }
@@ -146,9 +199,10 @@ class AgentEditViewModel(
     }
 
     fun testConnection() {
-        val agent = _agent.value
+        val agent = _agent.value.normalizedForSave()
         if (agent.apiKey.isBlank()) {
-            _connectionTestState.value = ConnectionTestState.Failure("Enter an API key first.")
+            _connectionTestState.value =
+                ConnectionTestState.Failure("Enter an API key for ${agent.provider.displayName} first.")
             return
         }
         viewModelScope.launch {
@@ -170,6 +224,18 @@ class AgentEditViewModel(
             } catch (e: Exception) {
                 _connectionTestState.value = ConnectionTestState.Failure(e.message ?: "Availability check failed")
             }
+        }
+    }
+
+    fun switchProvider(provider: AiProviderType, defaultModel: String) {
+        val current = _agent.value
+        if (current.provider == provider) return
+        update {
+            copy(
+                provider = provider,
+                model = defaultModel,
+                apiKey = ""
+            )
         }
     }
 
@@ -346,18 +412,70 @@ class AgentEditViewModel(
     class Factory(
         private val repo: AgentRepository,
         private val agentId: String?,
+        private val duplicateFromAgentId: String?,
         private val httpClient: OkHttpClient,
         private val openRouterCatalogRepository: OpenRouterCatalogRepository,
         private val providerModelCatalogRepository: ProviderModelCatalogRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
-            AgentEditViewModel(
-                repo = repo,
-                agentId = agentId,
-                httpClient = httpClient,
-                openRouterCatalogRepository = openRouterCatalogRepository,
-                providerModelCatalogRepository = providerModelCatalogRepository
-            ) as T
+                AgentEditViewModel(
+                    repo = repo,
+                    agentId = agentId,
+                    duplicateFromAgentId = duplicateFromAgentId,
+                    httpClient = httpClient,
+                    openRouterCatalogRepository = openRouterCatalogRepository,
+                    providerModelCatalogRepository = providerModelCatalogRepository
+                ) as T
     }
 }
+
+private fun validateDraft(draft: AgentConfig, agents: List<AgentConfig>): String? {
+    return validateName(draft, agents)
+        ?: validateApiKey(draft)
+        ?: if (draft.model.trim().isBlank()) "Choose a model before saving." else null
+}
+
+private fun validateName(draft: AgentConfig, agents: List<AgentConfig>): String? {
+    val normalizedName = draft.name.trim()
+    if (normalizedName.isBlank()) return "Enter an assistant name."
+
+    val hasDuplicate = agents.any { existing ->
+        existing.id != draft.id &&
+            existing.name.trim().equals(normalizedName, ignoreCase = true)
+    }
+    return if (hasDuplicate) {
+        "Assistant names must be unique."
+    } else {
+        null
+    }
+}
+
+private fun validateApiKey(draft: AgentConfig): String? {
+    return if (draft.apiKey.trim().isBlank()) {
+        "Enter an API key for ${draft.provider.displayName}."
+    } else {
+        null
+    }
+}
+
+private fun generateDuplicateName(sourceName: String, agents: List<AgentConfig>): String {
+    val baseName = sourceName.trim().ifBlank { "Assistant" }
+    val existingNames = agents.map { it.name.trim().lowercase() }.toSet()
+
+    val firstChoice = "$baseName Copy"
+    if (firstChoice.lowercase() !in existingNames) return firstChoice
+
+    var copyIndex = 2
+    while (true) {
+        val candidate = "$baseName Copy $copyIndex"
+        if (candidate.lowercase() !in existingNames) return candidate
+        copyIndex += 1
+    }
+}
+
+private fun AgentConfig.normalizedForSave(): AgentConfig = copy(
+    name = name.trim(),
+    apiKey = apiKey.trim(),
+    model = model.trim()
+)

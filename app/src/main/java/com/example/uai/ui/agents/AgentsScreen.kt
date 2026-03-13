@@ -20,13 +20,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FloatingActionButton
@@ -60,6 +60,7 @@ fun AgentsScreen(
     viewModel: AgentsViewModel,
     onAddAgent: () -> Unit,
     onEditAgent: (String) -> Unit,
+    onDuplicateAgent: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -72,14 +73,20 @@ fun AgentsScreen(
                 title = { Text(stringResource(R.string.feature_agents)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back)
+                        )
                     }
                 }
             )
         },
         floatingActionButton = {
             FloatingActionButton(onClick = onAddAgent) {
-                Icon(Icons.Default.Add, contentDescription = "Add assistant")
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = stringResource(R.string.assistants_add_assistant)
+                )
             }
         }
     ) { padding ->
@@ -109,11 +116,11 @@ fun AgentsScreen(
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Text(
-                                "Choose your default assistant",
+                                stringResource(R.string.assistants_choose_default_title),
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                "New chats use the default assistant automatically. Tap any card to refine its setup later.",
+                                stringResource(R.string.assistants_choose_default_body),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -127,6 +134,12 @@ fun AgentsScreen(
                         isActive = agent.id == uiState.activeAgentId,
                         onSetActive = { viewModel.setActiveAgent(agent.id) },
                         onEdit = { onEditAgent(agent.id) },
+                        onDuplicate = { onDuplicateAgent(agent.id) },
+                        replacementDefaultName = if (agent.id == uiState.activeAgentId) {
+                            uiState.agents.firstOrNull { it.id != agent.id }?.name
+                        } else {
+                            null
+                        },
                         onDelete = { viewModel.deleteAgent(agent) }
                     )
                 }
@@ -162,16 +175,16 @@ private fun AssistantsEmptyState(
                     )
                 }
                 Text(
-                    "Create your first assistant",
+                    stringResource(R.string.assistants_empty_title),
                     style = MaterialTheme.typography.headlineSmall
                 )
                 Text(
-                    "Pick a role, connect your provider, and SideAgent will use that assistant in new chats by default.",
+                    stringResource(R.string.assistants_empty_body),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Button(onClick = onAddAgent) {
-                    Text("Start guided setup")
+                    Text(stringResource(R.string.assistants_empty_cta))
                 }
             }
         }
@@ -184,6 +197,8 @@ private fun AgentItem(
     isActive: Boolean,
     onSetActive: () -> Unit,
     onEdit: () -> Unit,
+    onDuplicate: () -> Unit,
+    replacementDefaultName: String?,
     onDelete: () -> Unit
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -227,7 +242,7 @@ private fun AgentItem(
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Text(
-                                        "Default",
+                                        stringResource(R.string.assistants_default_badge),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary
                                     )
@@ -250,23 +265,36 @@ private fun AgentItem(
                 }
                 Box {
                     IconButton(onClick = { menuExpanded = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Assistant actions")
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = stringResource(R.string.assistants_actions)
+                        )
                     }
                     DropdownMenu(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Edit") },
+                            text = { Text(stringResource(R.string.assistants_edit)) },
                             leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
                             onClick = {
                                 menuExpanded = false
                                 onEdit()
                             }
                         )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.assistants_duplicate)) },
+                            leadingIcon = {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null)
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onDuplicate()
+                            }
+                        )
                         if (!isActive) {
                             DropdownMenuItem(
-                                text = { Text("Use as default") },
+                                text = { Text(stringResource(R.string.assistants_use_as_default)) },
                                 leadingIcon = { Icon(Icons.Default.CheckCircle, contentDescription = null) },
                                 onClick = {
                                     menuExpanded = false
@@ -275,7 +303,7 @@ private fun AgentItem(
                             )
                         }
                         DropdownMenuItem(
-                            text = { Text("Delete") },
+                            text = { Text(stringResource(R.string.assistants_delete)) },
                             leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
                             onClick = {
                                 menuExpanded = false
@@ -291,7 +319,7 @@ private fun AgentItem(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 assistantCapabilities(agent).forEach { capability ->
-                    CapabilityChip(label = capability)
+                    CapabilityBadge(label = capability)
                 }
             }
 
@@ -301,7 +329,7 @@ private fun AgentItem(
                     color = MaterialTheme.colorScheme.secondaryContainer
                 ) {
                     Text(
-                        "This assistant is used automatically when you start a new chat.",
+                        stringResource(R.string.assistants_default_body),
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -309,31 +337,54 @@ private fun AgentItem(
                 }
             } else {
                 TextButton(onClick = onSetActive) {
-                    Text("Use as default assistant")
+                    Text(stringResource(R.string.assistants_use_as_default_button))
                 }
             }
         }
     }
 
     if (showDeleteDialog) {
+        val deleteMessage = when {
+            isActive && replacementDefaultName != null -> stringResource(
+                R.string.assistants_delete_dialog_default_reassigned,
+                agent.name,
+                replacementDefaultName
+            )
+            isActive -> stringResource(
+                R.string.assistants_delete_dialog_default_removed,
+                agent.name
+            )
+            else -> stringResource(R.string.assistants_delete_dialog_body, agent.name)
+        }
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Delete assistant?") },
-            text = { Text("Delete \"${agent.name}\"? This cannot be undone.") },
+            title = { Text(stringResource(R.string.assistants_delete_dialog_title)) },
+            text = { Text(deleteMessage) },
             confirmButton = {
-                TextButton(onClick = { showDeleteDialog = false; onDelete() }) { Text("Delete") }
+                TextButton(onClick = { showDeleteDialog = false; onDelete() }) {
+                    Text(stringResource(R.string.assistants_delete))
+                }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text(stringResource(R.string.assistants_cancel))
+                }
             }
         )
     }
 }
 
 @Composable
-private fun CapabilityChip(label: String) {
-    AssistChip(
-        onClick = {},
-        label = { Text(label) }
-    )
+private fun CapabilityBadge(label: String) {
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.secondaryContainer
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSecondaryContainer
+        )
+    }
 }

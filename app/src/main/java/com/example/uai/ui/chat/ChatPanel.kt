@@ -10,10 +10,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.OpenInFull
-import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,6 +33,7 @@ import com.example.uai.R
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.canHandleImageRequests
 
 @Composable
 fun ChatPanel(
@@ -42,6 +41,7 @@ fun ChatPanel(
     inputText: String,
     isLoading: Boolean,
     agentName: String,
+    selectedAgentId: String?,
     hasSelectedAgent: Boolean,
     agents: List<AgentConfig>,
     conversations: List<ConversationEntity>,
@@ -53,7 +53,6 @@ fun ChatPanel(
     onInputChange: (String) -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
-    onClose: () -> Unit,
     onMinimize: () -> Unit,
     onOpenInApp: (() -> Unit)? = null,
     onAgentSelect: (AgentConfig) -> Unit,
@@ -95,71 +94,26 @@ fun ChatPanel(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(
-                            Icons.Default.SmartToy,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Box {
-                            Row(
-                                modifier = Modifier
-                                    .clickable(enabled = agents.isNotEmpty()) { agentDropdownExpanded = true },
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(agentName, style = MaterialTheme.typography.titleMedium)
-                                if (agents.isNotEmpty()) {
-                                    Icon(
-                                        Icons.Default.ArrowDropDown,
-                                        contentDescription = "Select agent",
-                                        modifier = Modifier.size(20.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            DropdownMenu(
-                                expanded = agentDropdownExpanded,
-                                onDismissRequest = { agentDropdownExpanded = false }
-                            ) {
-                                agents.forEach { agent ->
-                                    DropdownMenuItem(
-                                        text = { Text(agent.name) },
-                                        onClick = {
-                                            agentDropdownExpanded = false
-                                            onAgentSelect(agent)
-                                        },
-                                        leadingIcon = if (agent.name == agentName) ({
-                                            Icon(
-                                                Icons.Default.SmartToy,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }) else null
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Box {
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .clickable(enabled = hasExistingConversations) {
+                        Box(modifier = Modifier.widthIn(max = 172.dp)) {
+                            TextButton(
+                                onClick = {
+                                    if (hasExistingConversations) {
                                         conversationDropdownExpanded = true
                                     }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                },
+                                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
                                     text = currentConversationTitle,
-                                    style = MaterialTheme.typography.labelMedium,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.widthIn(max = 120.dp)
+                                    modifier = Modifier.weight(1f, fill = false)
                                 )
                                 if (hasExistingConversations) {
                                     Icon(
@@ -187,19 +141,14 @@ fun ChatPanel(
                                             conversationDropdownExpanded = false
                                             onConversationSelect(conversation.id)
                                         },
-                                        leadingIcon = if (conversation.id == currentConversationId) ({
-                                            Icon(
-                                                Icons.Default.SmartToy,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
+                                        trailingIcon = if (conversation.id == currentConversationId) ({
+                                            Text("✓", color = MaterialTheme.colorScheme.primary)
                                         }) else null
                                     )
                                 }
                             }
                         }
-                        Spacer(Modifier.width(8.dp))
+
                         FilledTonalButton(
                             onClick = onNewConversation,
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
@@ -209,9 +158,72 @@ fun ChatPanel(
                             Spacer(Modifier.width(4.dp))
                             Text("New chat", style = MaterialTheme.typography.labelMedium)
                         }
+
                         Spacer(Modifier.weight(1f))
-                        IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.Close, "Close")
+
+                        Box {
+                            TextButton(
+                                onClick = {
+                                    if (agents.isNotEmpty()) {
+                                        agentDropdownExpanded = true
+                                    }
+                                }
+                            ) {
+                                Text(
+                                    text = agentName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 128.dp)
+                                )
+                                if (agents.isNotEmpty()) {
+                                    Icon(
+                                        Icons.Default.ArrowDropDown,
+                                        contentDescription = "Select assistant",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                            DropdownMenu(
+                                expanded = agentDropdownExpanded,
+                                onDismissRequest = { agentDropdownExpanded = false }
+                            ) {
+                                agents.forEach { agent ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Text(agent.name)
+                                                    if (agent.canHandleImageRequests()) {
+                                                        Icon(
+                                                            Icons.Default.Image,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(14.dp),
+                                                            tint = MaterialTheme.colorScheme.primary
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    "${agent.provider.displayName} · ${agent.model}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            agentDropdownExpanded = false
+                                            onAgentSelect(agent)
+                                        },
+                                        trailingIcon = if (agent.id == selectedAgentId) ({
+                                            Text("✓", color = MaterialTheme.colorScheme.primary)
+                                        }) else null
+                                    )
+                                }
+                            }
                         }
                     }
                     HorizontalDivider()

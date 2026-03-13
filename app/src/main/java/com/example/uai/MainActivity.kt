@@ -270,6 +270,7 @@ class MainActivity : ComponentActivity() {
     private fun handleBubbleIntent(intent: Intent) {
         when (intent.action) {
             "com.example.uai.OPEN_CONVERSATION" -> {
+                FloatingBubbleService.suppressForForegroundApp(this)
                 intent.getStringExtra("conversationId")?.let { pendingOpenConversationId = it }
             }
         }

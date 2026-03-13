@@ -147,6 +147,7 @@ class FloatingBubbleService : Service() {
     private var prefersDraftConversation = false
     private var draftAgentId: String? = null
     private var pendingAssistantRepairToast: PendingAssistantRepairToast? = null
+    private var pendingPanelShowAfterAppHidden = false
     private var screenshotRestoreJob: Job? = null
     private var streamingJob: Job? = null
     private var isChatPanelAnimating = false
@@ -257,7 +258,40 @@ class FloatingBubbleService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        handleStartIntent(intent)
+        return START_STICKY
+    }
+
+    private fun handleStartIntent(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_OPEN_CHAT_PANEL -> {
+                val conversationId = intent.getStringExtra(EXTRA_CONVERSATION_ID) ?: return
+                prefersDraftConversation = false
+                switchConversation(conversationId, force = true)
+                pendingPanelShowAfterAppHidden = true
+                if (!isAppUiVisible) {
+                    showChatPanel()
+                }
+            }
+            ACTION_OPEN_DRAFT_CHAT_PANEL -> {
+                val assistantId = intent.getStringExtra(EXTRA_ASSISTANT_ID)
+                prefersDraftConversation = true
+                draftAgentId = assistantId ?: draftAgentId
+                switchConversation(null, force = true)
+                pendingPanelShowAfterAppHidden = true
+                if (!isAppUiVisible) {
+                    showChatPanel()
+                }
+            }
+            ACTION_SUPPRESS_FOR_FOREGROUND_APP -> {
+                pendingPanelRestoreAfterExternalFlow = false
+                pendingPanelShowAfterAppHidden = false
+                forceHideOverlayWindows("foreground-app-command")
+                overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
+            }
+        }
+    }
 
     // ----- Conversation sync -----
 
@@ -688,6 +722,7 @@ class FloatingBubbleService : Service() {
                         inputText = inputText,
                         isLoading = isLoading,
                         agentName = selectedAgentForCurrentContext()?.name ?: "Select assistant",
+                        selectedAgentId = selectedAgentForCurrentContext()?.id,
                         hasSelectedAgent = selectedAgentForCurrentContext() != null,
                         agents = allAgents,
                         conversations = availableConversations,
@@ -699,7 +734,6 @@ class FloatingBubbleService : Service() {
                         onInputChange = { inputText = it },
                         onSend = ::sendMessage,
                         onStop = ::stopResponse,
-                        onClose = ::dismissChatPanelAnimated,
                         onMinimize = ::dismissChatPanelAnimated,
                         onOpenInApp = ::openInApp,
                         onAgentSelect = { agent ->
@@ -853,6 +887,7 @@ class FloatingBubbleService : Service() {
 
     private fun showChatPanel() {
         if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow || isAppUiVisible) return
+        pendingPanelShowAfterAppHidden = false
         if (chatPanelView == null || chatPanelContainer == null) {
             setupChatPanel()
         }
@@ -1038,21 +1073,16 @@ class FloatingBubbleService : Service() {
         if (overlaySurfaceState == OverlaySurfaceState.ExternalFlow || isOverlayScreenshotCaptureInProgress) {
             return
         }
-        removeSafely(dismissZoneView, immediate = true)
-        isDismissTargetActive = false
-        clearChatPanelInteractionState()
-        removeSafely(chatPanelContainer, immediate = true)
-        chatPanelView?.disposeComposition()
-        chatPanelContainer = null
-        chatPanelView = null
-        isChatPanelVisible = false
-        isChatPanelAnimating = false
-        hideBubbleWindow(immediate = true)
+        forceHideOverlayWindows("app-visible")
         overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
     }
 
     private fun restoreOverlayAfterAppHidden() {
         if (overlaySurfaceState != OverlaySurfaceState.AppForegroundSuppressed || isOverlayScreenshotCaptureInProgress) {
+            return
+        }
+        if (pendingPanelShowAfterAppHidden) {
+            showChatPanel()
             return
         }
         if (bubbleView == null) {
@@ -1422,13 +1452,21 @@ class FloatingBubbleService : Service() {
 
     private fun openInApp() {
         val convId = currentConversationId ?: return
-        minimizeChatPanelToBubble(immediate = true)
+        pendingPanelRestoreAfterExternalFlow = false
+        pendingPanelShowAfterAppHidden = false
+        forceHideOverlayWindows("open-in-app-prelaunch")
+        overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
         val intent = Intent(this, MainActivity::class.java).apply {
             action = "com.example.uai.OPEN_CONVERSATION"
             putExtra("conversationId", convId)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         startActivity(intent)
+        serviceScope.launch {
+            delay(250L)
+            forceHideOverlayWindows("open-in-app-postlaunch")
+            overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
+        }
     }
 
     private fun stopResponse() {
@@ -1642,8 +1680,31 @@ class FloatingBubbleService : Service() {
         if (view != null && view.isAttachedToWindow) {
             runCatching {
                 if (immediate) windowManager.removeViewImmediate(view) else windowManager.removeView(view)
+            }.onFailure { throwable ->
+                android.util.Log.e(
+                    "UAI_OVERLAY",
+                    "Failed to remove ${view.javaClass.simpleName} immediate=$immediate attached=${view.isAttachedToWindow}",
+                    throwable
+                )
             }
         }
+    }
+
+    private fun forceHideOverlayWindows(reason: String) {
+        android.util.Log.d(
+            "UAI_OVERLAY",
+            "forceHideOverlayWindows reason=$reason panelAttached=${chatPanelContainer?.isAttachedToWindow == true} bubbleAttached=${bubbleView?.isAttachedToWindow == true} state=$overlaySurfaceState"
+        )
+        removeSafely(dismissZoneView, immediate = true)
+        isDismissTargetActive = false
+        clearChatPanelInteractionState()
+        removeSafely(chatPanelContainer, immediate = true)
+        chatPanelView?.disposeComposition()
+        chatPanelContainer = null
+        chatPanelView = null
+        isChatPanelVisible = false
+        isChatPanelAnimating = false
+        hideBubbleWindow(immediate = true)
     }
 
     private fun nextPanelTransitionGeneration(): Long {
@@ -1696,6 +1757,11 @@ class FloatingBubbleService : Service() {
     }
 
     companion object {
+        private const val ACTION_OPEN_CHAT_PANEL = "com.example.uai.OPEN_CHAT_PANEL"
+        private const val ACTION_OPEN_DRAFT_CHAT_PANEL = "com.example.uai.OPEN_DRAFT_CHAT_PANEL"
+        private const val ACTION_SUPPRESS_FOR_FOREGROUND_APP = "com.example.uai.SUPPRESS_FOR_FOREGROUND_APP"
+        private const val EXTRA_CONVERSATION_ID = "conversationId"
+        private const val EXTRA_ASSISTANT_ID = "assistantId"
         private const val NOTIFICATION_ID = 1001
         private const val DISMISS_BOTTOM_PAD_DP = 48
         private const val DISMISS_RADIUS_DP = 30
@@ -1708,6 +1774,41 @@ class FloatingBubbleService : Service() {
 
         fun startService(context: android.content.Context) {
             val intent = Intent(context, FloatingBubbleService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                context.startForegroundService(intent)
+            else
+                context.startService(intent)
+        }
+
+        fun openConversation(context: android.content.Context, conversationId: String) {
+            val intent = Intent(context, FloatingBubbleService::class.java).apply {
+                action = ACTION_OPEN_CHAT_PANEL
+                putExtra(EXTRA_CONVERSATION_ID, conversationId)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                context.startForegroundService(intent)
+            else
+                context.startService(intent)
+        }
+
+        fun openDraftConversation(
+            context: android.content.Context,
+            assistantId: String?
+        ) {
+            val intent = Intent(context, FloatingBubbleService::class.java).apply {
+                action = ACTION_OPEN_DRAFT_CHAT_PANEL
+                putExtra(EXTRA_ASSISTANT_ID, assistantId)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                context.startForegroundService(intent)
+            else
+                context.startService(intent)
+        }
+
+        fun suppressForForegroundApp(context: android.content.Context) {
+            val intent = Intent(context, FloatingBubbleService::class.java).apply {
+                action = ACTION_SUPPRESS_FOR_FOREGROUND_APP
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 context.startForegroundService(intent)
             else

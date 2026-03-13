@@ -165,6 +165,7 @@ fun ChatMessageList(
     modifier: Modifier = Modifier,
     messageThumbnails: Map<String, List<ImageBitmap>> = emptyMap(),
     onBackgroundDoubleTap: (() -> Unit)? = null,
+    onBackgroundLongPress: (() -> Unit)? = null,
     onMessageDoubleTap: (() -> Unit)? = null,
     contentPadding: PaddingValues = PaddingValues(12.dp),
     verticalSpacing: Dp = 6.dp,
@@ -189,10 +190,11 @@ fun ChatMessageList(
                 .fillMaxSize()
                 .nestedScroll(behavior.nestedScrollConnection)
                 .then(
-                    if (onBackgroundDoubleTap != null) {
+                    if (onBackgroundDoubleTap != null || onBackgroundLongPress != null) {
                         Modifier.combinedClickable(
                             onClick = {},
-                            onDoubleClick = onBackgroundDoubleTap
+                            onDoubleClick = onBackgroundDoubleTap,
+                            onLongClick = onBackgroundLongPress
                         )
                     } else {
                         Modifier

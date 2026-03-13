@@ -1,11 +1,16 @@
 package com.example.uai.ui.conversations
 
+import android.app.Activity
+import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.provider.Settings
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,9 +31,11 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.uai.UaiApplication
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.service.FloatingBubbleService
 import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
@@ -44,7 +51,7 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import android.widget.Toast
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun ConversationDetailScreen(
     viewModel: ConversationDetailViewModel,
@@ -52,14 +59,19 @@ fun ConversationDetailScreen(
     onOpenAssistants: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val inputText by viewModel.inputText.collectAsStateWithLifecycle()
     val activeAgent by viewModel.activeAgent.collectAsStateWithLifecycle()
     val agents by viewModel.agents.collectAsStateWithLifecycle()
+    val bubbleEnabled by (context.applicationContext as UaiApplication)
+        .container
+        .agentRepository
+        .bubbleEnabledFlow
+        .collectAsStateWithLifecycle(initialValue = false)
 
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -175,6 +187,26 @@ fun ConversationDetailScreen(
     }
 
     val hasAttachment = pendingImageBitmap != null || pendingFileName != null
+    val canTransferToMiniChat = bubbleEnabled &&
+        Settings.canDrawOverlays(context)
+
+    fun minimizeIntoMiniChat() {
+        val conversationId = conversation?.id
+        if (conversationId != null) {
+            FloatingBubbleService.openConversation(context, conversationId)
+        } else {
+            FloatingBubbleService.openDraftConversation(
+                context = context,
+                assistantId = activeAgent?.id
+            )
+        }
+        generateSequence(context) { current ->
+            (current as? ContextWrapper)?.baseContext
+        }
+            .filterIsInstance<Activity>()
+            .firstOrNull()
+            ?.moveTaskToBack(true)
+    }
 
     fun doSend() {
         if (isPreparingAttachment) return
@@ -247,7 +279,22 @@ fun ConversationDetailScreen(
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
 
             if (messages.isEmpty() && !isLoading) {
-                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .then(
+                            if (canTransferToMiniChat) {
+                                Modifier.combinedClickable(
+                                    onClick = {},
+                                    onDoubleClick = { minimizeIntoMiniChat() }
+                                )
+                            } else {
+                                Modifier
+                            }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
                     if (activeAgent == null) {
                         AssistantSetupPromptCard(
                             hasAnyAssistants = agents.isNotEmpty(),
@@ -271,6 +318,8 @@ fun ConversationDetailScreen(
                     isLoading = isLoading,
                     behavior = messageListBehavior,
                     modifier = Modifier.weight(1f),
+                    onBackgroundDoubleTap = if (canTransferToMiniChat) ({ minimizeIntoMiniChat() }) else null,
+                    onMessageDoubleTap = if (canTransferToMiniChat) ({ minimizeIntoMiniChat() }) else null,
                     replyActionForMessage = { msg ->
                         if (msg.role != "user" && !msg.isStreaming) ({ replyToMessage = msg }) else null
                     }

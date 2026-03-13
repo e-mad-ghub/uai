@@ -3,6 +3,7 @@ package com.example.uai
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.OPENROUTER_FREE_ROUTER_MODEL
+import com.example.uai.data.model.OpenRouterCatalogEntry
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.openRouterFreeFallbackModels
 import com.example.uai.data.model.preferredOpenRouterFastFreeModel
@@ -50,6 +51,30 @@ class OpenRouterModelsTest {
     }
 
     @Test
+    fun preferredBestFreeModelFallsBackToLiveCatalogWhenCuratedModelsDisappear() {
+        val selected = preferredOpenRouterFastFreeModel(
+            catalogEntries = listOf(
+                OpenRouterCatalogEntry(
+                    id = "mistralai/ministral-8b-instruct:free",
+                    name = "Ministral 8B Instruct",
+                    contextLength = 128_000,
+                    promptPrice = 0.0,
+                    completionPrice = 0.0
+                ),
+                OpenRouterCatalogEntry(
+                    id = OPENROUTER_FREE_ROUTER_MODEL,
+                    name = "OpenRouter Free Router",
+                    contextLength = 128_000,
+                    promptPrice = 0.0,
+                    completionPrice = 0.0
+                )
+            )
+        )
+
+        assertEquals("mistralai/ministral-8b-instruct:free", selected)
+    }
+
+    @Test
     fun defaultOpenRouterRecommendationStartsWithBestAvailableFreePath() {
         val fetchedModels = listOf(
             "google/gemma-3-12b-it:free",
@@ -63,11 +88,36 @@ class OpenRouterModelsTest {
 
         val selected = defaultRecommendedModelId(
             provider = AiProviderType.OPENROUTER,
-            fetchedOpenRouterModels = fetchedModels,
+            fetchedProviderModels = fetchedModels,
             freeModelIds = freeModelIds
         )
 
         assertEquals("google/gemma-3-12b-it:free", selected)
+    }
+
+    @Test
+    fun freeFallbackCandidatesIncludeNewCatalogModels() {
+        val candidates = openRouterFreeFallbackModels(
+            catalogEntries = listOf(
+                OpenRouterCatalogEntry(
+                    id = "mistralai/ministral-8b-instruct:free",
+                    name = "Ministral 8B Instruct",
+                    contextLength = 128_000,
+                    promptPrice = 0.0,
+                    completionPrice = 0.0
+                ),
+                OpenRouterCatalogEntry(
+                    id = OPENROUTER_FREE_ROUTER_MODEL,
+                    name = "OpenRouter Free Router",
+                    contextLength = 128_000,
+                    promptPrice = 0.0,
+                    completionPrice = 0.0
+                )
+            )
+        )
+
+        assertTrue(candidates.contains("mistralai/ministral-8b-instruct:free"))
+        assertTrue(candidates.contains(OPENROUTER_FREE_ROUTER_MODEL))
     }
 
     @Test

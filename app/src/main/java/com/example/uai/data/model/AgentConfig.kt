@@ -19,7 +19,13 @@ data class AgentConfig(
 ) {
     /** True when the selected model is known to accept image input. */
     val supportsVision: Boolean get() = when (provider) {
-        AiProviderType.OPENAI -> model in setOf("gpt-4o", "gpt-4o-mini", "gpt-4-turbo")
+        AiProviderType.OPENAI -> {
+            val m = model.lowercase()
+            m.contains("gpt-4o") ||
+                m.contains("chatgpt-4o") ||
+                m.contains("gpt-4-turbo") ||
+                m.contains("gpt-4.1")
+        }
         AiProviderType.ANTHROPIC -> !model.contains("claude-2") && !model.contains("instant")
         AiProviderType.OPENROUTER -> {
             val m = model.lowercase()

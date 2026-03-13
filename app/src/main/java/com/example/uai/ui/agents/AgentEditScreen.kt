@@ -38,6 +38,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -57,24 +58,24 @@ fun AgentEditScreen(
 ) {
     val agent by viewModel.agent.collectAsStateWithLifecycle()
     val isSaved by viewModel.isSaved.collectAsStateWithLifecycle()
-    val openRouterModels by viewModel.openRouterModels.collectAsStateWithLifecycle()
+    val openRouterCatalogEntries by viewModel.openRouterCatalogEntries.collectAsStateWithLifecycle()
     val freeModelIds by viewModel.freeModelIds.collectAsStateWithLifecycle()
+    val providerModels by viewModel.providerModels.collectAsStateWithLifecycle()
     val isLoadingModels by viewModel.isLoadingModels.collectAsStateWithLifecycle()
     val connectionTestState by viewModel.connectionTestState.collectAsStateWithLifecycle()
     val providerInfo = remember(agent.provider) { providerUiInfo(agent.provider) }
-    val recommendedModels = remember(agent.provider, openRouterModels, freeModelIds, agent.model) {
+    val uriHandler = LocalUriHandler.current
+    val recommendedModels = remember(agent.provider, openRouterCatalogEntries, providerModels, freeModelIds, agent.model) {
         recommendedModelChoices(
             provider = agent.provider,
-            fetchedOpenRouterModels = openRouterModels,
+            openRouterCatalogEntries = openRouterCatalogEntries,
+            fetchedProviderModels = providerModels,
             freeModelIds = freeModelIds,
             currentModel = agent.model
         )
     }
     val selectedModelChoice = recommendedModels.firstOrNull { it.id == agent.model }
         ?: recommendedModels.first()
-    val presets = remember(agent.provider, openRouterModels, freeModelIds) {
-        assistantPresets(agent.provider, openRouterModels, freeModelIds)
-    }
     val canSave = remember(agent.name, agent.apiKey, agent.model) {
         agent.name.isNotBlank() && agent.model.isNotBlank()
     }
@@ -169,38 +170,10 @@ fun AgentEditScreen(
                             if (viewModel.isEditing)
                                 "Keep the basics easy to understand. Advanced instructions are still available below."
                             else
-                                "Choose a role, connect your provider, and SideAgent will use this assistant in new chats.",
+                                "Choose your provider, connect it, and SideAgent will use this assistant in new chats.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    }
-                }
-            }
-
-            if (!viewModel.isEditing) {
-                SetupSection(
-                    title = "Start from a role",
-                    description = "These presets fill in the name, instructions, and a good starting model."
-                ) {
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        presets.forEach { preset ->
-                            PresetCard(
-                                preset = preset,
-                                onClick = {
-                                    viewModel.update {
-                                        copy(
-                                            name = preset.suggestedName,
-                                            systemPrompt = preset.systemPrompt,
-                                            temperature = preset.temperature,
-                                            model = preset.recommendedModelId
-                                        )
-                                    }
-                                }
-                            )
-                        }
                     }
                 }
             }
@@ -232,7 +205,8 @@ fun AgentEditScreen(
                             onClick = {
                                 val defaultModel = defaultRecommendedModelId(
                                     provider = type,
-                                    fetchedOpenRouterModels = openRouterModels,
+                                    openRouterCatalogEntries = openRouterCatalogEntries,
+                                    fetchedProviderModels = if (type == agent.provider) providerModels else emptyList(),
                                     freeModelIds = freeModelIds
                                 )
                                 viewModel.update { copy(provider = type, model = defaultModel) }
@@ -252,7 +226,29 @@ fun AgentEditScreen(
                     visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     supportingText = {
-                        Text(providerInfo.apiKeyHint)
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(providerInfo.apiKeyHint)
+                            if (agent.provider == AiProviderType.OPENROUTER) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        "Start free with OpenRouter's zero-cost free models.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    TextButton(
+                                        onClick = {
+                                            uriHandler.openUri("https://openrouter.ai/keys")
+                                        }
+                                    ) {
+                                        Text("Get free API key")
+                                    }
+                                }
+                            }
+                        }
                     },
                     trailingIcon = {
                         TextButton(onClick = { showApiKey = !showApiKey }) {
@@ -340,7 +336,7 @@ fun AgentEditScreen(
                                     provider = agent.provider,
                                     selectedModel = agent.model,
                                     onModelChange = { viewModel.update { copy(model = it) } },
-                                    fetchedOpenRouterModels = openRouterModels,
+                                    fetchedProviderModels = providerModels,
                                     freeModelIds = freeModelIds,
                                     isLoadingModels = isLoadingModels
                                 )
@@ -411,29 +407,6 @@ private fun SetupSection(
                 content()
             }
         )
-    }
-}
-
-@Composable
-private fun PresetCard(
-    preset: AssistantPreset,
-    onClick: () -> Unit
-) {
-    ElevatedCard(
-        onClick = onClick,
-        modifier = Modifier.width(220.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Text(preset.title, style = MaterialTheme.typography.titleSmall)
-            Text(
-                preset.subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
     }
 }
 
@@ -608,12 +581,12 @@ private fun RawModelSelector(
     provider: AiProviderType,
     selectedModel: String,
     onModelChange: (String) -> Unit,
-    fetchedOpenRouterModels: List<String> = emptyList(),
+    fetchedProviderModels: List<String> = emptyList(),
     freeModelIds: Set<String> = emptySet(),
     isLoadingModels: Boolean = false
 ) {
-    val presets = if (provider == AiProviderType.OPENROUTER && fetchedOpenRouterModels.isNotEmpty())
-        fetchedOpenRouterModels
+    val presets = if (fetchedProviderModels.isNotEmpty())
+        fetchedProviderModels
     else
         AgentConfig.defaultModels[provider] ?: emptyList()
     var expanded by remember(provider, selectedModel) { mutableStateOf(false) }
@@ -624,7 +597,7 @@ private fun RawModelSelector(
             onValueChange = onModelChange,
             label = {
                 Text(
-                    if (provider == AiProviderType.OPENROUTER && isLoadingModels)
+                    if (isLoadingModels)
                         "Custom model ID (loading…)"
                     else
                         "Custom model ID"
@@ -640,7 +613,7 @@ private fun RawModelSelector(
             singleLine = true
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            if (provider == AiProviderType.OPENROUTER && isLoadingModels) {
+            if (isLoadingModels) {
                 DropdownMenuItem(
                     text = {
                         Row(
@@ -649,7 +622,7 @@ private fun RawModelSelector(
                         ) {
                             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                             Text(
-                                "Fetching models from OpenRouter…",
+                                "Fetching models from ${provider.displayName}…",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

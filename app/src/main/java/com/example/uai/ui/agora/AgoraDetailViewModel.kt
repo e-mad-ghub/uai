@@ -12,6 +12,7 @@ import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
+import com.example.uai.data.repository.OpenRouterCatalogRepository
 import com.google.gson.Gson
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -27,7 +28,8 @@ class AgoraDetailViewModel(
     val conversationId: String,
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
-    private val httpClient: OkHttpClient
+    private val httpClient: OkHttpClient,
+    private val openRouterCatalogRepository: OpenRouterCatalogRepository
 ) : ViewModel() {
 
     val conversation = repo.getConversation(conversationId)
@@ -276,7 +278,7 @@ class AgoraDetailViewModel(
 
                     var accumulated = ""
                     try {
-                        AiProviderFactory.create(agoraAgent, httpClient)
+                        AiProviderFactory.create(agoraAgent, httpClient, openRouterCatalogRepository)
                             .streamResponse(history, agoraAgent)
                             .catch { e -> emit(StreamChunk.Error(e)) }
                             .collect { chunk ->
@@ -341,10 +343,17 @@ class AgoraDetailViewModel(
         private val conversationId: String,
         private val repo: ConversationRepository,
         private val agentRepo: AgentRepository,
-        private val httpClient: OkHttpClient
+        private val httpClient: OkHttpClient,
+        private val openRouterCatalogRepository: OpenRouterCatalogRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
-            AgoraDetailViewModel(conversationId, repo, agentRepo, httpClient) as T
+            AgoraDetailViewModel(
+                conversationId,
+                repo,
+                agentRepo,
+                httpClient,
+                openRouterCatalogRepository
+            ) as T
     }
 }

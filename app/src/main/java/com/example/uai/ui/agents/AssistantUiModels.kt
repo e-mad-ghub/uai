@@ -3,11 +3,104 @@ package com.example.uai.ui.agents
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.OPENROUTER_FREE_ROUTER_MODEL
+import com.example.uai.data.model.OpenRouterCatalogEntry
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.isOpenRouterFreeModel
 import com.example.uai.data.model.preferredOpenRouterFastFreeModel
 import com.example.uai.data.model.preferredOpenRouterReasoningFreeModel
 import com.example.uai.data.model.preferredOpenRouterVisionFreeModel
+
+private fun pickScoredProviderModel(
+    fetchedModels: List<String>,
+    fallback: String,
+    score: (String) -> Int
+): String {
+    if (fetchedModels.isEmpty()) return fallback
+    return fetchedModels.maxByOrNull(score) ?: fallback
+}
+
+private fun openAiFamilyScore(modelId: String): Int {
+    val normalized = modelId.lowercase()
+    return when {
+        normalized.startsWith("gpt-5") -> 120
+        normalized.startsWith("gpt-4.5") -> 115
+        normalized.startsWith("gpt-4.1") -> 110
+        normalized.startsWith("gpt-4o") -> 105
+        normalized.startsWith("chatgpt-4o") -> 100
+        normalized.startsWith("gpt-4-turbo") -> 96
+        normalized.startsWith("gpt-4") -> 90
+        normalized.startsWith("gpt-3.5") -> 50
+        normalized.startsWith("chatgpt-") -> 45
+        else -> 30
+    }
+}
+
+private fun preferredOpenAiBalancedModel(fetchedModels: List<String>): String =
+    pickScoredProviderModel(fetchedModels, fallback = "gpt-4o") { modelId ->
+        val normalized = modelId.lowercase()
+        openAiFamilyScore(modelId) * 10 +
+            (if (normalized.contains("4o")) 140 else 0) +
+            (if (normalized.contains("4.1")) -20 else 0) +
+            (if (normalized.contains("mini")) -25 else 0) +
+            (if (normalized.contains("nano")) -40 else 0) +
+            (if (normalized.contains("preview")) -10 else 0)
+    }
+
+private fun preferredOpenAiFastModel(fetchedModels: List<String>): String =
+    pickScoredProviderModel(fetchedModels, fallback = "gpt-4o-mini") { modelId ->
+        val normalized = modelId.lowercase()
+        openAiFamilyScore(modelId) * 4 +
+            (if (normalized.contains("mini")) 220 else 0) +
+            (if (normalized.contains("nano")) 180 else 0) +
+            (if (normalized.contains("flash")) 120 else 0)
+    }
+
+private fun preferredOpenAiDetailedModel(fetchedModels: List<String>): String =
+    pickScoredProviderModel(fetchedModels, fallback = "gpt-4-turbo") { modelId ->
+        val normalized = modelId.lowercase()
+        openAiFamilyScore(modelId) * 10 +
+            (if (normalized.contains("mini")) -40 else 0) +
+            (if (normalized.contains("nano")) -60 else 0) +
+            (if (normalized.contains("preview")) -10 else 0) +
+            (if (normalized.contains("turbo")) 8 else 0)
+    }
+
+private fun preferredAnthropicBalancedModel(fetchedModels: List<String>): String =
+    pickScoredProviderModel(fetchedModels, fallback = "claude-sonnet-4-6") { modelId ->
+        val normalized = modelId.lowercase()
+        when {
+            normalized.contains("sonnet") -> 220
+            normalized.contains("opus") -> 180
+            normalized.contains("haiku") -> 120
+            else -> 100
+        }
+    }
+
+private fun preferredAnthropicFastModel(fetchedModels: List<String>): String =
+    pickScoredProviderModel(fetchedModels, fallback = "claude-haiku-4-5-20251001") { modelId ->
+        val normalized = modelId.lowercase()
+        when {
+            normalized.contains("haiku") -> 240
+            normalized.contains("sonnet") -> 160
+            normalized.contains("opus") -> 110
+            else -> 90
+        }
+    }
+
+private fun preferredAnthropicBestModel(fetchedModels: List<String>): String =
+    pickScoredProviderModel(fetchedModels, fallback = "claude-opus-4-6") { modelId ->
+        val normalized = modelId.lowercase()
+        when {
+            normalized.contains("opus") -> 250
+            normalized.contains("sonnet") -> 180
+            normalized.contains("haiku") -> 120
+            else -> 100
+        }
+    }
+
+private fun distinctRecommendedChoices(
+    choices: List<RecommendedModelChoice>
+): List<RecommendedModelChoice> = choices.distinctBy { it.id }
 
 data class ProviderUiInfo(
     val label: String,
@@ -24,15 +117,6 @@ data class RecommendedModelChoice(
     val isFree: Boolean = false,
     val supportsVision: Boolean = false,
     val supportsDocuments: Boolean = false
-)
-
-data class AssistantPreset(
-    val title: String,
-    val subtitle: String,
-    val suggestedName: String,
-    val systemPrompt: String,
-    val temperature: Float,
-    val recommendedModelId: String
 )
 
 fun providerUiInfo(provider: AiProviderType): ProviderUiInfo = when (provider) {
@@ -64,65 +148,103 @@ fun assistantProviderOrder(): List<AiProviderType> = listOf(
 
 fun recommendedModelChoices(
     provider: AiProviderType,
-    fetchedOpenRouterModels: List<String> = emptyList(),
+    openRouterCatalogEntries: List<OpenRouterCatalogEntry> = emptyList(),
+    fetchedProviderModels: List<String> = emptyList(),
     freeModelIds: Set<String> = emptySet(),
     currentModel: String? = null
 ): List<RecommendedModelChoice> {
     val baseChoices = when (provider) {
-        AiProviderType.OPENAI -> listOf(
-            RecommendedModelChoice(
-                id = "gpt-4o",
-                label = "Balanced",
-                description = "Best default for general chat and image-aware tasks.",
-                supportsVision = true
-            ),
-            RecommendedModelChoice(
-                id = "gpt-4o-mini",
-                label = "Fast",
-                description = "Lower cost and quick replies for everyday questions.",
-                supportsVision = true
-            ),
-            RecommendedModelChoice(
-                id = "gpt-4-turbo",
-                label = "Detailed",
-                description = "Useful when you want more deliberate answers and vision support.",
-                supportsVision = true
+        AiProviderType.OPENAI -> {
+            val balancedModel = preferredOpenAiBalancedModel(fetchedProviderModels)
+            val fastModel = preferredOpenAiFastModel(fetchedProviderModels)
+            val detailedModel = preferredOpenAiDetailedModel(fetchedProviderModels)
+            val balancedVision = AgentConfig(provider = provider, model = balancedModel).canHandleImageRequests()
+            val fastVision = AgentConfig(provider = provider, model = fastModel).canHandleImageRequests()
+            val detailedVision = AgentConfig(provider = provider, model = detailedModel).canHandleImageRequests()
+            listOf(
+                RecommendedModelChoice(
+                    id = balancedModel,
+                    label = "Balanced",
+                    description = if (balancedVision) {
+                        "Best default for general chat and image-aware tasks."
+                    } else {
+                        "Best default for general chat."
+                    },
+                    supportsVision = balancedVision
+                ),
+                RecommendedModelChoice(
+                    id = fastModel,
+                    label = "Fast",
+                    description = if (fastVision) {
+                        "Lower cost and quick replies for everyday questions and images."
+                    } else {
+                        "Lower cost and quick replies for everyday questions."
+                    },
+                    supportsVision = fastVision
+                ),
+                RecommendedModelChoice(
+                    id = detailedModel,
+                    label = "Detailed",
+                    description = if (detailedVision) {
+                        "Useful when you want more deliberate answers and vision support."
+                    } else {
+                        "Useful when you want more deliberate answers."
+                    },
+                    supportsVision = detailedVision
+                )
             )
-        )
-        AiProviderType.ANTHROPIC -> listOf(
-            RecommendedModelChoice(
-                id = "claude-sonnet-4-6",
-                label = "Balanced",
-                description = "Best default for writing, coding, and structured reasoning.",
-                supportsVision = true,
-                supportsDocuments = true
-            ),
-            RecommendedModelChoice(
-                id = "claude-haiku-4-5-20251001",
-                label = "Fast",
-                description = "Quick, lightweight replies with strong everyday performance.",
-                supportsVision = true,
-                supportsDocuments = true
-            ),
-            RecommendedModelChoice(
-                id = "claude-opus-4-6",
-                label = "Best quality",
-                description = "Use when answer quality matters more than speed or cost.",
-                supportsVision = true,
-                supportsDocuments = true
+        }
+        AiProviderType.ANTHROPIC -> {
+            val balancedModel = preferredAnthropicBalancedModel(fetchedProviderModels)
+            val fastModel = preferredAnthropicFastModel(fetchedProviderModels)
+            val bestModel = preferredAnthropicBestModel(fetchedProviderModels)
+            listOf(
+                RecommendedModelChoice(
+                    id = balancedModel,
+                    label = "Balanced",
+                    description = "Best default for writing, coding, and structured reasoning.",
+                    supportsVision = AgentConfig(
+                        provider = provider,
+                        model = balancedModel
+                    ).canHandleImageRequests(),
+                    supportsDocuments = true
+                ),
+                RecommendedModelChoice(
+                    id = fastModel,
+                    label = "Fast",
+                    description = "Quick, lightweight replies with strong everyday performance.",
+                    supportsVision = AgentConfig(
+                        provider = provider,
+                        model = fastModel
+                    ).canHandleImageRequests(),
+                    supportsDocuments = true
+                ),
+                RecommendedModelChoice(
+                    id = bestModel,
+                    label = "Best quality",
+                    description = "Use when answer quality matters more than speed or cost.",
+                    supportsVision = AgentConfig(
+                        provider = provider,
+                        model = bestModel
+                    ).canHandleImageRequests(),
+                    supportsDocuments = true
+                )
             )
-        )
+        }
         AiProviderType.OPENROUTER -> {
             val fastFreeModel = preferredOpenRouterFastFreeModel(
-                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                catalogEntries = openRouterCatalogEntries,
+                fetchedOpenRouterModels = fetchedProviderModels,
                 freeModelIds = freeModelIds
             )
             val reasoningFreeModel = preferredOpenRouterReasoningFreeModel(
-                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                catalogEntries = openRouterCatalogEntries,
+                fetchedOpenRouterModels = fetchedProviderModels,
                 freeModelIds = freeModelIds
             )
             val visionFreeModel = preferredOpenRouterVisionFreeModel(
-                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                catalogEntries = openRouterCatalogEntries,
+                fetchedOpenRouterModels = fetchedProviderModels,
                 freeModelIds = freeModelIds
             )
             val knownChoices = listOf(
@@ -161,19 +283,20 @@ fun recommendedModelChoices(
                     supportsDocuments = true
                 )
             )
-            if (fetchedOpenRouterModels.isEmpty()) {
+            if (fetchedProviderModels.isEmpty()) {
                 knownChoices
             } else {
-                val available = fetchedOpenRouterModels.toSet()
+                val available = fetchedProviderModels.toSet()
                 knownChoices.filter { it.id in available }.ifEmpty {
                     knownChoices
                 }
             }
         }
     }
+    val curatedChoices = distinctRecommendedChoices(baseChoices)
 
     val customModel = currentModel
-        ?.takeIf { selected -> baseChoices.none { it.id == selected } }
+        ?.takeIf { selected -> curatedChoices.none { it.id == selected } }
         ?.let { selected ->
             val config = AgentConfig(provider = provider, model = selected)
             RecommendedModelChoice(
@@ -187,71 +310,21 @@ fun recommendedModelChoices(
             )
         }
 
-    return listOfNotNull(customModel) + baseChoices
+    return listOfNotNull(customModel) + curatedChoices
 }
 
 fun defaultRecommendedModelId(
     provider: AiProviderType,
-    fetchedOpenRouterModels: List<String> = emptyList(),
+    openRouterCatalogEntries: List<OpenRouterCatalogEntry> = emptyList(),
+    fetchedProviderModels: List<String> = emptyList(),
     freeModelIds: Set<String> = emptySet()
 ): String {
     return recommendedModelChoices(
         provider = provider,
-        fetchedOpenRouterModels = fetchedOpenRouterModels,
+        openRouterCatalogEntries = openRouterCatalogEntries,
+        fetchedProviderModels = fetchedProviderModels,
         freeModelIds = freeModelIds
     ).firstOrNull()?.id ?: AgentConfig.defaultModels[provider]?.first().orEmpty()
-}
-
-fun assistantPresets(
-    provider: AiProviderType,
-    fetchedOpenRouterModels: List<String> = emptyList(),
-    freeModelIds: Set<String> = emptySet()
-): List<AssistantPreset> {
-    val recommendedModels = recommendedModelChoices(
-        provider = provider,
-        fetchedOpenRouterModels = fetchedOpenRouterModels,
-        freeModelIds = freeModelIds
-    )
-    val fallbackModel = recommendedModels.firstOrNull()?.id.orEmpty()
-    val visionModel = recommendedModels.firstOrNull { it.supportsVision }?.id ?: fallbackModel
-    val fastModel = recommendedModels
-        .firstOrNull { it.label.contains("Fast", ignoreCase = true) }
-        ?.id ?: fallbackModel
-
-    return listOf(
-        AssistantPreset(
-            title = "General",
-            subtitle = "Everyday questions and quick help",
-            suggestedName = "General Assistant",
-            systemPrompt = "You are a helpful assistant. Be clear, direct, and practical.",
-            temperature = 0.6f,
-            recommendedModelId = fallbackModel
-        ),
-        AssistantPreset(
-            title = "Research",
-            subtitle = "Structured summaries and careful comparisons",
-            suggestedName = "Research Assistant",
-            systemPrompt = "You are a careful research assistant. Summarize clearly, compare options fairly, and call out uncertainty when details are missing.",
-            temperature = 0.4f,
-            recommendedModelId = fallbackModel
-        ),
-        AssistantPreset(
-            title = "Writing",
-            subtitle = "Drafting, rewriting, and tone polishing",
-            suggestedName = "Writing Assistant",
-            systemPrompt = "You are a writing assistant. Improve clarity, structure, and tone while preserving the user's intent.",
-            temperature = 0.8f,
-            recommendedModelId = fastModel
-        ),
-        AssistantPreset(
-            title = "Vision",
-            subtitle = "Screenshots, photos, and visual questions",
-            suggestedName = "Vision Assistant",
-            systemPrompt = "You are a precise visual assistant. When an image is provided, describe what you see, extract useful details, and answer the user's question directly.",
-            temperature = 0.3f,
-            recommendedModelId = visionModel
-        )
-    )
 }
 
 fun assistantSummary(agent: AgentConfig): String = when {

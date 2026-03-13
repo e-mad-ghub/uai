@@ -12,6 +12,7 @@ import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
+import com.example.uai.data.repository.OpenRouterCatalogRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
@@ -25,7 +26,8 @@ class ConversationDetailViewModel(
     val conversationId: String,
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
-    private val httpClient: OkHttpClient
+    private val httpClient: OkHttpClient,
+    private val openRouterCatalogRepository: OpenRouterCatalogRepository
 ) : ViewModel() {
 
     val conversation = repo.getConversation(conversationId)
@@ -158,7 +160,7 @@ class ConversationDetailViewModel(
 
             var accumulated = ""
             try {
-                AiProviderFactory.create(agent, httpClient)
+                AiProviderFactory.create(agent, httpClient, openRouterCatalogRepository)
                     .streamResponse(history, agent)
                     .catch { e -> emit(StreamChunk.Error(e)) }
                     .collect { chunk ->
@@ -206,10 +208,17 @@ class ConversationDetailViewModel(
         private val conversationId: String,
         private val repo: ConversationRepository,
         private val agentRepo: AgentRepository,
-        private val httpClient: OkHttpClient
+        private val httpClient: OkHttpClient,
+        private val openRouterCatalogRepository: OpenRouterCatalogRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
-            ConversationDetailViewModel(conversationId, repo, agentRepo, httpClient) as T
+            ConversationDetailViewModel(
+                conversationId,
+                repo,
+                agentRepo,
+                httpClient,
+                openRouterCatalogRepository
+            ) as T
     }
 }

@@ -1386,7 +1386,11 @@ class FloatingBubbleService : Service() {
                     }
                 }
 
-                val provider = AiProviderFactory.create(agent, container.okHttpClient)
+                val provider = AiProviderFactory.create(
+                    agent,
+                    container.okHttpClient,
+                    container.openRouterCatalogRepository
+                )
 
                 provider.streamResponse(history, agent)
                     .catch { e -> emit(StreamChunk.Error(e)) }

@@ -1,6 +1,7 @@
 package com.example.uai.ai
 
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.repository.OpenRouterCatalogRepository
 import com.example.uai.data.model.isOpenRouterFreeModel
 import com.example.uai.data.model.openRouterFreeFallbackModels
 import com.example.uai.data.model.shouldRetryOpenRouterFreeFallback
@@ -14,7 +15,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-class OpenRouterProvider(client: OkHttpClient) : AiProvider {
+class OpenRouterProvider(
+    client: OkHttpClient,
+    private val openRouterCatalogRepository: OpenRouterCatalogRepository? = null
+) : AiProvider {
 
     private val routedClient = client.newBuilder()
         .addInterceptor { chain ->
@@ -42,7 +46,12 @@ class OpenRouterProvider(client: OkHttpClient) : AiProvider {
         }
 
         val requiresVision = messages.any { it.images.isNotEmpty() }
+        val catalogEntries = openRouterCatalogRepository
+            ?.refreshCatalogIfStale()
+            ?.models
+            .orEmpty()
         val candidates = openRouterFreeFallbackModels(
+            catalogEntries = catalogEntries,
             currentModel = config.model,
             requireVision = requiresVision
         )

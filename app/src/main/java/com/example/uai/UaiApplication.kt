@@ -6,9 +6,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Bundle
 import android.os.Build
+import com.example.uai.data.model.AiProviderType
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class UaiApplication : Application() {
 
@@ -17,10 +23,31 @@ class UaiApplication : Application() {
     private val _isAppUiVisible = MutableStateFlow(false)
     val isAppUiVisible: StateFlow<Boolean> = _isAppUiVisible.asStateFlow()
     private var startedActivityCount = 0
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        applicationScope.launch {
+            container.openRouterCatalogRepository.refreshCatalogIfStale()
+            val agents = container.agentRepository.agentsFlow.first()
+            val apiKeysByProvider = agents
+                .filter { it.apiKey.isNotBlank() }
+                .associateBy { it.provider }
+
+            apiKeysByProvider[AiProviderType.OPENAI]?.let { agent ->
+                container.providerModelCatalogRepository.refreshCatalogIfStale(
+                    provider = AiProviderType.OPENAI,
+                    apiKey = agent.apiKey
+                )
+            }
+            apiKeysByProvider[AiProviderType.ANTHROPIC]?.let { agent ->
+                container.providerModelCatalogRepository.refreshCatalogIfStale(
+                    provider = AiProviderType.ANTHROPIC,
+                    apiKey = agent.apiKey
+                )
+            }
+        }
         createNotificationChannel()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {

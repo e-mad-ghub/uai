@@ -7,14 +7,17 @@ import com.example.uai.ai.httpErrorMessage
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.OPENROUTER_FREE_ROUTER_MODEL
+import com.example.uai.data.model.OpenRouterCatalogEntry
 import com.example.uai.data.model.isOpenRouterFreeModel
 import com.example.uai.data.model.openRouterFreeFallbackModels
 import com.example.uai.data.model.preferredOpenRouterVisionFreeModel
 import com.example.uai.data.model.shouldRetryOpenRouterFreeFallback
 import com.example.uai.data.repository.AgentRepository
-import com.google.gson.Gson
-import com.google.gson.JsonObject
+import com.example.uai.data.repository.OpenRouterCatalogRepository
+import com.example.uai.data.repository.ProviderModelCatalogRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -37,7 +40,9 @@ sealed class ConnectionTestState {
 class AgentEditViewModel(
     private val repo: AgentRepository,
     private val agentId: String?,
-    private val httpClient: OkHttpClient
+    private val httpClient: OkHttpClient,
+    private val openRouterCatalogRepository: OpenRouterCatalogRepository,
+    private val providerModelCatalogRepository: ProviderModelCatalogRepository
 ) : ViewModel() {
 
     val isEditing: Boolean = agentId != null
@@ -51,8 +56,14 @@ class AgentEditViewModel(
     private val _openRouterModels = MutableStateFlow<List<String>>(emptyList())
     val openRouterModels: StateFlow<List<String>> = _openRouterModels
 
+    private val _openRouterCatalogEntries = MutableStateFlow<List<OpenRouterCatalogEntry>>(emptyList())
+    val openRouterCatalogEntries: StateFlow<List<OpenRouterCatalogEntry>> = _openRouterCatalogEntries
+
     private val _freeModelIds = MutableStateFlow<Set<String>>(emptySet())
     val freeModelIds: StateFlow<Set<String>> = _freeModelIds
+
+    private val _providerModels = MutableStateFlow<List<String>>(emptyList())
+    val providerModels: StateFlow<List<String>> = _providerModels
 
     private val _isLoadingModels = MutableStateFlow(false)
     val isLoadingModels: StateFlow<Boolean> = _isLoadingModels
@@ -60,19 +71,65 @@ class AgentEditViewModel(
     private val _connectionTestState = MutableStateFlow<ConnectionTestState>(ConnectionTestState.Idle)
     val connectionTestState: StateFlow<ConnectionTestState> = _connectionTestState
 
+    private var openAiModels: List<String> = emptyList()
+    private var anthropicModels: List<String> = emptyList()
+    private var modelRefreshJob: Job? = null
+
     init {
         if (agentId != null) {
             viewModelScope.launch {
                 val found = repo.agentsFlow.first().firstOrNull { it.id == agentId }
-                if (found != null) _agent.value = found
+                if (found != null) {
+                    _agent.value = found
+                    updateCurrentProviderModels(found.provider)
+                    scheduleCurrentProviderModelRefresh(force = true)
+                }
             }
         }
-        fetchOpenRouterModels()
+        viewModelScope.launch {
+            openRouterCatalogRepository.catalogFlow.collect { catalog ->
+                _openRouterCatalogEntries.value = catalog.models
+                _openRouterModels.value = catalog.models.map { it.id }
+                _freeModelIds.value = catalog.models.filter { it.isFree }.map { it.id }.toSet()
+                if (_agent.value.provider == AiProviderType.OPENROUTER) {
+                    _providerModels.value = _openRouterModels.value
+                }
+            }
+        }
+        viewModelScope.launch {
+            providerModelCatalogRepository.catalogFlow(AiProviderType.OPENAI).collect { catalog ->
+                openAiModels = catalog.models.map { it.id }
+                if (_agent.value.provider == AiProviderType.OPENAI) {
+                    _providerModels.value = openAiModels
+                }
+            }
+        }
+        viewModelScope.launch {
+            providerModelCatalogRepository.catalogFlow(AiProviderType.ANTHROPIC).collect { catalog ->
+                anthropicModels = catalog.models.map { it.id }
+                if (_agent.value.provider == AiProviderType.ANTHROPIC) {
+                    _providerModels.value = anthropicModels
+                }
+            }
+        }
+        updateCurrentProviderModels(_agent.value.provider)
+        scheduleCurrentProviderModelRefresh(force = true)
     }
 
     fun update(block: AgentConfig.() -> AgentConfig) {
-        _agent.value = _agent.value.block()
+        val previous = _agent.value
+        val updated = previous.block()
+        _agent.value = updated
         _connectionTestState.value = ConnectionTestState.Idle
+        when {
+            previous.provider != updated.provider -> {
+                updateCurrentProviderModels(updated.provider)
+                scheduleCurrentProviderModelRefresh(force = true)
+            }
+            previous.apiKey != updated.apiKey -> {
+                scheduleCurrentProviderModelRefresh()
+            }
+        }
     }
 
     fun save(setActiveAfterSave: Boolean = false) {
@@ -97,6 +154,9 @@ class AgentEditViewModel(
         viewModelScope.launch {
             _connectionTestState.value = ConnectionTestState.Testing
             try {
+                if (agent.provider != AiProviderType.OPENROUTER) {
+                    refreshCurrentProviderModels(force = true)
+                }
                 _connectionTestState.value = if (
                     agent.provider == AiProviderType.OPENROUTER &&
                     isOpenRouterFreeModel(agent.model, _freeModelIds.value)
@@ -117,11 +177,14 @@ class AgentEditViewModel(
     private data class ProbeFailure(val code: Int, val message: String)
 
     private suspend fun testOpenRouterFreeConnection(agent: AgentConfig): ConnectionTestState {
+        val catalogEntries = openRouterCatalogRepository.getCatalog().models
         val requireVision = agent.model == preferredOpenRouterVisionFreeModel(
+            catalogEntries = catalogEntries,
             fetchedOpenRouterModels = _openRouterModels.value,
             freeModelIds = _freeModelIds.value
         )
         val candidates = openRouterFreeFallbackModels(
+            catalogEntries = catalogEntries,
             fetchedOpenRouterModels = _openRouterModels.value,
             freeModelIds = _freeModelIds.value,
             currentModel = agent.model,
@@ -221,51 +284,80 @@ class AgentEditViewModel(
         }
     }
 
-    private fun fetchOpenRouterModels() {
-        viewModelScope.launch {
-            _isLoadingModels.value = true
-            try {
-                val gson = Gson()
-                val (models, freeIds) = withContext(Dispatchers.IO) {
-                    val request = Request.Builder()
-                        .url("https://openrouter.ai/api/v1/models")
-                        .build()
-                    httpClient.newCall(request).execute().use { response ->
-                        if (!response.isSuccessful) return@withContext Pair(emptyList(), emptySet<String>())
-                        val body = response.body?.string() ?: return@withContext Pair(emptyList(), emptySet<String>())
-                        val root = gson.fromJson(body, JsonObject::class.java)
-                        val data = root.getAsJsonArray("data") ?: return@withContext Pair(emptyList(), emptySet<String>())
-                        val free = mutableListOf<String>()
-                        val paid = mutableListOf<String>()
-                        data.forEach { element ->
-                            val obj = element.asJsonObject
-                            val id = obj.get("id")?.asString ?: return@forEach
-                            val pricing = obj.getAsJsonObject("pricing")
-                            val promptPrice = pricing?.get("prompt")?.asString?.toDoubleOrNull() ?: 1.0
-                            val completionPrice = pricing?.get("completion")?.asString?.toDoubleOrNull() ?: 1.0
-                            if (promptPrice == 0.0 && completionPrice == 0.0) free.add(id)
-                            else paid.add(id)
-                        }
-                        Pair(free.sorted() + paid.sorted(), free.toSet())
-                    }
-                }
-                _openRouterModels.value = models
-                _freeModelIds.value = freeIds
-            } catch (_: Exception) {
-                // silently fall back to static list
-            } finally {
-                _isLoadingModels.value = false
-            }
+    private fun scheduleCurrentProviderModelRefresh(force: Boolean = false) {
+        modelRefreshJob?.cancel()
+        modelRefreshJob = viewModelScope.launch {
+            if (!force) delay(600)
+            refreshCurrentProviderModels(force = force)
+        }
+    }
+
+    private suspend fun refreshCurrentProviderModels(force: Boolean = false) {
+        when (val provider = _agent.value.provider) {
+            AiProviderType.OPENROUTER -> refreshOpenRouterModels(force = force)
+            AiProviderType.OPENAI, AiProviderType.ANTHROPIC -> refreshProviderModels(
+                provider = provider,
+                apiKey = _agent.value.apiKey,
+                force = force
+            )
+        }
+    }
+
+    private suspend fun refreshProviderModels(
+        provider: AiProviderType,
+        apiKey: String,
+        force: Boolean = false
+    ) {
+        _isLoadingModels.value = true
+        try {
+            providerModelCatalogRepository.refreshCatalogIfStale(
+                provider = provider,
+                apiKey = apiKey,
+                force = force
+            )
+        } catch (_: Exception) {
+            // silently fall back to cached or static list
+        } finally {
+            updateCurrentProviderModels(provider)
+            _isLoadingModels.value = false
+        }
+    }
+
+    private suspend fun refreshOpenRouterModels(force: Boolean = false) {
+        _isLoadingModels.value = true
+        try {
+            openRouterCatalogRepository.refreshCatalogIfStale(force = force || _openRouterModels.value.isEmpty())
+        } catch (_: Exception) {
+            // silently fall back to static list
+        } finally {
+            _providerModels.value = _openRouterModels.value
+            _isLoadingModels.value = false
+        }
+    }
+
+    private fun updateCurrentProviderModels(provider: AiProviderType) {
+        _providerModels.value = when (provider) {
+            AiProviderType.OPENROUTER -> _openRouterModels.value
+            AiProviderType.OPENAI -> openAiModels
+            AiProviderType.ANTHROPIC -> anthropicModels
         }
     }
 
     class Factory(
         private val repo: AgentRepository,
         private val agentId: String?,
-        private val httpClient: OkHttpClient
+        private val httpClient: OkHttpClient,
+        private val openRouterCatalogRepository: OpenRouterCatalogRepository,
+        private val providerModelCatalogRepository: ProviderModelCatalogRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
-            AgentEditViewModel(repo, agentId, httpClient) as T
+            AgentEditViewModel(
+                repo = repo,
+                agentId = agentId,
+                httpClient = httpClient,
+                openRouterCatalogRepository = openRouterCatalogRepository,
+                providerModelCatalogRepository = providerModelCatalogRepository
+            ) as T
     }
 }

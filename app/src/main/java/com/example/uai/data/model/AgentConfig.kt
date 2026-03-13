@@ -40,16 +40,8 @@ data class AgentConfig(
         }
     }
 
-    /** True when the selected model supports PDF/document upload. */
-    val supportsDocuments: Boolean get() = when (provider) {
-        AiProviderType.ANTHROPIC -> true
-        AiProviderType.OPENAI -> false
-        AiProviderType.OPENROUTER -> {
-            val m = model.lowercase()
-            m.startsWith("anthropic/") || m.contains("claude-3") ||
-            m.contains("claude-sonnet") || m.contains("claude-opus") || m.contains("claude-haiku")
-        }
-    }
+    /** Files are normalized into text context before they reach the provider. */
+    val supportsDocuments: Boolean get() = true
 
     companion object {
         val defaultModels = mapOf(

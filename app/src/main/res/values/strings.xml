@@ -113,8 +113,8 @@
     <string name="assistants_custom_model_loading_label">Custom model ID (loading…)</string>
     <string name="assistants_custom_model_hint">Use this only if you want a specific raw model name.</string>
     <string name="assistants_custom_model_fetching">Fetching models from %1$s…</string>
-    <string name="assistants_capability_images_documents">Images and documents</string>
+    <string name="assistants_capability_images_documents">Images and files</string>
     <string name="assistants_capability_images">Images</string>
-    <string name="assistants_capability_documents">Documents</string>
+    <string name="assistants_capability_documents">Files</string>
     <string name="assistants_capability_text_chat">Text chat</string>
 </resources>

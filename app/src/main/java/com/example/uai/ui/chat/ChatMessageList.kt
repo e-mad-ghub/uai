@@ -172,6 +172,16 @@ fun ChatMessageList(
     overlayContent: (@Composable BoxScope.(isAtBottom: Boolean) -> Unit)? = null,
     replyActionForMessage: (MessageEntity) -> (() -> Unit)? = { null }
 ) {
+    val showAssistantNames = remember(messages) {
+        messages
+            .asSequence()
+            .filter { it.role == "assistant" }
+            .map { it.agentName }
+            .distinct()
+            .take(2)
+            .count() > 1
+    }
+
     Box(modifier = modifier.fillMaxWidth()) {
         LazyColumn(
             state = behavior.listState,
@@ -196,8 +206,13 @@ fun ChatMessageList(
             }
 
             items(messages, key = { it.id }) { message ->
+                val displayMessage = if (!showAssistantNames && message.role == "assistant") {
+                    message.copy(agentName = null)
+                } else {
+                    message
+                }
                 MessageBubble(
-                    message = message,
+                    message = displayMessage,
                     thumbnails = messageThumbnails[message.id] ?: emptyList(),
                     onDoubleTap = onMessageDoubleTap,
                     onReply = replyActionForMessage(message)

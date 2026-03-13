@@ -27,11 +27,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.data.db.MessageEntity
-import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
 import com.example.uai.ui.chat.MessageBubble
+import com.example.uai.ui.chat.buildAttachedFileContext
+import com.example.uai.ui.chat.importFileAttachment
 import com.example.uai.ui.chat.persistImageAttachment
 import com.example.uai.ui.chat.rememberCameraPermissionRequester
 import com.example.uai.ui.chat.rememberChatMessageListBehavior
@@ -86,7 +88,6 @@ fun ConversationDetailScreen(
     // File attachment (text or PDF)
     var pendingFileName by remember { mutableStateOf<String?>(null) }
     var pendingFileText by remember { mutableStateOf<String?>(null) }
-    var pendingDocumentBase64 by remember { mutableStateOf<String?>(null) }
 
     fun clearAttachments() {
         pendingImageUri = null
@@ -94,17 +95,16 @@ fun ConversationDetailScreen(
         pendingImageBitmap = null
         pendingFileName = null
         pendingFileText = null
-        pendingDocumentBase64 = null
     }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        pendingFileName = null; pendingFileText = null; pendingDocumentBase64 = null
+        pendingFileName = null; pendingFileText = null
         pendingImageUri = uri
     }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
         if (bitmap != null) {
-            pendingFileName = null; pendingFileText = null; pendingDocumentBase64 = null
+            pendingFileName = null; pendingFileText = null
             pendingImageUri = null
             scope.launch(Dispatchers.IO) {
                 val out = ByteArrayOutputStream()
@@ -131,28 +131,17 @@ fun ConversationDetailScreen(
         if (uri == null) return@rememberLauncherForActivityResult
         pendingImageUri = null; pendingImageBase64 = null; pendingImageBitmap = null
         scope.launch {
-            val mimeType = context.contentResolver.getType(uri) ?: ""
-            val name = uri.lastPathSegment ?: "file"
-            when {
-                mimeType.startsWith("text/") -> {
-                    val text = withContext(Dispatchers.IO) {
-                        runCatching { context.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() } }.getOrNull()
-                    }
-                    if (text != null) { pendingFileName = name; pendingFileText = text }
-                    else snackbarHostState.showSnackbar("Could not read file.")
+            when (val result = importFileAttachment(context, uri)) {
+                is FileAttachmentImportResult.Success -> {
+                    pendingFileName = result.attachment.displayName
+                    pendingFileText = result.attachment.extractedText
                 }
-                mimeType == "application/pdf" -> {
-                    if (activeAgent?.provider == AiProviderType.ANTHROPIC) {
-                        val base64 = withContext(Dispatchers.IO) {
-                            runCatching { context.contentResolver.openInputStream(uri)?.use { Base64.encodeToString(it.readBytes(), Base64.NO_WRAP) } }.getOrNull()
-                        }
-                        if (base64 != null) { pendingFileName = name; pendingDocumentBase64 = base64 }
-                        else snackbarHostState.showSnackbar("Could not read PDF.")
-                    } else {
-                        snackbarHostState.showSnackbar("PDF upload is not supported by the current agent's model.")
-                    }
+                is FileAttachmentImportResult.Unsupported -> {
+                    snackbarHostState.showSnackbar(result.message)
                 }
-                else -> snackbarHostState.showSnackbar("Unsupported file type. Supported: images, text files, and PDF.")
+                is FileAttachmentImportResult.Failure -> {
+                    snackbarHostState.showSnackbar(result.message)
+                }
             }
         }
     }
@@ -170,16 +159,23 @@ fun ConversationDetailScreen(
     fun doSend() {
         val image = pendingImageBase64
         val existingImageUri = pendingImageUri?.toString()
-        val doc = pendingDocumentBase64
-        val fileContext = pendingFileText?.let { "```\n$it\n```\n\n" } ?: ""
+        val fileContext = pendingFileText?.let {
+            buildAttachedFileContext(pendingFileName ?: "file", it)
+        } ?: ""
         val replyContext = replyToMessage?.let {
             "> ${it.content.take(200).replace("\n", " ")}\n\n"
         } ?: ""
         val fullText = replyContext + fileContext + inputText
+        val titleHint = inputText.trim().ifBlank { pendingFileName.orEmpty() }
         val persistedImageUri = image?.let { persistImageAttachment(context, it) }
         clearAttachments()
         replyToMessage = null
-        viewModel.sendMessage(fullText, image, persistedImageUri ?: existingImageUri, doc)
+        viewModel.sendMessage(
+            text = fullText,
+            imageBase64 = image,
+            imageUri = persistedImageUri ?: existingImageUri,
+            titleHint = titleHint
+        )
     }
 
     val messageListBehavior = rememberChatMessageListBehavior(messages)
@@ -192,10 +188,14 @@ fun ConversationDetailScreen(
                 title = { Text(conversation?.title ?: "New Chat") },
                 navigationIcon = { IconButton(onClick = openDrawer) { Icon(Icons.Default.Menu, "Menu") } },
                 actions = {
-                    if (activeAgent != null) {
+                    if (agents.isNotEmpty()) {
                         Box {
                             TextButton(onClick = { agentMenuExpanded = true }) {
-                                Text(activeAgent!!.name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                Text(
+                                    activeAgent?.name ?: "Select assistant",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                                 Icon(Icons.Default.ArrowDropDown, "Switch agent", tint = MaterialTheme.colorScheme.primary)
                             }
                             DropdownMenu(expanded = agentMenuExpanded, onDismissRequest = { agentMenuExpanded = false }) {
@@ -255,6 +255,11 @@ fun ConversationDetailScreen(
             }
 
             if (activeAgent == null) {
+                val noAssistantMessage = when {
+                    agents.isEmpty() -> "Set up an assistant to start chatting."
+                    conversation != null || messages.isNotEmpty() -> "Choose an assistant for this conversation."
+                    else -> "Choose which assistant this new chat should use."
+                }
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier.fillMaxWidth()
@@ -267,10 +272,7 @@ fun ConversationDetailScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            if (agents.isEmpty())
-                                "Set up an assistant to start chatting."
-                            else
-                                "Choose which assistant new chats should use.",
+                            noAssistantMessage,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f)
@@ -345,14 +347,14 @@ private fun AssistantSetupPromptCard(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                if (hasAnyAssistants) "Pick your default assistant"
+                if (hasAnyAssistants) "Choose an assistant for this chat"
                 else "Create your first assistant",
                 style = MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.Center
             )
             Text(
                 if (hasAnyAssistants)
-                    "You already have assistants configured, but new chats need one selected as the default."
+                    "You already have assistants configured. Choose one for this chat from the top bar, or open Assistants to set a default for future chats."
                 else
                     "Add one connection, choose a role, and SideAgent will be ready for new chats.",
                 style = MaterialTheme.typography.bodyMedium,

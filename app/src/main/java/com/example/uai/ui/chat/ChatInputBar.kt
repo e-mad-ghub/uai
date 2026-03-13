@@ -223,7 +223,7 @@ fun ChatInputBar(
                             onClick = { onPickGallery(); attachMenuExpanded = false }
                         )
                         DropdownMenuItem(
-                            text = { Text("Document (text / PDF)") },
+                            text = { Text("File (PDF, Office, text)") },
                             leadingIcon = { Icon(Icons.Default.AttachFile, null) },
                             onClick = { onPickFile(); attachMenuExpanded = false }
                         )

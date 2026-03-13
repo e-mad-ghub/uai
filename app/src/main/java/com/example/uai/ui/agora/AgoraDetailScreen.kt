@@ -30,9 +30,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
 import com.example.uai.data.db.MessageEntity
+import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
 import com.example.uai.ui.chat.MessageBubble
+import com.example.uai.ui.chat.buildAttachedFileContext
+import com.example.uai.ui.chat.importFileAttachment
 import com.example.uai.ui.chat.persistImageAttachment
 import com.example.uai.ui.chat.rememberCameraPermissionRequester
 import com.example.uai.ui.chat.rememberChatMessageListBehavior
@@ -128,7 +131,6 @@ fun AgoraDetailScreen(
     // File attachment (text or PDF)
     var pendingFileName by remember { mutableStateOf<String?>(null) }
     var pendingFileText by remember { mutableStateOf<String?>(null) }
-    var pendingDocumentBase64 by remember { mutableStateOf<String?>(null) }
 
     // Room settings bottom sheet
     var showSettings by remember { mutableStateOf(false) }
@@ -139,7 +141,6 @@ fun AgoraDetailScreen(
         pendingImageBitmap = null
         pendingFileName = null
         pendingFileText = null
-        pendingDocumentBase64 = null
     }
 
     // Error events
@@ -158,13 +159,13 @@ fun AgoraDetailScreen(
     }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        pendingFileName = null; pendingFileText = null; pendingDocumentBase64 = null
+        pendingFileName = null; pendingFileText = null
         pendingImageUri = uri
     }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
         if (bitmap != null) {
-            pendingFileName = null; pendingFileText = null; pendingDocumentBase64 = null
+            pendingFileName = null; pendingFileText = null
             pendingImageUri = null
             scope.launch(Dispatchers.IO) {
                 val out = ByteArrayOutputStream()
@@ -191,24 +192,17 @@ fun AgoraDetailScreen(
         if (uri == null) return@rememberLauncherForActivityResult
         pendingImageUri = null; pendingImageBase64 = null; pendingImageBitmap = null
         scope.launch {
-            val mimeType = context.contentResolver.getType(uri) ?: ""
-            val name = uri.lastPathSegment ?: "file"
-            when {
-                mimeType.startsWith("text/") -> {
-                    val text = withContext(Dispatchers.IO) {
-                        runCatching { context.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() } }.getOrNull()
-                    }
-                    if (text != null) { pendingFileName = name; pendingFileText = text }
-                    else snackbarHostState.showSnackbar("Could not read file.")
+            when (val result = importFileAttachment(context, uri)) {
+                is FileAttachmentImportResult.Success -> {
+                    pendingFileName = result.attachment.displayName
+                    pendingFileText = result.attachment.extractedText
                 }
-                mimeType == "application/pdf" -> {
-                    val base64 = withContext(Dispatchers.IO) {
-                        runCatching { context.contentResolver.openInputStream(uri)?.use { Base64.encodeToString(it.readBytes(), Base64.NO_WRAP) } }.getOrNull()
-                    }
-                    if (base64 != null) { pendingFileName = name; pendingDocumentBase64 = base64 }
-                    else snackbarHostState.showSnackbar("Could not read PDF.")
+                is FileAttachmentImportResult.Unsupported -> {
+                    snackbarHostState.showSnackbar(result.message)
                 }
-                else -> snackbarHostState.showSnackbar("Unsupported file type. Supported: images, text files, PDF.")
+                is FileAttachmentImportResult.Failure -> {
+                    snackbarHostState.showSnackbar(result.message)
+                }
             }
         }
     }
@@ -224,15 +218,16 @@ fun AgoraDetailScreen(
     fun doSend() {
         val image = pendingImageBase64
         val existingImageUri = pendingImageUri?.toString()
-        val doc = pendingDocumentBase64
         val replyTarget = replyToMessage
-        val fileContext = pendingFileText?.let { "```\n$it\n```\n\n" } ?: ""
+        val fileContext = pendingFileText?.let {
+            buildAttachedFileContext(pendingFileName ?: "file", it)
+        } ?: ""
         val replyContext = replyTarget?.let { "> ${it.content.take(200).replace("\n", " ")}\n\n" } ?: ""
         val fullText = replyContext + fileContext + tfv.text
         val persistedImageUri = image?.let { persistImageAttachment(context, it) }
         clearAttachment()
         replyToMessage = null
-        viewModel.sendMessage(fullText, image, persistedImageUri ?: existingImageUri, replyTarget, doc)
+        viewModel.sendMessage(fullText, image, persistedImageUri ?: existingImageUri, replyTarget)
     }
 
     val messageListBehavior = rememberChatMessageListBehavior(messages)

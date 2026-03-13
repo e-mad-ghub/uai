@@ -65,6 +65,8 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
+    // PDF text extraction
+    implementation(libs.pdfbox.android)
     // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

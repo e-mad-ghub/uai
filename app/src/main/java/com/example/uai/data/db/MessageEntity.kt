@@ -25,7 +25,7 @@ data class MessageEntity(
     val createdAt: Long,
     val isStreaming: Boolean = false,
     val imageUri: String? = null,
-    val agentName: String? = null,   // non-null only for Agora assistant messages
+    val agentName: String? = null,   // set when the reply should keep its assistant identity in the transcript
     val responseModelId: String? = null,
     val responseModelIsFallback: Boolean = false
 )

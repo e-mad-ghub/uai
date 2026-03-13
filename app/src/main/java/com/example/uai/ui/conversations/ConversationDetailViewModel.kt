@@ -39,8 +39,23 @@ class ConversationDetailViewModel(
     val agents = agentRepo.agentsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val activeAgent = agentRepo.activeAgentFlow
+    private val defaultAgent = agentRepo.activeAgentFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    private val draftAgentId = MutableStateFlow<String?>(null)
+
+    val activeAgent = combine(
+        conversation,
+        agents,
+        defaultAgent,
+        draftAgentId
+    ) { conversation, agents, defaultAgent, draftAgentId ->
+        when {
+            conversation != null -> agents.firstOrNull { it.id == conversation.agentId }
+            draftAgentId != null -> agents.firstOrNull { it.id == draftAgentId }
+            else -> defaultAgent
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
@@ -56,7 +71,21 @@ class ConversationDetailViewModel(
     fun onInputChange(text: String) { _inputText.value = text }
 
     fun setActiveAgent(agent: AgentConfig) {
-        viewModelScope.launch { agentRepo.setActiveAgent(agent.id) }
+        viewModelScope.launch {
+            val existingConversation = conversation.value
+            if (existingConversation != null) {
+                if (existingConversation.agentId != agent.id || existingConversation.agentName != agent.name) {
+                    repo.upsertConversation(
+                        existingConversation.copy(
+                            agentId = agent.id,
+                            agentName = agent.name
+                        )
+                    )
+                }
+            } else {
+                draftAgentId.value = agent.id
+            }
+        }
     }
 
     fun stopResponse() {
@@ -68,10 +97,10 @@ class ConversationDetailViewModel(
         text: String,
         imageBase64: String? = null,
         imageUri: String? = null,
-        documentBase64: String? = null
+        titleHint: String? = null
     ) {
         val agent = activeAgent.value ?: return
-        if ((text.isBlank() && imageBase64 == null && documentBase64 == null) || _isLoading.value) return
+        if ((text.isBlank() && imageBase64 == null) || _isLoading.value) return
 
         streamingJob = viewModelScope.launch {
             _isLoading.value = true
@@ -80,10 +109,20 @@ class ConversationDetailViewModel(
             val isFirstMessage = messages.value.isEmpty()
 
             if (isFirstMessage) {
-                val title = text.trim().ifBlank { if (documentBase64 != null) "Document" else "Image" }.take(60)
+                val title = titleHint
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.take(60)
+                    ?: text.trim().ifBlank { if (imageBase64 != null) "Image" else "Chat" }.take(60)
                 val existing = conversation.value
                 if (existing != null) {
-                    repo.upsertConversation(existing.copy(title = title))
+                    repo.upsertConversation(
+                        existing.copy(
+                            title = title,
+                            agentId = agent.id,
+                            agentName = agent.name
+                        )
+                    )
                 } else {
                     repo.upsertConversation(
                         ConversationEntity(
@@ -117,7 +156,8 @@ class ConversationDetailViewModel(
                     role = "assistant",
                     content = "",
                     createdAt = System.currentTimeMillis(),
-                    isStreaming = true
+                    isStreaming = true,
+                    agentName = agent.name
                 )
             )
 
@@ -131,17 +171,8 @@ class ConversationDetailViewModel(
                 repo.touchConversation(conversationId)
                 return@launch
             }
-            if (documentBase64 != null && agent.provider.name != "ANTHROPIC") {
-                repo.updateMessageContent(
-                    assistantId,
-                    "I don't support PDF documents. PDF upload requires a model with document analysis capabilities.",
-                    false
-                )
-                repo.touchConversation(conversationId)
-                return@launch
-            }
 
-            // Attach image/document to the latest user message for the API call
+            // Attach image input to the latest user message for the API call.
             val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
             val history = dbHistory.mapIndexed { index, msg ->
                 if (index == dbHistory.lastIndex && msg.role == "user") {
@@ -150,7 +181,6 @@ class ConversationDetailViewModel(
                             msg.role, msg.content,
                             images = listOf(com.example.uai.ai.ImageAttachment(imageBase64))
                         )
-                        documentBase64 != null -> ChatMessage(msg.role, msg.content, documentBase64 = documentBase64)
                         else -> ChatMessage(msg.role, msg.content)
                     }
                 } else {

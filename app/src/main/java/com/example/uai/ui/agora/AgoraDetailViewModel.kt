@@ -8,7 +8,6 @@ import com.example.uai.ai.ChatMessage
 import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
-import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
@@ -86,8 +85,7 @@ class AgoraDetailViewModel(
         text: String,
         imageBase64: String? = null,
         imageUri: String? = null,
-        replyToMessage: MessageEntity? = null,
-        documentBase64: String? = null
+        replyToMessage: MessageEntity? = null
     ) {
         val conv = conversation.value ?: return
         if ((text.isBlank() && imageBase64 == null) || _isLoading.value) return
@@ -165,8 +163,6 @@ class AgoraDetailViewModel(
                     val unsupportedMsg: String? = when {
                         imageBase64 != null && !agent.canHandleImageRequests() ->
                             "I don't support image analysis with \"${agent.model}\"."
-                        documentBase64 != null && agent.provider != AiProviderType.ANTHROPIC ->
-                            "I don't support PDF documents. PDF upload requires a model with document analysis capabilities."
                         else -> null
                     }
                     if (unsupportedMsg != null) {
@@ -217,8 +213,6 @@ class AgoraDetailViewModel(
                                 isLastRound && imageBase64 != null ->
                                     add(ChatMessage("user", userText,
                                         images = listOf(com.example.uai.ai.ImageAttachment(imageBase64))))
-                                isLastRound && documentBase64 != null ->
-                                    add(ChatMessage("user", userText, documentBase64 = documentBase64))
                                 else ->
                                     add(ChatMessage("user", userText))
                             }

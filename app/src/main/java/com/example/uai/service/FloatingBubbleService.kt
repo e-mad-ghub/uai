@@ -68,8 +68,11 @@ import com.example.uai.ui.MediaPickerActivity
 import com.example.uai.ui.OverlayScreenCaptureActivity
 import com.example.uai.ui.OverlayScreenCaptureOutcome
 import com.example.uai.ui.chat.persistImageAttachment
+import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.BubbleContent
+import com.example.uai.ui.chat.buildAttachedFileContext
 import com.example.uai.ui.chat.ChatPanel
+import com.example.uai.ui.chat.importFileAttachment
 import com.example.uai.ui.theme.UaiTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -119,7 +122,6 @@ class FloatingBubbleService : Service() {
     private val messageThumbnails = mutableStateMapOf<String, List<ImageBitmap>>()
     private var pendingFileName by mutableStateOf<String?>(null)
     private var pendingFileText by mutableStateOf<String?>(null)
-    private var pendingDocumentBase64 by mutableStateOf<String?>(null)
     private var isOverlayScreenshotCaptureInProgress = false
 
     private var bubbleView: ComposeView? = null
@@ -138,6 +140,7 @@ class FloatingBubbleService : Service() {
     private var currentConversationId: String? = null
     private var currentConversationMessagesJob: Job? = null
     private var prefersDraftConversation = false
+    private var draftAgentId: String? = null
     private var screenshotRestoreJob: Job? = null
     private var streamingJob: Job? = null
     private var isChatPanelAnimating = false
@@ -196,15 +199,9 @@ class FloatingBubbleService : Service() {
 
         container.agentRepository.activeAgentFlow
             .onEach { agent ->
-                val previousAgentId = activeAgent?.id
                 activeAgent = agent
-                if (agent?.id != previousAgentId) {
-                    streamingJob?.cancel()
-                    streamingJob = null
-                    isLoading = false
-                    if (hasConversationSnapshot) {
-                        synchronizeConversationSelection()
-                    }
+                if (hasConversationSnapshot) {
+                    synchronizeConversationSelection()
                 }
             }
             .catch { }
@@ -251,24 +248,35 @@ class FloatingBubbleService : Service() {
 
     // ----- Conversation sync -----
 
-    private fun conversationsForActiveAgent(): List<ConversationEntity> {
-        val agentId = activeAgent?.id ?: return emptyList()
+    private fun currentConversationEntity(): ConversationEntity? {
+        val conversationId = currentConversationId ?: return null
+        return allConversations.firstOrNull { !it.isAgora && it.id == conversationId }
+    }
+
+    private fun conversationsForOverlay(): List<ConversationEntity> {
         return allConversations
-            .filter { !it.isAgora && it.agentId == agentId }
+            .filter { !it.isAgora }
             .sortedWith(compareByDescending<ConversationEntity> { it.isPinned }.thenByDescending { it.updatedAt })
     }
 
-    private fun synchronizeConversationSelection() {
-        availableConversations = conversationsForActiveAgent()
-        val currentConversation = currentConversationId?.let { id ->
-            availableConversations.firstOrNull { it.id == id }
+    private fun selectedAgentForCurrentContext(): AgentConfig? {
+        currentConversationEntity()?.let { conversation ->
+            return allAgents.firstOrNull { it.id == conversation.agentId }
         }
 
+        val draftAgentId = draftAgentId
+        if (draftAgentId != null) {
+            return allAgents.firstOrNull { it.id == draftAgentId }
+        }
+
+        return activeAgent
+    }
+
+    private fun synchronizeConversationSelection() {
+        availableConversations = conversationsForOverlay()
+        val currentConversation = currentConversationEntity()
+
         when {
-            activeAgent == null -> {
-                prefersDraftConversation = true
-                switchConversation(null, force = currentConversationId != null || chatMessages.isNotEmpty())
-            }
             currentConversation != null -> {
                 if (currentConversationMessagesJob == null) {
                     switchConversation(currentConversation.id, force = true)
@@ -561,7 +569,8 @@ class FloatingBubbleService : Service() {
                         messages = chatMessages,
                         inputText = inputText,
                         isLoading = isLoading,
-                        agentName = activeAgent?.name ?: "Agent",
+                        agentName = selectedAgentForCurrentContext()?.name ?: "Select assistant",
+                        hasSelectedAgent = selectedAgentForCurrentContext() != null,
                         agents = allAgents,
                         conversations = availableConversations,
                         currentConversationId = currentConversationId,
@@ -577,8 +586,18 @@ class FloatingBubbleService : Service() {
                         onOpenInApp = ::openInApp,
                         onAgentSelect = { agent ->
                             serviceScope.launch {
-                                (application as UaiApplication).container
-                                    .agentRepository.setActiveAgent(agent.id)
+                                val conversation = currentConversationEntity()
+                                val container = (application as UaiApplication).container
+                                if (conversation != null) {
+                                    container.conversationRepository.upsertConversation(
+                                        conversation.copy(
+                                            agentId = agent.id,
+                                            agentName = agent.name
+                                        )
+                                    )
+                                } else {
+                                    draftAgentId = agent.id
+                                }
                             }
                         },
                         onConversationSelect = { conversationId ->
@@ -963,7 +982,6 @@ class FloatingBubbleService : Service() {
         pendingImages.clear()
         pendingFileName = null
         pendingFileText = null
-        pendingDocumentBase64 = null
     }
 
     private fun launchGalleryPicker() {
@@ -1023,7 +1041,6 @@ class FloatingBubbleService : Service() {
                 serviceScope.launch {
                     // Process then always restore the panel
                     val mimeType = contentResolver.getType(uri) ?: ""
-                    val name = uri.lastPathSegment ?: "file"
                     when {
                         mimeType.startsWith("image/") -> {
                             val (base64, bitmap) = encodeImageFromUri(uri)
@@ -1032,42 +1049,35 @@ class FloatingBubbleService : Service() {
                                 pendingImages.clear()
                                 pendingFileName = null
                                 pendingFileText = null
-                                pendingDocumentBase64 = null
                                 val persistedUri = withContext(Dispatchers.IO) {
                                     persistImageAttachment(applicationContext, base64)
                                 } ?: uri.toString()
                                 pendingImages.add(Triple(base64, bitmap, persistedUri))
                             }
                         }
-                        mimeType.startsWith("text/") -> {
-                            val text = withContext(Dispatchers.IO) {
-                                runCatching {
-                                    contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
-                                }.getOrNull()
-                            }
-                            if (text != null) {
-                                pendingImages.clear()
-                                pendingFileName = name
-                                pendingFileText = text
-                                pendingDocumentBase64 = null
-                            }
-                        }
-                        mimeType == "application/pdf" -> {
-                            val base64 = withContext(Dispatchers.IO) {
-                                runCatching {
-                                    contentResolver.openInputStream(uri)?.use {
-                                        Base64.encodeToString(it.readBytes(), Base64.NO_WRAP)
-                                    }
-                                }.getOrNull()
-                            }
-                            if (base64 != null) {
-                                pendingImages.clear()
-                                pendingFileName = name
-                                pendingFileText = null
-                                pendingDocumentBase64 = base64
+                        else -> {
+                            when (val result = importFileAttachment(applicationContext, uri)) {
+                                is FileAttachmentImportResult.Success -> {
+                                    pendingImages.clear()
+                                    pendingFileName = result.attachment.displayName
+                                    pendingFileText = result.attachment.extractedText
+                                }
+                                is FileAttachmentImportResult.Unsupported -> {
+                                    Toast.makeText(
+                                        applicationContext,
+                                        result.message,
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                                is FileAttachmentImportResult.Failure -> {
+                                    Toast.makeText(
+                                        applicationContext,
+                                        result.message,
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
                         }
-                        else -> { /* unsupported — silently ignore */ }
                     }
                     restoreOverlaysAfterExternalFlow(
                         flowGeneration = flowGeneration,
@@ -1279,6 +1289,7 @@ class FloatingBubbleService : Service() {
         isLoading = false
         currentConversationId = null
         prefersDraftConversation = true
+        draftAgentId = null
         isOverlayScreenshotCaptureInProgress = false
         pendingPanelRestoreAfterExternalFlow = false
         removeSafely(dismissZoneView, immediate = true)
@@ -1307,13 +1318,15 @@ class FloatingBubbleService : Service() {
     }
 
     private fun sendMessage(text: String) {
-        val agent = activeAgent
+        val agent = selectedAgentForCurrentContext()
         val imageList = pendingImages.toList()
-        val docBase64 = pendingDocumentBase64
-        val fileCtx = pendingFileText?.let { "```\n$it\n```\n\n" } ?: ""
+        val fileCtx = pendingFileText?.let {
+            buildAttachedFileContext(pendingFileName ?: "file", it)
+        } ?: ""
         val fullText = fileCtx + text
+        val titleHint = text.trim().ifBlank { pendingFileName.orEmpty() }
 
-        if ((fullText.isBlank() && imageList.isEmpty() && docBase64 == null) || isLoading || agent == null) return
+        if ((fullText.isBlank() && imageList.isEmpty()) || isLoading || agent == null) return
 
         // Clear attachment before starting the stream (don't wait for it)
         clearAttachment()
@@ -1329,9 +1342,13 @@ class FloatingBubbleService : Service() {
 
             try {
                 if (currentConversationId == null) {
-                    val title = fullText.trim().ifBlank {
-                        if (docBase64 != null) "Document" else if (imageList.isNotEmpty()) "Image" else "Chat"
-                    }.take(60)
+                    val title = titleHint
+                        .trim()
+                        .takeIf { it.isNotBlank() }
+                        ?.take(60)
+                        ?: fullText.trim().ifBlank {
+                            if (imageList.isNotEmpty()) "Image" else "Chat"
+                        }.take(60)
                     val conv = ConversationEntity(
                         id = UUID.randomUUID().toString(),
                         title = title,
@@ -1389,7 +1406,7 @@ class FloatingBubbleService : Service() {
                     return@launch
                 }
 
-                // Build history, attaching images/document to the last user message
+                // Build history, attaching images to the last user message.
                 val allHistory = chatMessages.filter { !it.isStreaming }
                 val history = allHistory.mapIndexed { idx, msg ->
                     if (idx == allHistory.lastIndex && msg.role == "user") {
@@ -1398,7 +1415,6 @@ class FloatingBubbleService : Service() {
                                 msg.role, msg.content,
                                 images = imageList.map { ImageAttachment(it.first) }
                             )
-                            docBase64 != null      -> ChatMessage(msg.role, msg.content, documentBase64 = docBase64)
                             else                   -> ChatMessage(msg.role, msg.content)
                         }
                     } else {

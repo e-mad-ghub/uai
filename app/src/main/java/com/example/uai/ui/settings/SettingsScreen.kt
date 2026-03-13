@@ -109,7 +109,7 @@ fun SettingsScreen(
                 // Prevent the UI from showing the mini chat as enabled when Android permission
                 // was revoked outside the app.
                 if (!overlayPermissionGranted && currentBubbleEnabled) {
-                    pendingEnableMiniChat = true
+                    pendingEnableMiniChat = false
                     showOverlayPermissionCallout = true
                     viewModel.setBubbleEnabled(false)
                     FloatingBubbleService.stopService(context)

@@ -190,7 +190,8 @@ fun recommendedModelChoices(
                     } else {
                         "Best default for general chat."
                     },
-                    supportsVision = balancedVision
+                    supportsVision = balancedVision,
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = fastModel,
@@ -200,7 +201,8 @@ fun recommendedModelChoices(
                     } else {
                         "Lower cost and quick replies for everyday questions."
                     },
-                    supportsVision = fastVision
+                    supportsVision = fastVision,
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = detailedModel,
@@ -210,7 +212,8 @@ fun recommendedModelChoices(
                     } else {
                         "Useful when you want more deliberate answers."
                     },
-                    supportsVision = detailedVision
+                    supportsVision = detailedVision,
+                    supportsDocuments = true
                 )
             )
         }
@@ -274,30 +277,34 @@ fun recommendedModelChoices(
                     description = "Best zero-cost option for chat and images. SideAgent automatically uses the best available free model for the request.",
                     isRecommended = true,
                     isFree = true,
-                    supportsVision = AgentConfig(provider = provider, model = fastFreeModel).canHandleImageRequests()
+                    supportsVision = AgentConfig(provider = provider, model = fastFreeModel).canHandleImageRequests(),
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = reasoningFreeModel,
                     label = "Reasoning free",
                     description = "Best for step-by-step thinking when you want a free model.",
-                    isFree = true
+                    isFree = true,
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = visionFreeModel,
                     label = "Vision free",
                     description = "Prioritizes free vision models first for screenshots and photos.",
                     isFree = true,
-                    supportsVision = AgentConfig(provider = provider, model = visionFreeModel).canHandleImageRequests()
+                    supportsVision = AgentConfig(provider = provider, model = visionFreeModel).canHandleImageRequests(),
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = "openai/gpt-4o",
                     label = "Balanced",
                     description = "Reliable all-round choice with image support.",
-                    supportsVision = true
+                    supportsVision = true,
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = "anthropic/claude-3.5-sonnet",
-                    label = "Documents",
+                    label = "Files",
                     description = "Strong option for file-heavy work through OpenRouter.",
                     supportsVision = true,
                     supportsDocuments = true
@@ -348,8 +355,8 @@ fun defaultRecommendedModelId(
 }
 
 fun assistantSummary(agent: AgentConfig): String = when {
-    agent.canHandleImageRequests() && agent.supportsDocuments -> "Ready for chat, images, and documents."
-    agent.supportsDocuments -> "Strong for chat and document-based tasks."
+    agent.canHandleImageRequests() && agent.supportsDocuments -> "Ready for chat, images, and files."
+    agent.supportsDocuments -> "Strong for chat and file-based tasks."
     agent.canHandleImageRequests() -> "Great for chat, screenshots, and photos."
     else -> "A good everyday assistant for text conversations."
 }

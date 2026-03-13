@@ -42,6 +42,7 @@ fun ChatPanel(
     inputText: String,
     isLoading: Boolean,
     agentName: String,
+    hasSelectedAgent: Boolean,
     agents: List<AgentConfig>,
     conversations: List<ConversationEntity>,
     currentConversationId: String?,
@@ -106,11 +107,11 @@ fun ChatPanel(
                         Box {
                             Row(
                                 modifier = Modifier
-                                    .clickable(enabled = agents.size > 1) { agentDropdownExpanded = true },
+                                    .clickable(enabled = agents.isNotEmpty()) { agentDropdownExpanded = true },
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(agentName, style = MaterialTheme.typography.titleMedium)
-                                if (agents.size > 1) {
+                                if (agents.isNotEmpty()) {
                                     Icon(
                                         Icons.Default.ArrowDropDown,
                                         contentDescription = "Select agent",
@@ -236,7 +237,11 @@ fun ChatPanel(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                "Start a conversation with $agentName",
+                                if (hasSelectedAgent) {
+                                    "Start a conversation with $agentName"
+                                } else {
+                                    "Choose an assistant to start this chat"
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(top = 56.dp)
@@ -296,7 +301,7 @@ fun ChatPanel(
                             replyToMessage = null
                         },
                         disableScreenshotRipple = true,
-                        sendEnabled = inputText.isNotBlank() || hasAttachment
+                        sendEnabled = (inputText.isNotBlank() || hasAttachment) && hasSelectedAgent
                     ) {
                         val placeholder = when {
                             pendingImages.size > 1 -> "Ask about these images…"

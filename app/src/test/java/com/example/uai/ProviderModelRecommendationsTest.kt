@@ -1,6 +1,7 @@
 package com.example.uai
 
 import com.example.uai.data.model.AiProviderType
+import com.example.uai.data.model.AgentConfig
 import com.example.uai.ui.agents.defaultRecommendedModelId
 import com.example.uai.ui.agents.recommendedModelChoices
 import org.junit.Assert.assertEquals
@@ -8,6 +9,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProviderModelRecommendationsTest {
+
+    @Test
+    fun openAiFallbackRecommendationUsesGpt5WhenLiveCatalogIsUnavailable() {
+        val selected = defaultRecommendedModelId(
+            provider = AiProviderType.OPENAI
+        )
+
+        assertEquals("gpt-5", selected)
+    }
 
     @Test
     fun openAiDefaultRecommendationPrefersBalancedGeneralModelFromLiveCatalog() {
@@ -57,6 +67,15 @@ class ProviderModelRecommendationsTest {
     }
 
     @Test
+    fun anthropicFallbackRecommendationUsesCurrentStarterModelWhenLiveCatalogIsUnavailable() {
+        val selected = defaultRecommendedModelId(
+            provider = AiProviderType.ANTHROPIC
+        )
+
+        assertEquals("claude-sonnet-4-6", selected)
+    }
+
+    @Test
     fun anthropicFallsBackToLatestAvailableModelWhenPreferredFamilyIsMissing() {
         val selected = defaultRecommendedModelId(
             provider = AiProviderType.ANTHROPIC,
@@ -83,5 +102,15 @@ class ProviderModelRecommendationsTest {
 
         assertEquals(3, choices.size)
         assertTrue(choices.map { it.id }.distinct().size == choices.size)
+    }
+
+    @Test
+    fun gpt5ModelsAreTreatedAsVisionCapableForOpenAiAssistants() {
+        val agent = AgentConfig(
+            provider = AiProviderType.OPENAI,
+            model = "gpt-5"
+        )
+
+        assertTrue(agent.supportsVision)
     }
 }

@@ -21,6 +21,7 @@ data class AgentConfig(
     val supportsVision: Boolean get() = when (provider) {
         AiProviderType.OPENAI -> {
             val m = model.lowercase()
+            m.contains("gpt-5") ||
             m.contains("gpt-4o") ||
                 m.contains("chatgpt-4o") ||
                 m.contains("gpt-4-turbo") ||
@@ -52,11 +53,18 @@ data class AgentConfig(
 
     companion object {
         val defaultModels = mapOf(
-            AiProviderType.OPENAI to listOf("gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"),
+            AiProviderType.OPENAI to listOf(
+                "gpt-5",
+                "gpt-5-mini",
+                "gpt-5-nano",
+                "gpt-4.1",
+                "gpt-4.1-mini",
+                "gpt-4o"
+            ),
             AiProviderType.ANTHROPIC to listOf(
-                "claude-opus-4-6",
                 "claude-sonnet-4-6",
-                "claude-haiku-4-5-20251001"
+                "claude-haiku-4-5",
+                "claude-opus-4-6"
             ),
             AiProviderType.OPENROUTER to listOf(
                 OPENROUTER_FREE_ROUTER_MODEL,

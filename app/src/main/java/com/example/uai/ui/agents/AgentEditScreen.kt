@@ -27,7 +27,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -154,7 +154,7 @@ fun AgentEditScreen(
                         color = MaterialTheme.colorScheme.primaryContainer
                     ) {
                         Icon(
-                            Icons.Default.SmartToy,
+                            Icons.Default.Tune,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(12.dp)
@@ -226,29 +226,7 @@ fun AgentEditScreen(
                     visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     supportingText = {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(providerInfo.apiKeyHint)
-                            if (agent.provider == AiProviderType.OPENROUTER) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Text(
-                                        "Start free with OpenRouter's zero-cost free models.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.weight(1f, fill = false)
-                                    )
-                                    TextButton(
-                                        onClick = {
-                                            uriHandler.openUri("https://openrouter.ai/keys")
-                                        }
-                                    ) {
-                                        Text("Get free API key")
-                                    }
-                                }
-                            }
-                        }
+                        Text(providerInfo.apiKeyHint)
                     },
                     trailingIcon = {
                         TextButton(onClick = { showApiKey = !showApiKey }) {
@@ -257,6 +235,10 @@ fun AgentEditScreen(
                     },
                     singleLine = true
                 )
+                ApiKeyHelpCallout(
+                    info = providerInfo,
+                    onOpenLink = { uriHandler.openUri(providerInfo.apiKeyActionUrl) }
+                )
 
                 RecommendedModelSelector(
                     selectedModel = selectedModelChoice,
@@ -264,6 +246,12 @@ fun AgentEditScreen(
                     onModelChange = { modelId ->
                         viewModel.update { copy(model = modelId) }
                     }
+                )
+                ProviderCatalogStatusNote(
+                    provider = agent.provider,
+                    hasProviderCatalog = providerModels.isNotEmpty(),
+                    isLoadingModels = isLoadingModels,
+                    hasApiKey = agent.apiKey.isNotBlank()
                 )
 
                 CapabilityRow(agent = agent)
@@ -431,6 +419,116 @@ private fun ProviderInfoCard(info: ProviderUiInfo) {
                 Text(info.label, style = MaterialTheme.typography.labelLarge)
                 Text(
                     info.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ApiKeyHelpCallout(
+    info: ProviderUiInfo,
+    onOpenLink: () -> Unit
+) {
+    val containerColor = MaterialTheme.colorScheme.secondaryContainer
+    val contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = containerColor
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(18.dp)
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = info.apiKeyCalloutTitle,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = contentColor
+                )
+                Text(
+                    text = info.apiKeyCalloutBody,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = contentColor
+                )
+                TextButton(
+                    onClick = onOpenLink,
+                    colors = ButtonDefaults.textButtonColors(contentColor = contentColor)
+                ) {
+                    Text(info.apiKeyActionLabel)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProviderCatalogStatusNote(
+    provider: AiProviderType,
+    hasProviderCatalog: Boolean,
+    isLoadingModels: Boolean,
+    hasApiKey: Boolean
+) {
+    val (title, body) = when {
+        hasProviderCatalog -> Pair(
+            "Latest ${provider.displayName} catalog loaded",
+            "Recommended and custom model choices are using the latest catalog SideAgent has loaded for ${provider.displayName}."
+        )
+        isLoadingModels -> Pair(
+            "Loading latest ${provider.displayName} catalog…",
+            "SideAgent is updating the available model list for this provider."
+        )
+        provider == AiProviderType.OPENROUTER -> Pair(
+            "Showing fallback list",
+            "OpenRouter's live catalog is not available right now, so SideAgent is using its built-in fallback list."
+        )
+        hasApiKey -> Pair(
+            "Showing starter list",
+            "SideAgent could not load the latest ${provider.displayName} catalog right now, so the editor is using its starter list."
+        )
+        else -> Pair(
+            "Showing starter list",
+            "Enter an API key and test availability to load the latest ${provider.displayName} catalog."
+        )
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                imageVector = Icons.Default.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.labelLarge
+                )
+                Text(
+                    body,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -36,7 +36,7 @@ private fun openAiFamilyScore(modelId: String): Int {
 }
 
 private fun preferredOpenAiBalancedModel(fetchedModels: List<String>): String =
-    pickScoredProviderModel(fetchedModels, fallback = "gpt-4o") { modelId ->
+    pickScoredProviderModel(fetchedModels, fallback = "gpt-5") { modelId ->
         val normalized = modelId.lowercase()
         openAiFamilyScore(modelId) * 10 +
             (if (normalized.contains("4o")) 140 else 0) +
@@ -47,7 +47,7 @@ private fun preferredOpenAiBalancedModel(fetchedModels: List<String>): String =
     }
 
 private fun preferredOpenAiFastModel(fetchedModels: List<String>): String =
-    pickScoredProviderModel(fetchedModels, fallback = "gpt-4o-mini") { modelId ->
+    pickScoredProviderModel(fetchedModels, fallback = "gpt-5-mini") { modelId ->
         val normalized = modelId.lowercase()
         openAiFamilyScore(modelId) * 4 +
             (if (normalized.contains("mini")) 220 else 0) +
@@ -56,7 +56,7 @@ private fun preferredOpenAiFastModel(fetchedModels: List<String>): String =
     }
 
 private fun preferredOpenAiDetailedModel(fetchedModels: List<String>): String =
-    pickScoredProviderModel(fetchedModels, fallback = "gpt-4-turbo") { modelId ->
+    pickScoredProviderModel(fetchedModels, fallback = "gpt-4.1") { modelId ->
         val normalized = modelId.lowercase()
         openAiFamilyScore(modelId) * 10 +
             (if (normalized.contains("mini")) -40 else 0) +
@@ -77,7 +77,7 @@ private fun preferredAnthropicBalancedModel(fetchedModels: List<String>): String
     }
 
 private fun preferredAnthropicFastModel(fetchedModels: List<String>): String =
-    pickScoredProviderModel(fetchedModels, fallback = "claude-haiku-4-5-20251001") { modelId ->
+    pickScoredProviderModel(fetchedModels, fallback = "claude-haiku-4-5") { modelId ->
         val normalized = modelId.lowercase()
         when {
             normalized.contains("haiku") -> 240
@@ -103,10 +103,15 @@ private fun distinctRecommendedChoices(
 ): List<RecommendedModelChoice> = choices.distinctBy { it.id }
 
 data class ProviderUiInfo(
+    val provider: AiProviderType,
     val label: String,
     val description: String,
     val apiKeyHint: String,
-    val apiKeyPlaceholder: String
+    val apiKeyPlaceholder: String,
+    val apiKeyCalloutTitle: String,
+    val apiKeyCalloutBody: String,
+    val apiKeyActionLabel: String,
+    val apiKeyActionUrl: String
 )
 
 data class RecommendedModelChoice(
@@ -121,22 +126,37 @@ data class RecommendedModelChoice(
 
 fun providerUiInfo(provider: AiProviderType): ProviderUiInfo = when (provider) {
     AiProviderType.OPENAI -> ProviderUiInfo(
+        provider = provider,
         label = "OpenAI",
         description = "Best all-round setup for fast onboarding, strong chat quality, and vision support.",
         apiKeyHint = "Paste an API key from your OpenAI account to power this assistant.",
-        apiKeyPlaceholder = "sk-..."
+        apiKeyPlaceholder = "sk-...",
+        apiKeyCalloutTitle = "API key required",
+        apiKeyCalloutBody = "If you do not have an OpenAI API key yet, create one in your OpenAI account before testing availability or using this assistant.",
+        apiKeyActionLabel = "Get OpenAI API key",
+        apiKeyActionUrl = "https://platform.openai.com/api-keys"
     )
     AiProviderType.ANTHROPIC -> ProviderUiInfo(
+        provider = provider,
         label = "Anthropic",
         description = "Great for careful writing, long-form reasoning, and document-heavy tasks.",
         apiKeyHint = "Paste an Anthropic API key. Claude models are especially strong for documents.",
-        apiKeyPlaceholder = "sk-ant-..."
+        apiKeyPlaceholder = "sk-ant-...",
+        apiKeyCalloutTitle = "API key required",
+        apiKeyCalloutBody = "If you do not have an Anthropic API key yet, create one in your Anthropic console before testing availability or using this assistant.",
+        apiKeyActionLabel = "Get Anthropic API key",
+        apiKeyActionUrl = "https://console.anthropic.com/settings/keys"
     )
     AiProviderType.OPENROUTER -> ProviderUiInfo(
+        provider = provider,
         label = "OpenRouter",
         description = "Best first-time setup when you want free options, flexible routing, and one key for many models.",
         apiKeyHint = "Paste an OpenRouter API key to unlock the free starter path and the wider OpenRouter catalog.",
-        apiKeyPlaceholder = "sk-or-..."
+        apiKeyPlaceholder = "sk-or-...",
+        apiKeyCalloutTitle = "No API key yet? Start free.",
+        apiKeyCalloutBody = "Create a free OpenRouter API key and start with OpenRouter's zero-cost free models. You do not need paid settings just to get started.",
+        apiKeyActionLabel = "Get free API key",
+        apiKeyActionUrl = "https://openrouter.ai/keys"
     )
 }
 

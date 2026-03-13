@@ -9,14 +9,16 @@ import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
+import com.example.uai.data.repository.OpenRouterCatalogRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.channels.Channel
 import okhttp3.OkHttpClient
 import java.util.UUID
 
@@ -24,7 +26,8 @@ class ConversationDetailViewModel(
     val conversationId: String,
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
-    private val httpClient: OkHttpClient
+    private val httpClient: OkHttpClient,
+    private val openRouterCatalogRepository: OpenRouterCatalogRepository
 ) : ViewModel() {
 
     val conversation = repo.getConversation(conversationId)
@@ -119,7 +122,7 @@ class ConversationDetailViewModel(
             )
 
             // If the agent doesn't support the attachment type, say so in the chat
-            if (imageBase64 != null && !agent.supportsVision) {
+            if (imageBase64 != null && !agent.canHandleImageRequests()) {
                 repo.updateMessageContent(
                     assistantId,
                     "I don't support image analysis with \"${agent.model}\". Please switch to a vision-capable model in agent settings.",
@@ -157,7 +160,7 @@ class ConversationDetailViewModel(
 
             var accumulated = ""
             try {
-                AiProviderFactory.create(agent, httpClient)
+                AiProviderFactory.create(agent, httpClient, openRouterCatalogRepository)
                     .streamResponse(history, agent)
                     .catch { e -> emit(StreamChunk.Error(e)) }
                     .collect { chunk ->
@@ -165,6 +168,13 @@ class ConversationDetailViewModel(
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
                                 repo.updateMessageContent(assistantId, accumulated, true)
+                            }
+                            is StreamChunk.ModelSelection -> {
+                                repo.updateMessageResponseModel(
+                                    assistantId,
+                                    chunk.modelId,
+                                    chunk.viaFallback
+                                )
                             }
                             is StreamChunk.Done -> {
                                 repo.updateMessageContent(assistantId, accumulated, false)
@@ -198,10 +208,17 @@ class ConversationDetailViewModel(
         private val conversationId: String,
         private val repo: ConversationRepository,
         private val agentRepo: AgentRepository,
-        private val httpClient: OkHttpClient
+        private val httpClient: OkHttpClient,
+        private val openRouterCatalogRepository: OpenRouterCatalogRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
-            ConversationDetailViewModel(conversationId, repo, agentRepo, httpClient) as T
+            ConversationDetailViewModel(
+                conversationId,
+                repo,
+                agentRepo,
+                httpClient,
+                openRouterCatalogRepository
+            ) as T
     }
 }

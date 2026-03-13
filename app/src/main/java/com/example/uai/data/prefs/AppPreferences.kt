@@ -6,10 +6,14 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.AppColorTheme
+import com.example.uai.data.model.OpenRouterCatalog
+import com.example.uai.data.model.ProviderModelCatalog
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.Flow
@@ -29,6 +33,12 @@ class AppPreferences(context: Context) {
         val BUBBLE_POS_X = intPreferencesKey("bubble_pos_x")
         val BUBBLE_POS_Y = intPreferencesKey("bubble_pos_y")
         val COLOR_THEME = stringPreferencesKey("color_theme")
+        val OPENROUTER_CATALOG_JSON = stringPreferencesKey("openrouter_catalog_json")
+        val OPENROUTER_CATALOG_FETCHED_AT = longPreferencesKey("openrouter_catalog_fetched_at")
+        val OPENAI_MODEL_CATALOG_JSON = stringPreferencesKey("openai_model_catalog_json")
+        val OPENAI_MODEL_CATALOG_FETCHED_AT = longPreferencesKey("openai_model_catalog_fetched_at")
+        val ANTHROPIC_MODEL_CATALOG_JSON = stringPreferencesKey("anthropic_model_catalog_json")
+        val ANTHROPIC_MODEL_CATALOG_FETCHED_AT = longPreferencesKey("anthropic_model_catalog_fetched_at")
     }
 
     val agentListFlow: Flow<List<AgentConfig>> = store.data.map { prefs ->
@@ -43,6 +53,39 @@ class AppPreferences(context: Context) {
 
     val colorThemeFlow: Flow<AppColorTheme> = store.data.map {
         AppColorTheme.fromKey(it[Keys.COLOR_THEME] ?: AppColorTheme.TERRACOTTA.name)
+    }
+
+    val openRouterCatalogFlow: Flow<OpenRouterCatalog> = store.data.map { prefs ->
+        val json = prefs[Keys.OPENROUTER_CATALOG_JSON]
+        if (json.isNullOrBlank()) {
+            OpenRouterCatalog()
+        } else {
+            gson.fromJson(json, OpenRouterCatalog::class.java)?.copy(
+                fetchedAt = prefs[Keys.OPENROUTER_CATALOG_FETCHED_AT] ?: 0L
+            ) ?: OpenRouterCatalog()
+        }
+    }
+
+    val openAiModelCatalogFlow: Flow<ProviderModelCatalog> = store.data.map { prefs ->
+        val json = prefs[Keys.OPENAI_MODEL_CATALOG_JSON]
+        if (json.isNullOrBlank()) {
+            ProviderModelCatalog()
+        } else {
+            gson.fromJson(json, ProviderModelCatalog::class.java)?.copy(
+                fetchedAt = prefs[Keys.OPENAI_MODEL_CATALOG_FETCHED_AT] ?: 0L
+            ) ?: ProviderModelCatalog()
+        }
+    }
+
+    val anthropicModelCatalogFlow: Flow<ProviderModelCatalog> = store.data.map { prefs ->
+        val json = prefs[Keys.ANTHROPIC_MODEL_CATALOG_JSON]
+        if (json.isNullOrBlank()) {
+            ProviderModelCatalog()
+        } else {
+            gson.fromJson(json, ProviderModelCatalog::class.java)?.copy(
+                fetchedAt = prefs[Keys.ANTHROPIC_MODEL_CATALOG_FETCHED_AT] ?: 0L
+            ) ?: ProviderModelCatalog()
+        }
     }
 
     suspend fun setColorTheme(theme: AppColorTheme) {
@@ -72,6 +115,29 @@ class AppPreferences(context: Context) {
         store.edit {
             it[Keys.BUBBLE_POS_X] = x
             it[Keys.BUBBLE_POS_Y] = y
+        }
+    }
+
+    suspend fun saveOpenRouterCatalog(catalog: OpenRouterCatalog) {
+        store.edit {
+            it[Keys.OPENROUTER_CATALOG_JSON] = gson.toJson(catalog)
+            it[Keys.OPENROUTER_CATALOG_FETCHED_AT] = catalog.fetchedAt
+        }
+    }
+
+    suspend fun saveProviderModelCatalog(provider: AiProviderType, catalog: ProviderModelCatalog) {
+        store.edit {
+            when (provider) {
+                AiProviderType.OPENAI -> {
+                    it[Keys.OPENAI_MODEL_CATALOG_JSON] = gson.toJson(catalog)
+                    it[Keys.OPENAI_MODEL_CATALOG_FETCHED_AT] = catalog.fetchedAt
+                }
+                AiProviderType.ANTHROPIC -> {
+                    it[Keys.ANTHROPIC_MODEL_CATALOG_JSON] = gson.toJson(catalog)
+                    it[Keys.ANTHROPIC_MODEL_CATALOG_FETCHED_AT] = catalog.fetchedAt
+                }
+                AiProviderType.OPENROUTER -> Unit
+            }
         }
     }
 }

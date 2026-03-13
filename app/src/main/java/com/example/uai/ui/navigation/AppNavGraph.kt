@@ -44,12 +44,14 @@ fun AppNavGraph(
                     conversationId = conversationId,
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
-                    httpClient = container.okHttpClient
+                    httpClient = container.okHttpClient,
+                    openRouterCatalogRepository = container.openRouterCatalogRepository
                 )
             )
             ConversationDetailScreen(
                 viewModel = vm,
-                openDrawer = openDrawer
+                openDrawer = openDrawer,
+                onOpenAssistants = { navController.navigate(Routes.AGENTS) { launchSingleTop = true } }
             )
         }
 
@@ -63,12 +65,14 @@ fun AppNavGraph(
                     conversationId = conversationId,
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
-                    httpClient = container.okHttpClient
+                    httpClient = container.okHttpClient,
+                    openRouterCatalogRepository = container.openRouterCatalogRepository
                 )
             )
             ConversationDetailScreen(
                 viewModel = vm,
-                openDrawer = openDrawer
+                openDrawer = openDrawer,
+                onOpenAssistants = { navController.navigate(Routes.AGENTS) { launchSingleTop = true } }
             )
         }
 
@@ -96,7 +100,13 @@ fun AppNavGraph(
         ) { backStack ->
             val agentId = backStack.arguments?.getString("agentId")?.takeIf { it.isNotEmpty() }
             val vm: AgentEditViewModel = viewModel(
-                factory = AgentEditViewModel.Factory(container.agentRepository, agentId, container.okHttpClient)
+                factory = AgentEditViewModel.Factory(
+                    container.agentRepository,
+                    agentId,
+                    container.okHttpClient,
+                    container.openRouterCatalogRepository,
+                    container.providerModelCatalogRepository
+                )
             )
             AgentEditScreen(
                 viewModel = vm,
@@ -156,7 +166,8 @@ fun AppNavGraph(
                     conversationId = agoraId,
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
-                    httpClient = container.okHttpClient
+                    httpClient = container.okHttpClient,
+                    openRouterCatalogRepository = container.openRouterCatalogRepository
                 )
             )
             AgoraDetailScreen(

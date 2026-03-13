@@ -1,8 +1,27 @@
 <resources>
-    <string name="app_name">uai</string>
-    <string name="mini_chat_screenshot_accessibility_title">UAI Screenshot Helper</string>
+    <string name="app_name">SideAgent</string>
+    <string name="mini_chat_screenshot_accessibility_title">SideAgent Screenshot Helper</string>
     <string name="mini_chat_screenshot_accessibility_summary">Lets the mini chat capture the current screen and attach it to the selected chat.</string>
-    <string name="mini_chat_screenshot_accessibility_description">Allows UAI to capture screenshots for the floating mini chat without reopening the overlay or asking for screen-recording permission on every shot.</string>
-    <string name="mini_chat_screenshot_accessibility_hint">Enable the UAI Screenshot Helper in Accessibility settings for stable mini-chat screenshots.</string>
+    <string name="mini_chat_screenshot_accessibility_description">Allows SideAgent to capture screenshots for the floating mini chat without reopening the overlay or asking for screen-recording permission on every shot.</string>
+    <string name="mini_chat_screenshot_accessibility_hint">Enable the SideAgent Screenshot Helper in Accessibility settings for stable mini-chat screenshots.</string>
     <string name="mini_chat_screenshot_capture_error">Screenshot failed. %1$s</string>
+    <string name="bubble_channel_name">SideAgent Bubble</string>
+    <string name="bubble_channel_description">Shows the persistent SideAgent mini chat overlay</string>
+    <string name="bubble_notification_title">SideAgent Mini Chat</string>
+    <string name="bubble_notification_text">Your floating AI sidecar is active</string>
+    <string name="feature_mini_chat">Mini Chat</string>
+    <string name="feature_agents">Assistants</string>
+    <string name="feature_rooms">Council</string>
+    <string name="feature_room">Council Room</string>
+    <string name="new_room">New Council Room</string>
+    <string name="create_room">Create Council Room</string>
+    <string name="rooms_empty_title">No council rooms yet</string>
+    <string name="rooms_empty_message">Tap + to create a council room with multiple agents</string>
+    <string name="room_settings">Council room settings</string>
+    <string name="room_name">Council room name</string>
+    <string name="agents_in_room">Agents in this council room</string>
+    <string name="overlay_permission_required">Overlay permission required</string>
+    <string name="overlay_permission_message">Grant "Display over other apps" to use SideAgent Mini Chat.</string>
+    <string name="mini_chat_active">Mini Chat is active</string>
+    <string name="mini_chat_inactive">Mini Chat is inactive</string>
 </resources>

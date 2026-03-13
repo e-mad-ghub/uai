@@ -9,8 +9,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.uai.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,7 +36,7 @@ fun AgoraCreateScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text("New Agora Room") },
+                title = { Text(stringResource(R.string.new_room)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -52,7 +54,7 @@ fun AgoraCreateScreen(
                 OutlinedTextField(
                     value = roomName,
                     onValueChange = viewModel::setName,
-                    label = { Text("Room name") },
+                    label = { Text(stringResource(R.string.room_name)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
@@ -115,7 +117,7 @@ fun AgoraCreateScreen(
                     enabled = canCreate,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Create Room")
+                    Text(stringResource(R.string.create_room))
                 }
                 if (selectedIds.size in 1..1) {
                     Spacer(Modifier.height(4.dp))

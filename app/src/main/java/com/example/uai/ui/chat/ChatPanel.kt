@@ -1,9 +1,9 @@
 package com.example.uai.ui.chat
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -15,23 +15,23 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.*
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import com.example.uai.R
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
@@ -53,6 +53,7 @@ fun ChatPanel(
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onClose: () -> Unit,
+    onMinimize: () -> Unit,
     onOpenInApp: (() -> Unit)? = null,
     onAgentSelect: (AgentConfig) -> Unit,
     onConversationSelect: (String?) -> Unit,
@@ -66,13 +67,7 @@ fun ChatPanel(
 ) {
     val configuration = LocalConfiguration.current
     val messageListBehavior = rememberChatMessageListBehavior(messages)
-    val expandedMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(280.dp, 560.dp)
-    val compactMsgHeight = (expandedMsgHeight * 0.5f).coerceAtLeast(160.dp)
-    val animatedMaxMsgHeight by animateDpAsState(
-        targetValue = if (messageListBehavior.shouldUseCompactViewport) compactMsgHeight else expandedMsgHeight,
-        animationSpec = tween(durationMillis = 220),
-        label = "miniChatMessageAreaHeight"
-    )
+    val maxMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(280.dp, 560.dp)
 
     var agentDropdownExpanded by remember { mutableStateOf(false) }
     var conversationDropdownExpanded by remember { mutableStateOf(false) }
@@ -230,6 +225,8 @@ fun ChatPanel(
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.surface),
                     messageThumbnails = messageThumbnails,
+                    onBackgroundDoubleTap = onMinimize,
+                    onMessageDoubleTap = onMinimize,
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     emptyContent = {
                         Box(
@@ -346,7 +343,7 @@ fun ChatPanel(
             val footerP: Placeable = measurables[2].measure(unbounded)
 
             val minMsgPx = 100.dp.roundToPx()
-            val maxMsgPx = animatedMaxMsgHeight.roundToPx()
+            val maxMsgPx = maxMsgHeight.roundToPx()
             val remaining = if (constraints.maxHeight == Constraints.Infinity) {
                 maxMsgPx
             } else {
@@ -372,26 +369,20 @@ fun BubbleContent(isLoading: Boolean, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxSize()
-            .clip(CircleShape)
-            .background(
-                Brush.radialGradient(
-                    colors = listOf(Color(0xFF6750A4), Color(0xFF9C27B0))
-                )
-            ),
+            .clip(RoundedCornerShape(18.dp)),
         contentAlignment = Alignment.Center
     ) {
+        Image(
+            painter = painterResource(R.drawable.floating_bubble_icon),
+            contentDescription = "SideAgent Mini Chat",
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
         if (isLoading) {
             CircularProgressIndicator(
                 modifier = Modifier.size(28.dp),
                 color = Color.White,
                 strokeWidth = 2.5.dp
-            )
-        } else {
-            Icon(
-                Icons.Default.SmartToy,
-                contentDescription = "AI Chat",
-                tint = Color.White,
-                modifier = Modifier.size(30.dp)
             )
         }
     }

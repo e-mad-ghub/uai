@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -29,6 +30,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.uai.R
 import com.example.uai.data.model.AppColorTheme
 import com.example.uai.service.FloatingBubbleService
 
@@ -89,8 +91,16 @@ fun SettingsScreen(
                         Icon(Icons.Default.Security, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer)
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Overlay permission required", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer)
-                            Text("Grant \"Display over other apps\" to use the chat bubble.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                            Text(
+                                stringResource(R.string.overlay_permission_required),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Text(
+                                stringResource(R.string.overlay_permission_message),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
                         }
                         Spacer(Modifier.width(8.dp))
                         TextButton(onClick = {
@@ -102,10 +112,14 @@ fun SettingsScreen(
 
             ListItem(
                 leadingContent = { Icon(Icons.Default.BubbleChart, contentDescription = null) },
-                headlineContent = { Text("Floating bubble") },
+                headlineContent = { Text(stringResource(R.string.feature_mini_chat)) },
                 supportingContent = {
                     Text(
-                        if (bubbleEnabled) "Bubble is active" else "Bubble is inactive",
+                        if (bubbleEnabled) {
+                            stringResource(R.string.mini_chat_active)
+                        } else {
+                            stringResource(R.string.mini_chat_inactive)
+                        },
                         color = if (bubbleEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 },

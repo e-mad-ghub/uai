@@ -57,6 +57,7 @@ import kotlin.math.roundToInt
 fun MessageBubble(
     message: MessageEntity,
     thumbnails: List<ImageBitmap> = emptyList(),
+    onDoubleTap: (() -> Unit)? = null,
     onReply: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -100,6 +101,24 @@ fun MessageBubble(
 
     // Icon appearance driven by drag progress (0..1)
     val progress = (dragOffset.value / swipeThresholdPx).coerceIn(0f, 1f)
+    val canCopyMessage = !message.isStreaming && message.content.isNotEmpty()
+    @OptIn(ExperimentalFoundationApi::class)
+    val interactionModifier = if (onDoubleTap != null || canCopyMessage) {
+        Modifier.combinedClickable(
+            onClick = {},
+            onLongClick = if (canCopyMessage) {
+                {
+                    clipboardManager.setText(AnnotatedString(message.content))
+                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                null
+            },
+            onDoubleClick = onDoubleTap
+        )
+    } else {
+        Modifier
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -183,23 +202,24 @@ fun MessageBubble(
                 modifier = Modifier
                     .widthIn(max = 280.dp)
                     .offset { IntOffset(dragOffset.value.roundToInt(), 0) }
-                    .then(
-                        if (!message.isStreaming && message.content.isNotEmpty())
-                            Modifier.combinedClickable(
-                                onClick = {},
-                                onLongClick = {
-                                    clipboardManager.setText(AnnotatedString(message.content))
-                                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                                }
-                            )
-                        else Modifier
-                    )
+                    .then(interactionModifier)
             ) {
                 Box(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    if (!isUser && message.isStreaming && message.content.isEmpty()) {
-                        TypingIndicator(color = textColor)
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (!isUser && message.responseModelId != null) {
+                            Text(
+                                text = if (message.responseModelIsFallback) {
+                                    "Fallback via ${message.responseModelId}"
+                                } else {
+                                    "Model: ${message.responseModelId}"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        if (!isUser && message.isStreaming && message.content.isEmpty()) {
+                            TypingIndicator(color = textColor)
+                        } else {
                             when {
                                 thumbnails.isNotEmpty() -> {
                                     if (thumbnails.size == 1) {

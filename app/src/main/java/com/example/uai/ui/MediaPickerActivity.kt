@@ -1,13 +1,17 @@
 package com.example.uai.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 
 /**
  * Transparent trampoline activity that launches pickers and the MediaProjection consent dialog
@@ -35,6 +39,23 @@ class MediaPickerActivity : ComponentActivity() {
         finish()
     }
 
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            launchCameraCapture()
+        } else {
+            Toast.makeText(
+                this,
+                "Camera permission is required to take a photo.",
+                Toast.LENGTH_SHORT
+            ).show()
+            onBitmapResult?.invoke(null)
+            onBitmapResult = null
+            finish()
+        }
+    }
+
     private val fileLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri ->
@@ -59,7 +80,17 @@ class MediaPickerActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         when (intent.getStringExtra(EXTRA_ACTION)) {
             ACTION_GALLERY    -> galleryLauncher.launch("image/*")
-            ACTION_CAMERA     -> cameraLauncher.launch(null)
+            ACTION_CAMERA     -> {
+                if (ContextCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    launchCameraCapture()
+                } else {
+                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                }
+            }
             ACTION_FILE       -> fileLauncher.launch("*/*")
             ACTION_SCREENSHOT -> {
                 val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -67,6 +98,20 @@ class MediaPickerActivity : ComponentActivity() {
             }
             else -> finish()
         }
+    }
+
+    private fun launchCameraCapture() {
+        runCatching { cameraLauncher.launch(null) }
+            .onFailure {
+                Toast.makeText(
+                    this,
+                    "Unable to open the camera right now.",
+                    Toast.LENGTH_SHORT
+                ).show()
+                onBitmapResult?.invoke(null)
+                onBitmapResult = null
+                finish()
+            }
     }
 
     companion object {

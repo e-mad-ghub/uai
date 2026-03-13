@@ -28,10 +28,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AiProviderType
+import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
 import com.example.uai.ui.chat.MessageBubble
 import com.example.uai.ui.chat.persistImageAttachment
+import com.example.uai.ui.chat.rememberCameraPermissionRequester
 import com.example.uai.ui.chat.rememberChatMessageListBehavior
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -43,6 +45,7 @@ import java.io.ByteArrayOutputStream
 fun ConversationDetailScreen(
     viewModel: ConversationDetailViewModel,
     openDrawer: () -> Unit,
+    onOpenAssistants: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
@@ -114,6 +117,15 @@ fun ConversationDetailScreen(
             }
         }
     }
+
+    val requestCameraPermission = rememberCameraPermissionRequester(
+        onGranted = { cameraLauncher.launch(null) },
+        onDenied = {
+            scope.launch {
+                snackbarHostState.showSnackbar("Camera permission is required to take a photo.")
+            }
+        }
+    )
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -193,7 +205,7 @@ fun ConversationDetailScreen(
                                             Column {
                                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                     Text(agent.name)
-                                                    if (agent.supportsVision) Icon(Icons.Default.Image, null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
+                                                    if (agent.canHandleImageRequests()) Icon(Icons.Default.Image, null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
                                                 }
                                                 Text("${agent.provider.displayName} · ${agent.model}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                             }
@@ -213,10 +225,16 @@ fun ConversationDetailScreen(
 
             if (messages.isEmpty() && !isLoading) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(32.dp)) {
-                        Text("What can I help you with?", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center)
-                        Text("Type a message below to get started.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                        if (activeAgent != null) {
+                    if (activeAgent == null) {
+                        AssistantSetupPromptCard(
+                            hasAnyAssistants = agents.isNotEmpty(),
+                            onOpenAssistants = onOpenAssistants,
+                            modifier = Modifier.padding(24.dp)
+                        )
+                    } else {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(32.dp)) {
+                            Text("What can I help you with?", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center)
+                            Text("Type a message below to get started.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                             Spacer(Modifier.height(4.dp))
                             AssistChip(onClick = { agentMenuExpanded = true }, label = {
                                 Text("${activeAgent!!.name} · ${activeAgent!!.provider.displayName}", style = MaterialTheme.typography.labelSmall)
@@ -237,53 +255,112 @@ fun ConversationDetailScreen(
             }
 
             if (activeAgent == null) {
-                Text("No active agent. Go to Agents to set one up.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-            }
-
-            ChatInputBar(
-                isLoading = isLoading,
-                hasAttachment = hasAttachment,
-                pendingImages = if (pendingImageBitmap != null) listOf(pendingImageBitmap) else emptyList(),
-                pendingFileName = pendingFileName,
-                replyToMessage = replyToMessage,
-                replyLabel = activeAgent?.name ?: "Assistant",
-                onPickCamera = { cameraLauncher.launch(null) },
-                onPickGallery = { imagePicker.launch("image/*") },
-                onPickFile = { filePicker.launch("*/*") },
-                onClearAttachment = { clearAttachments() },
-                onCancelReply = { replyToMessage = null },
-                onStop = { viewModel.stopResponse() },
-                onSend = { doSend() },
-                sendEnabled = (inputText.isNotBlank() || hasAttachment) && activeAgent != null,
-                modifier = Modifier.imePadding()
-            ) {
-                TextField(
-                    value = inputText,
-                    onValueChange = viewModel::onInputChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            when {
-                                pendingImageBitmap != null -> "Ask about this image…"
-                                pendingFileName != null -> "Ask about this file…"
-                                else -> "Message…"
-                            },
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            if (agents.isEmpty())
+                                "Set up an assistant to start chatting."
+                            else
+                                "Choose which assistant new chats should use.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
                         )
-                    },
-                    colors = TextFieldDefaults.colors(
-                        unfocusedContainerColor = Color.Transparent,
-                        focusedContainerColor = Color.Transparent,
-                        disabledContainerColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent
-                    ),
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { doSend() }),
-                    maxLines = 5,
-                    enabled = !isLoading
-                )
+                        Spacer(Modifier.width(12.dp))
+                        Button(onClick = onOpenAssistants) {
+                            Text("Open Assistants")
+                        }
+                    }
+                }
+            } else {
+                ChatInputBar(
+                    isLoading = isLoading,
+                    hasAttachment = hasAttachment,
+                    pendingImages = if (pendingImageBitmap != null) listOf(pendingImageBitmap) else emptyList(),
+                    pendingFileName = pendingFileName,
+                    replyToMessage = replyToMessage,
+                    replyLabel = activeAgent?.name ?: "Assistant",
+                    onPickCamera = requestCameraPermission,
+                    onPickGallery = { imagePicker.launch("image/*") },
+                    onPickFile = { filePicker.launch("*/*") },
+                    onClearAttachment = { clearAttachments() },
+                    onCancelReply = { replyToMessage = null },
+                    onStop = { viewModel.stopResponse() },
+                    onSend = { doSend() },
+                    sendEnabled = (inputText.isNotBlank() || hasAttachment) && activeAgent != null,
+                    modifier = Modifier.imePadding()
+                ) {
+                    TextField(
+                        value = inputText,
+                        onValueChange = viewModel::onInputChange,
+                        modifier = Modifier.weight(1f),
+                        placeholder = {
+                            Text(
+                                when {
+                                    pendingImageBitmap != null -> "Ask about this image…"
+                                    pendingFileName != null -> "Ask about this file…"
+                                    else -> "Message…"
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        colors = TextFieldDefaults.colors(
+                            unfocusedContainerColor = Color.Transparent,
+                            focusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent
+                        ),
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { doSend() }),
+                        maxLines = 5,
+                        enabled = !isLoading
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssistantSetupPromptCard(
+    hasAnyAssistants: Boolean,
+    onOpenAssistants: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ElevatedCard(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                if (hasAnyAssistants) "Pick your default assistant"
+                else "Create your first assistant",
+                style = MaterialTheme.typography.headlineSmall,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                if (hasAnyAssistants)
+                    "You already have assistants configured, but new chats need one selected as the default."
+                else
+                    "Add one connection, choose a role, and SideAgent will be ready for new chats.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            Button(onClick = onOpenAssistants) {
+                Text("Open Assistants")
             }
         }
     }

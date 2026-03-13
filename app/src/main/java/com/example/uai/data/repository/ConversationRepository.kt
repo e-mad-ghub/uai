@@ -36,6 +36,9 @@ class ConversationRepository(
     suspend fun updateMessageContent(id: String, content: String, isStreaming: Boolean) =
         messageDao.updateContent(id, content, isStreaming)
 
+    suspend fun updateMessageResponseModel(id: String, modelId: String, isFallback: Boolean) =
+        messageDao.updateResponseModel(id, modelId, isFallback)
+
     suspend fun deleteMessage(id: String) =
         messageDao.deleteById(id)
 

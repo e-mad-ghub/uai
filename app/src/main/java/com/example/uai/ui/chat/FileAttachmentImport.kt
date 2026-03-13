@@ -100,16 +100,6 @@ suspend fun importFileAttachment(
     }
 }
 
-fun buildAttachedFileContext(fileName: String, extractedText: String): String {
-    return buildString {
-        append("<attached_file name=\"")
-        append(fileName)
-        append("\">\n")
-        append(extractedText)
-        append("\n</attached_file>\n\n")
-    }
-}
-
 private fun resolveDisplayName(context: Context, uri: Uri): String {
     val projection = arrayOf(OpenableColumns.DISPLAY_NAME)
     runCatching {

@@ -8,13 +8,31 @@ data class ImageAttachment(
     val mimeType: String = "image/jpeg"
 )
 
+data class FileAttachmentContext(
+    val displayName: String,
+    val extractedText: String
+)
+
 data class ChatMessage(
     val role: String,
     val content: String,
     val images: List<ImageAttachment> = emptyList(),
+    val fileAttachment: FileAttachmentContext? = null,
     /** Base64-encoded PDF — only sent by providers that support it (Anthropic). */
     val documentBase64: String? = null
 )
+
+fun ChatMessage.contentWithFileContext(): String {
+    val attachment = fileAttachment ?: return content
+    return buildString {
+        append("<attached_file name=\"")
+        append(attachment.displayName)
+        append("\">\n")
+        append(attachment.extractedText)
+        append("\n</attached_file>\n\n")
+        append(content)
+    }
+}
 
 /** Returns a user-friendly error message for an HTTP error response from an AI provider. */
 fun httpErrorMessage(code: Int): String {

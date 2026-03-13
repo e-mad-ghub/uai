@@ -5,9 +5,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.ChatMessage
+import com.example.uai.ai.FileAttachmentContext
+import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.MessageEntity
+import com.example.uai.data.db.toChatMessage
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.repository.AgentRepository
@@ -72,6 +75,7 @@ class AgoraDetailViewModel(
 
     /** Update room name and/or agent list. Either can be blank/empty to leave unchanged. */
     fun updateRoom(name: String, agentIds: Set<String>) {
+        if (name.isBlank() || agentIds.isEmpty()) return
         viewModelScope.launch {
             val conv = conversation.value ?: return@launch
             repo.upsertConversation(
@@ -87,16 +91,58 @@ class AgoraDetailViewModel(
         text: String,
         imageBase64: String? = null,
         imageUri: String? = null,
-        replyToMessage: MessageEntity? = null
+        replyToMessage: MessageEntity? = null,
+        attachedFile: FileAttachmentContext? = null
     ) {
         val conv = conversation.value ?: return
-        if ((text.isBlank() && imageBase64 == null) || _isLoading.value) return
+        if ((text.isBlank() && imageBase64 == null && attachedFile == null) || _isLoading.value) return
 
         streamingJob = viewModelScope.launch {
             _isLoading.value = true
             _inputText.value = ""
 
             try {
+                val allCurrentAgents = agentRepo.agentsFlow.first()
+                val allAgents: List<AgentConfig> = conv.parseAgoraAgentIds()
+                    .mapNotNull { id -> allCurrentAgents.find { it.id == id } }
+
+                // Guard before committing the user's turn so the room never fills with
+                // orphan messages when no participants are available to respond.
+                if (allAgents.isEmpty()) {
+                    _errorEvent.trySend(
+                        "No agents in this council room. Tap the settings icon to add agents."
+                    )
+                    return@launch
+                }
+
+                val targetedAgents: List<AgentConfig>? = when {
+                    replyToMessage != null -> {
+                        val target = when {
+                            !replyToMessage.agentId.isNullOrBlank() ->
+                                allAgents.find { it.id == replyToMessage.agentId }
+
+                            !replyToMessage.agentName.isNullOrBlank() -> {
+                                val nameMatches = allAgents.filter { it.name == replyToMessage.agentName }
+                                nameMatches.singleOrNull()
+                            }
+
+                            else -> null
+                        }
+                        if (target == null) {
+                            _errorEvent.trySend(
+                                if (!replyToMessage.agentId.isNullOrBlank()) {
+                                    "The assistant you replied to is no longer available in this room."
+                                } else {
+                                    "This older reply no longer maps to a unique assistant in this room. Reply to a newer message or use @Name."
+                                }
+                            )
+                            return@launch
+                        }
+                        listOf(target)
+                    }
+                    else -> null
+                }
+
                 // Insert user message
                 repo.insertMessage(
                     MessageEntity(
@@ -105,31 +151,18 @@ class AgoraDetailViewModel(
                         role = "user",
                         content = text,
                         createdAt = System.currentTimeMillis(),
-                        imageUri = imageUri
+                        imageUri = imageUri,
+                        attachedFileName = attachedFile?.displayName,
+                        attachedFileText = attachedFile?.extractedText
                     )
                 )
-
-                val allCurrentAgents = agentRepo.agentsFlow.first()
-                val allAgents: List<AgentConfig> = conv.parseAgoraAgentIds()
-                    .mapNotNull { id -> allCurrentAgents.find { it.id == id } }
-
-                // Guard: no agents in room
-                if (allAgents.isEmpty()) {
-                    _errorEvent.trySend(
-                        "No agents in this council room. Tap the settings icon to add agents."
-                    )
-                    return@launch
-                }
 
                 // Routing priority:
                 // 1. Reply to a specific agent → only that agent responds.
                 // 2. @mention(s) in text → only mentioned agents respond.
                 // 3. No targeting → all agents respond.
                 val agents: List<AgentConfig> = when {
-                    replyToMessage != null -> {
-                        val target = allAgents.find { it.name == replyToMessage.agentName }
-                        if (target != null) listOf(target) else allAgents
-                    }
+                    targetedAgents != null -> targetedAgents
                     else -> {
                         val mentioned = allAgents.filter { agent ->
                             text.contains("@${agent.name}", ignoreCase = true)
@@ -157,6 +190,7 @@ class AgoraDetailViewModel(
                             content = "",
                             createdAt = System.currentTimeMillis(),
                             isStreaming = true,
+                            agentId = agent.id,
                             agentName = agent.name
                         )
                     )
@@ -173,7 +207,9 @@ class AgoraDetailViewModel(
                             MessageEntity(
                                 id = assistantId, conversationId = conversationId,
                                 role = "assistant", content = unsupportedMsg,
-                                createdAt = System.currentTimeMillis(), agentName = agent.name
+                                createdAt = System.currentTimeMillis(),
+                                agentId = agent.id,
+                                agentName = agent.name
                             )
                         )
                         continue
@@ -213,15 +249,20 @@ class AgoraDetailViewModel(
                             val userText = userMsg.content + contextSuffix
                             when {
                                 isLastRound && imageBase64 != null ->
-                                    add(ChatMessage("user", userText,
-                                        images = listOf(com.example.uai.ai.ImageAttachment(imageBase64))))
+                                    add(
+                                        userMsg.toChatMessage(
+                                            contentOverride = userText,
+                                            images = listOf(ImageAttachment(imageBase64))
+                                        )
+                                    )
                                 else ->
-                                    add(ChatMessage("user", userText))
+                                    add(userMsg.toChatMessage(contentOverride = userText))
                             }
 
                             // This agent's own past response (absent on the last round — generating now)
-                            assistants.find { it.agentName == agent.name }
-                                ?.let { add(ChatMessage("assistant", it.content)) }
+                            assistants.find { it.agentId == agent.id }
+                                ?: assistants.find { it.agentName == agent.name }
+                                ?.let { add(it.toChatMessage()) }
                         }
                     }
 
@@ -327,6 +368,7 @@ class AgoraDetailViewModel(
                                 role = "assistant",
                                 content = accumulated,
                                 createdAt = System.currentTimeMillis(),
+                                agentId = agent.id,
                                 agentName = agent.name
                             )
                         )

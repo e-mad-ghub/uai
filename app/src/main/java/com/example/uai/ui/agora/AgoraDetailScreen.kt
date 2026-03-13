@@ -29,18 +29,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
+import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
 import com.example.uai.ui.chat.MessageBubble
-import com.example.uai.ui.chat.buildAttachedFileContext
+import com.example.uai.ui.chat.buildQuotedReplyContext
+import com.example.uai.ui.chat.buildReplyPreviewText
 import com.example.uai.ui.chat.importFileAttachment
 import com.example.uai.ui.chat.persistImageAttachment
 import com.example.uai.ui.chat.rememberCameraPermissionRequester
 import com.example.uai.ui.chat.rememberChatMessageListBehavior
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -127,10 +128,12 @@ fun AgoraDetailScreen(
     var pendingImageUri by remember { mutableStateOf<Uri?>(null) }
     var pendingImageBase64 by remember { mutableStateOf<String?>(null) }
     var pendingImageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    var attachmentPreparationLabel by remember { mutableStateOf<String?>(null) }
 
     // File attachment (text or PDF)
     var pendingFileName by remember { mutableStateOf<String?>(null) }
     var pendingFileText by remember { mutableStateOf<String?>(null) }
+    val isPreparingAttachment = attachmentPreparationLabel != null
 
     // Room settings bottom sheet
     var showSettings by remember { mutableStateOf(false) }
@@ -146,27 +149,39 @@ fun AgoraDetailScreen(
     // Error events
     LaunchedEffect(Unit) {
         viewModel.errorEvent.collect { message ->
-            val job = launch {
-                snackbarHostState.showSnackbar(
-                    message = message,
-                    actionLabel = "OK",
-                    duration = SnackbarDuration.Indefinite
-                )
-            }
-            delay(5_000)
-            job.cancel()
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(
+                message = message,
+                duration = SnackbarDuration.Long
+            )
         }
     }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         pendingFileName = null; pendingFileText = null
         pendingImageUri = uri
+        pendingImageBase64 = null
+        pendingImageBitmap = null
+        if (uri != null) {
+            attachmentPreparationLabel = "Preparing image…"
+            scope.launch {
+                val (base64, bmp) = withContext(Dispatchers.IO) { encodeImageForApi(context, uri) }
+                pendingImageBase64 = base64
+                pendingImageBitmap = bmp
+                if (base64 == null || bmp == null) {
+                    pendingImageUri = null
+                    snackbarHostState.showSnackbar("Could not prepare that image.")
+                }
+                attachmentPreparationLabel = null
+            }
+        }
     }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
         if (bitmap != null) {
             pendingFileName = null; pendingFileText = null
             pendingImageUri = null
+            attachmentPreparationLabel = "Preparing photo…"
             scope.launch(Dispatchers.IO) {
                 val out = ByteArrayOutputStream()
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
@@ -174,6 +189,7 @@ fun AgoraDetailScreen(
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
                     pendingImageBase64 = base64
                     pendingImageBitmap = bitmap.asImageBitmap()
+                    attachmentPreparationLabel = null
                 }
             }
         }
@@ -192,6 +208,7 @@ fun AgoraDetailScreen(
         if (uri == null) return@rememberLauncherForActivityResult
         pendingImageUri = null; pendingImageBase64 = null; pendingImageBitmap = null
         scope.launch {
+            attachmentPreparationLabel = "Importing file…"
             when (val result = importFileAttachment(context, uri)) {
                 is FileAttachmentImportResult.Success -> {
                     pendingFileName = result.attachment.displayName
@@ -204,30 +221,33 @@ fun AgoraDetailScreen(
                     snackbarHostState.showSnackbar(result.message)
                 }
             }
+            attachmentPreparationLabel = null
         }
     }
 
-    // Encode gallery image when URI changes (camera images encoded directly)
-    LaunchedEffect(pendingImageUri) {
-        val uri = pendingImageUri ?: return@LaunchedEffect
-        val (base64, bmp) = withContext(Dispatchers.IO) { encodeImageForApi(context, uri) }
-        pendingImageBase64 = base64
-        pendingImageBitmap = bmp
-    }
-
     fun doSend() {
+        if (isPreparingAttachment) return
         val image = pendingImageBase64
         val existingImageUri = pendingImageUri?.toString()
         val replyTarget = replyToMessage
-        val fileContext = pendingFileText?.let {
-            buildAttachedFileContext(pendingFileName ?: "file", it)
-        } ?: ""
-        val replyContext = replyTarget?.let { "> ${it.content.take(200).replace("\n", " ")}\n\n" } ?: ""
-        val fullText = replyContext + fileContext + tfv.text
+        val attachedFile = pendingFileText?.let {
+            FileAttachmentContext(
+                displayName = pendingFileName ?: "file",
+                extractedText = it
+            )
+        }
+        val replyContext = replyTarget?.let { buildQuotedReplyContext(it) }.orEmpty()
+        val fullText = replyContext + tfv.text
         val persistedImageUri = image?.let { persistImageAttachment(context, it) }
         clearAttachment()
         replyToMessage = null
-        viewModel.sendMessage(fullText, image, persistedImageUri ?: existingImageUri, replyTarget)
+        viewModel.sendMessage(
+            text = fullText,
+            imageBase64 = image,
+            imageUri = persistedImageUri ?: existingImageUri,
+            replyToMessage = replyTarget,
+            attachedFile = attachedFile
+        )
     }
 
     val messageListBehavior = rememberChatMessageListBehavior(messages)
@@ -328,9 +348,7 @@ fun AgoraDetailScreen(
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                replyToMessage!!.content.take(80).let {
-                                    if (replyToMessage!!.content.length > 80) "$it…" else it
-                                },
+                                buildReplyPreviewText(replyToMessage!!, 80),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
@@ -406,6 +424,8 @@ fun AgoraDetailScreen(
             ChatInputBar(
                 isLoading = isLoading,
                 hasAttachment = hasAttachment,
+                isPreparingAttachment = isPreparingAttachment,
+                preparingAttachmentLabel = attachmentPreparationLabel ?: "Preparing attachment…",
                 pendingImages = if (pendingImageBitmap != null) listOf(pendingImageBitmap) else emptyList(),
                 pendingFileName = pendingFileName,
                 replyToMessage = null, // Rendered manually above to preserve Agora visual order
@@ -415,7 +435,7 @@ fun AgoraDetailScreen(
                 onClearAttachment = { clearAttachment() },
                 onStop = { viewModel.stopResponse() },
                 onSend = { doSend() },
-                sendEnabled = tfv.text.isNotBlank() || hasAttachment,
+                sendEnabled = (tfv.text.isNotBlank() || hasAttachment) && !isPreparingAttachment,
                 modifier = Modifier.imePadding()
             ) {
                 TextField(
@@ -460,6 +480,11 @@ fun AgoraDetailScreen(
             var editName by remember(conv.title) { mutableStateOf(conv.title) }
             var selectedIds by remember(conv.agoraAgentIds) {
                 mutableStateOf<Set<String>>(conv.parseAgoraAgentIds().toSet())
+            }
+            val roomSelectionMessage = when {
+                allAvailableAgents.isEmpty() -> "No assistants are configured yet."
+                selectedIds.isEmpty() -> "Choose at least one assistant to keep this room active."
+                else -> null
             }
 
             ModalBottomSheet(
@@ -537,11 +562,15 @@ fun AgoraDetailScreen(
                         }
                     }
 
-                    if (selectedIds.isEmpty()) {
+                    if (roomSelectionMessage != null) {
                         Text(
-                            "No agents selected — messages will show a warning until agents are added.",
+                            roomSelectionMessage,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (selectedIds.isEmpty()) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         )
                     }
 
@@ -550,7 +579,7 @@ fun AgoraDetailScreen(
                             viewModel.updateRoom(editName, selectedIds)
                             showSettings = false
                         },
-                        enabled = editName.isNotBlank(),
+                        enabled = editName.isNotBlank() && selectedIds.isNotEmpty(),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Save")

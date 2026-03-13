@@ -179,7 +179,7 @@ class MainActivity : ComponentActivity() {
                                     items(conversations, key = { it.id }) { conv ->
                                         DrawerConversationItem(
                                             conv = conv,
-                                            isSelected = currentRoute?.contains(conv.id) == true,
+                                            isSelected = currentOpenId == conv.id,
                                             isAgora = conv.isAgora,
                                             onClick = {
                                                 closeDrawer()

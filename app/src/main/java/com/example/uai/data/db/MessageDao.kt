@@ -11,11 +11,14 @@ interface MessageDao {
     @Insert
     suspend fun insert(message: MessageEntity)
 
-    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC")
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC, rowid ASC")
     fun getMessages(conversationId: String): Flow<List<MessageEntity>>
 
-    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC")
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC, rowid ASC")
     suspend fun getMessagesList(conversationId: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): MessageEntity?
 
     @Query("UPDATE messages SET content = :content, isStreaming = :isStreaming WHERE id = :id")
     suspend fun updateContent(id: String, content: String, isStreaming: Boolean)

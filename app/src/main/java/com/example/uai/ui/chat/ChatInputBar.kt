@@ -43,6 +43,8 @@ import com.example.uai.data.db.MessageEntity
 fun ChatInputBar(
     isLoading: Boolean,
     hasAttachment: Boolean,
+    isPreparingAttachment: Boolean = false,
+    preparingAttachmentLabel: String = "Preparing attachment…",
     pendingImages: List<ImageBitmap?> = emptyList(),
     pendingFileName: String? = null,
     replyToMessage: MessageEntity? = null,
@@ -61,6 +63,7 @@ fun ChatInputBar(
     textFieldContent: @Composable RowScope.() -> Unit
 ) {
     var attachMenuExpanded by remember { mutableStateOf(false) }
+    val inputLocked = isLoading || isPreparingAttachment
 
     Column(modifier = modifier.fillMaxWidth()) {
 
@@ -82,7 +85,7 @@ fun ChatInputBar(
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            reply.content.take(80).let { if (reply.content.length > 80) "$it…" else it },
+                            buildReplyPreviewText(reply, 80),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -97,6 +100,33 @@ fun ChatInputBar(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+            }
+        }
+
+        if (isPreparingAttachment) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 4.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        text = preparingAttachmentLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
                 }
             }
         }
@@ -175,7 +205,7 @@ fun ChatInputBar(
                         }
                     }
                 }
-                IconButton(onClick = onClearAttachment) {
+                IconButton(onClick = onClearAttachment, enabled = !inputLocked) {
                     Icon(
                         Icons.Default.Close,
                         contentDescription = "Clear attachment",
@@ -200,7 +230,7 @@ fun ChatInputBar(
             ) {
                 // [+] attachment dropdown
                 Box {
-                    IconButton(onClick = { attachMenuExpanded = true }, enabled = !isLoading) {
+                    IconButton(onClick = { attachMenuExpanded = true }, enabled = !inputLocked) {
                         Icon(
                             Icons.Default.Add,
                             contentDescription = "Attach",
@@ -239,7 +269,7 @@ fun ChatInputBar(
                                 .size(48.dp)
                                 .clip(CircleShape)
                                 .clickable(
-                                    enabled = !isLoading,
+                                    enabled = !inputLocked,
                                     interactionSource = interactionSource,
                                     indication = null,
                                     onClick = onTakeScreenshot
@@ -253,7 +283,7 @@ fun ChatInputBar(
                             )
                         }
                     } else {
-                        IconButton(onClick = onTakeScreenshot, enabled = !isLoading) {
+                        IconButton(onClick = onTakeScreenshot, enabled = !inputLocked) {
                             Icon(
                                 Icons.Default.Screenshot,
                                 contentDescription = "Screenshot",

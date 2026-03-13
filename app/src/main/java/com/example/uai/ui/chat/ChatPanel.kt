@@ -285,7 +285,7 @@ fun ChatPanel(
                         pendingImages = pendingImages.map { it.second },
                         pendingFileName = pendingFileName,
                         replyToMessage = replyToMessage,
-                        replyLabel = agentName,
+                        replyLabel = replyToMessage?.agentName ?: agentName,
                         onPickCamera = onPickCamera,
                         onPickGallery = onPickGallery,
                         onPickFile = onPickFile,
@@ -294,9 +294,7 @@ fun ChatPanel(
                         onCancelReply = { replyToMessage = null },
                         onStop = onStop,
                         onSend = {
-                            val replyContext = replyToMessage
-                                ?.let { "> ${it.content.take(200).replace("\n", " ")}\n\n" }
-                                ?: ""
+                            val replyContext = replyToMessage?.let { buildQuotedReplyContext(it) }.orEmpty()
                             onSend(replyContext + inputText)
                             replyToMessage = null
                         },
@@ -329,9 +327,7 @@ fun ChatPanel(
                                 imeAction = ImeAction.Send
                             ),
                             keyboardActions = KeyboardActions(onSend = {
-                                val replyContext = replyToMessage
-                                    ?.let { "> ${it.content.take(200).replace("\n", " ")}\n\n" }
-                                    ?: ""
+                                val replyContext = replyToMessage?.let { buildQuotedReplyContext(it) }.orEmpty()
                                 onSend(replyContext + inputText)
                                 replyToMessage = null
                             }),

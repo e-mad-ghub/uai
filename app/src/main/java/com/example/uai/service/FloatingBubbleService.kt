@@ -56,11 +56,12 @@ import com.example.uai.MainActivity
 import com.example.uai.R
 import com.example.uai.UaiApplication
 import com.example.uai.ai.AiProviderFactory
-import com.example.uai.ai.ChatMessage
+import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
+import com.example.uai.data.db.toChatMessage
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AppColorTheme
@@ -70,7 +71,6 @@ import com.example.uai.ui.OverlayScreenCaptureOutcome
 import com.example.uai.ui.chat.persistImageAttachment
 import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.BubbleContent
-import com.example.uai.ui.chat.buildAttachedFileContext
 import com.example.uai.ui.chat.ChatPanel
 import com.example.uai.ui.chat.importFileAttachment
 import com.example.uai.ui.theme.UaiTheme
@@ -1440,13 +1440,16 @@ class FloatingBubbleService : Service() {
     private fun sendMessage(text: String) {
         val agent = selectedAgentForCurrentContext()
         val imageList = pendingImages.toList()
-        val fileCtx = pendingFileText?.let {
-            buildAttachedFileContext(pendingFileName ?: "file", it)
-        } ?: ""
-        val fullText = fileCtx + text
+        val attachedFile = pendingFileText?.let {
+            FileAttachmentContext(
+                displayName = pendingFileName ?: "file",
+                extractedText = it
+            )
+        }
+        val fullText = text
         val titleHint = text.trim().ifBlank { pendingFileName.orEmpty() }
 
-        if ((fullText.isBlank() && imageList.isEmpty()) || isLoading || agent == null) return
+        if ((fullText.isBlank() && imageList.isEmpty() && attachedFile == null) || isLoading || agent == null) return
 
         // Clear attachment before starting the stream (don't wait for it)
         clearAttachment()
@@ -1467,7 +1470,11 @@ class FloatingBubbleService : Service() {
                         .takeIf { it.isNotBlank() }
                         ?.take(60)
                         ?: fullText.trim().ifBlank {
-                            if (imageList.isNotEmpty()) "Image" else "Chat"
+                            when {
+                                attachedFile != null -> attachedFile.displayName
+                                imageList.isNotEmpty() -> "Image"
+                                else -> "Chat"
+                            }
                         }.take(60)
                     val conv = ConversationEntity(
                         id = UUID.randomUUID().toString(),
@@ -1493,7 +1500,9 @@ class FloatingBubbleService : Service() {
                     role = "user",
                     content = fullText,
                     createdAt = System.currentTimeMillis(),
-                    imageUri = persistedImageUri
+                    imageUri = persistedImageUri,
+                    attachedFileName = attachedFile?.displayName,
+                    attachedFileText = attachedFile?.extractedText
                 )
                 container.conversationRepository.insertMessage(userMsg)
                 chatMessages.add(userMsg)
@@ -1509,6 +1518,7 @@ class FloatingBubbleService : Service() {
                     content = "",
                     createdAt = System.currentTimeMillis(),
                     isStreaming = true,
+                    agentId = agent.id,
                     agentName = agent.name
                 )
                 container.conversationRepository.insertMessage(assistantMsg)
@@ -1531,14 +1541,13 @@ class FloatingBubbleService : Service() {
                 val history = allHistory.mapIndexed { idx, msg ->
                     if (idx == allHistory.lastIndex && msg.role == "user") {
                         when {
-                            imageList.isNotEmpty() -> ChatMessage(
-                                msg.role, msg.content,
+                            imageList.isNotEmpty() -> msg.toChatMessage(
                                 images = imageList.map { ImageAttachment(it.first) }
                             )
-                            else                   -> ChatMessage(msg.role, msg.content)
+                            else -> msg.toChatMessage()
                         }
                     } else {
-                        ChatMessage(msg.role, msg.content)
+                        msg.toChatMessage()
                     }
                 }
 

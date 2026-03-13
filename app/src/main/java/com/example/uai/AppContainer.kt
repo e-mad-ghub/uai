@@ -37,7 +37,7 @@ class AppContainer(context: Context) {
         ProviderModelCatalogRepository(preferences, okHttpClient)
 
     val conversationRepository: ConversationRepository =
-        ConversationRepository(db.conversationDao(), db.messageDao())
+        ConversationRepository(db.conversationDao(), db.messageDao(), context.applicationContext)
 
     val agentRepository: AgentRepository = AgentRepository(preferences)
 }

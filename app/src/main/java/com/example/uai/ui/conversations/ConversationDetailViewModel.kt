@@ -4,11 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.uai.ai.AiProviderFactory
-import com.example.uai.ai.ChatMessage
+import com.example.uai.ai.FileAttachmentContext
+import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.ai.StreamChunk
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
+import com.example.uai.data.db.toChatMessage
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.repository.AgentRepository
@@ -202,10 +204,11 @@ class ConversationDetailViewModel(
         text: String,
         imageBase64: String? = null,
         imageUri: String? = null,
-        titleHint: String? = null
+        titleHint: String? = null,
+        attachedFile: FileAttachmentContext? = null
     ) {
         val agent = activeAgent.value ?: return
-        if ((text.isBlank() && imageBase64 == null) || _isLoading.value) return
+        if ((text.isBlank() && imageBase64 == null && attachedFile == null) || _isLoading.value) return
 
         streamingJob = viewModelScope.launch {
             _isLoading.value = true
@@ -218,7 +221,13 @@ class ConversationDetailViewModel(
                     ?.trim()
                     ?.takeIf { it.isNotBlank() }
                     ?.take(60)
-                    ?: text.trim().ifBlank { if (imageBase64 != null) "Image" else "Chat" }.take(60)
+                    ?: text.trim().ifBlank {
+                        when {
+                            attachedFile != null -> attachedFile.displayName
+                            imageBase64 != null -> "Image"
+                            else -> "Chat"
+                        }
+                    }.take(60)
                 val existing = conversation.value
                 if (existing != null) {
                     repo.upsertConversation(
@@ -249,7 +258,9 @@ class ConversationDetailViewModel(
                     role = "user",
                     content = text,
                     createdAt = System.currentTimeMillis(),
-                    imageUri = imageUri
+                    imageUri = imageUri,
+                    attachedFileName = attachedFile?.displayName,
+                    attachedFileText = attachedFile?.extractedText
                 )
             )
 
@@ -262,15 +273,20 @@ class ConversationDetailViewModel(
                     content = "",
                     createdAt = System.currentTimeMillis(),
                     isStreaming = true,
+                    agentId = agent.id,
                     agentName = agent.name
                 )
             )
+            var accumulated = ""
 
             // If the agent doesn't support the attachment type, say so in the chat
             if (imageBase64 != null && !agent.canHandleImageRequests()) {
+                val notice =
+                    "I don't support image analysis with \"${agent.model}\". Please switch to a vision-capable model in agent settings."
+                accumulated = notice
                 repo.updateMessageContent(
                     assistantId,
-                    "I don't support image analysis with \"${agent.model}\". Please switch to a vision-capable model in agent settings.",
+                    notice,
                     false
                 )
                 repo.touchConversation(conversationId)
@@ -282,18 +298,16 @@ class ConversationDetailViewModel(
             val history = dbHistory.mapIndexed { index, msg ->
                 if (index == dbHistory.lastIndex && msg.role == "user") {
                     when {
-                        imageBase64 != null -> ChatMessage(
-                            msg.role, msg.content,
-                            images = listOf(com.example.uai.ai.ImageAttachment(imageBase64))
+                        imageBase64 != null -> msg.toChatMessage(
+                            images = listOf(ImageAttachment(imageBase64))
                         )
-                        else -> ChatMessage(msg.role, msg.content)
+                        else -> msg.toChatMessage()
                     }
                 } else {
-                    ChatMessage(msg.role, msg.content)
+                    msg.toChatMessage()
                 }
             }
 
-            var accumulated = ""
             try {
                 AiProviderFactory.create(
                     config = agent,
@@ -337,7 +351,12 @@ class ConversationDetailViewModel(
                 // Runs on both normal completion AND cancellation (user pressed stop).
                 // NonCancellable lets us call suspend functions even when cancelled.
                 withContext(NonCancellable) {
-                    repo.updateMessageContent(assistantId, accumulated, false)
+                    if (accumulated.isBlank()) {
+                        repo.deleteMessage(assistantId)
+                    } else {
+                        repo.updateMessageContent(assistantId, accumulated, false)
+                    }
+                    repo.touchConversation(conversationId)
                     _isLoading.value = false
                 }
             }

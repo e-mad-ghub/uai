@@ -162,6 +162,7 @@ class OpenRouterProvider(
                 add(mapOf("role" to "system", "content" to config.systemPrompt))
             }
             addAll(messages.map { msg ->
+                val textContent = msg.contentWithFileContext()
                 val content: Any = if (msg.images.isNotEmpty()) {
                     buildList {
                         for (img in msg.images) {
@@ -174,12 +175,12 @@ class OpenRouterProvider(
                                 )
                             )
                         }
-                        if (msg.content.isNotBlank()) {
-                            add(mapOf("type" to "text", "text" to msg.content))
+                        if (textContent.isNotBlank()) {
+                            add(mapOf("type" to "text", "text" to textContent))
                         }
                     }
                 } else {
-                    msg.content
+                    textContent
                 }
                 mapOf("role" to msg.role, "content" to content)
             })
@@ -205,10 +206,12 @@ class OpenRouterProvider(
     }
 
     private fun classifyRequestBucket(messages: List<ChatMessage>): OpenRouterFreeRoutingBucket {
-        val lastUserContent = messages.lastOrNull { it.role == "user" }?.content.orEmpty()
+        val lastUserMessage = messages.lastOrNull { it.role == "user" }
+        val lastUserContent = lastUserMessage?.content.orEmpty()
         return when {
-            messages.any { it.images.isNotEmpty() } -> OpenRouterFreeRoutingBucket.VISION
-            lastUserContent.contains("<attached_file ", ignoreCase = true) ->
+            lastUserMessage?.images?.isNotEmpty() == true -> OpenRouterFreeRoutingBucket.VISION
+            lastUserMessage?.fileAttachment != null ||
+                lastUserContent.contains("<attached_file ", ignoreCase = true) ->
                 OpenRouterFreeRoutingBucket.DOCUMENT
             else -> OpenRouterFreeRoutingBucket.GENERAL
         }

@@ -36,6 +36,7 @@ import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.service.FloatingBubbleService
+import com.example.uai.ui.components.ProductEmptyStateCard
 import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
@@ -416,32 +417,24 @@ private fun AssistantSetupPromptCard(
     onOpenAssistants: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    ElevatedCard(modifier = modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(
-                if (hasAnyAssistants) "Choose an assistant for this chat"
-                else "Create your first assistant",
-                style = MaterialTheme.typography.headlineSmall,
-                textAlign = TextAlign.Center
-            )
-            Text(
-                if (hasAnyAssistants)
-                    "You already have assistants configured. Choose one for this chat from the top bar, or open Assistants to set a default for future chats."
-                else
-                    "Add one connection, choose a role, and SideAgent will be ready for new chats.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-            Button(onClick = onOpenAssistants) {
-                Text("Open Assistants")
-            }
-        }
-    }
+    ProductEmptyStateCard(
+        title = if (hasAnyAssistants) {
+            "Choose an assistant for this chat"
+        } else {
+            "Create your first assistant"
+        },
+        body = if (hasAnyAssistants) {
+            "You already have assistants configured. Choose one for this chat from the top bar, or open Assistants to set a default for future chats."
+        } else {
+            "Add one connection, choose a role, and SideAgent will be ready for new chats."
+        },
+        actionLabel = "Open Assistants",
+        onAction = onOpenAssistants,
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        titleAlign = TextAlign.Center,
+        bodyAlign = TextAlign.Center
+    )
 }
 
 private fun encodeImageForApi(context: android.content.Context, uri: Uri): Pair<String?, ImageBitmap?> {

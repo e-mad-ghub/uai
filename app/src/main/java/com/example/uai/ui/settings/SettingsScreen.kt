@@ -24,11 +24,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
@@ -46,6 +46,7 @@ import com.example.uai.R
 import com.example.uai.data.model.AppColorTheme
 import com.example.uai.service.FloatingBubbleService
 import com.example.uai.service.MiniChatScreenshotAccessibilityService
+import com.example.uai.ui.theme.lightScheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -365,6 +366,7 @@ private fun ThemeCard(theme: AppColorTheme, isSelected: Boolean, onClick: () -> 
     val selectionState = stringResource(
         if (isSelected) R.string.selected else R.string.not_selected
     )
+    val previewScheme = remember(theme) { theme.lightScheme() }
 
     OutlinedCard(
         onClick = onClick,
@@ -372,6 +374,13 @@ private fun ThemeCard(theme: AppColorTheme, isSelected: Boolean, onClick: () -> 
             BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
         else
             BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.38f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        ),
         modifier = Modifier
             .width(92.dp)
             .semantics(mergeDescendants = true) {
@@ -383,30 +392,65 @@ private fun ThemeCard(theme: AppColorTheme, isSelected: Boolean, onClick: () -> 
     ) {
         Column(
             modifier = Modifier.padding(10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(5.dp)
+            horizontalAlignment = Alignment.Start,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Box(
-                modifier = Modifier.size(36.dp).clip(CircleShape).background(Color(theme.previewColorArgb)),
-                contentAlignment = Alignment.Center
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                previewScheme.primary,
+                                previewScheme.secondary,
+                                previewScheme.background
+                            )
+                        )
+                    )
             ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(previewScheme.surfaceVariant)
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    theme.displayName,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
                 if (isSelected) {
-                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
             Text(
-                theme.emoji,
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.clearAndSetSemantics { }
-            )
-            Text(
-                theme.displayName,
                 style = MaterialTheme.typography.labelSmall,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                text = stringResource(
+                    if (theme == AppColorTheme.DEFAULT) {
+                        R.string.settings_theme_default_label
+                    } else {
+                        R.string.settings_theme_optional_label
+                    }
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

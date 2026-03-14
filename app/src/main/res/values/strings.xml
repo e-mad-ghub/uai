@@ -7,6 +7,7 @@
     <string name="action_manage_screenshot_helper">Manage screenshot helper</string>
     <string name="selected">Selected</string>
     <string name="not_selected">Not selected</string>
+    <string name="drawer_workspace_subtitle">Your AI workspace</string>
     <string name="settings_title">Settings</string>
     <string name="settings_section_mini_chat">Mini Chat</string>
     <string name="settings_section_appearance">Appearance</string>
@@ -16,6 +17,8 @@
     <string name="settings_version">App version %1$s</string>
     <string name="settings_version_unknown">Unknown</string>
     <string name="settings_theme_option">%1$s theme</string>
+    <string name="settings_theme_default_label">Product default</string>
+    <string name="settings_theme_optional_label">Accent theme</string>
     <string name="mini_chat_description">Keep a floating SideAgent bubble available on top of other apps for quick questions and screenshots.</string>
     <string name="mini_chat_requires_overlay">Mini Chat needs Android\'s "Display over other apps" permission so the SideAgent bubble can stay available on top of other apps.</string>
     <string name="mini_chat_screenshots_title">Screenshots in Mini Chat</string>
@@ -35,6 +38,7 @@
     <string name="bubble_notification_title">SideAgent Mini Chat</string>
     <string name="bubble_notification_text">Your floating AI sidecar is active</string>
     <string name="feature_mini_chat">Mini Chat</string>
+    <string name="feature_chats">Chats</string>
     <string name="feature_agents">Assistants</string>
     <string name="feature_rooms">Council</string>
     <string name="feature_room">Council Room</string>
@@ -49,6 +53,9 @@
     <string name="overlay_permission_message">To turn on Mini Chat, allow "Display over other apps" in Android settings.</string>
     <string name="mini_chat_active">Mini Chat is active</string>
     <string name="mini_chat_inactive">Mini Chat is inactive</string>
+    <string name="conversations_empty_title">No chats yet</string>
+    <string name="conversations_empty_body">Start a new chat to build your first SideAgent conversation.</string>
+    <string name="conversations_empty_cta">Start a new chat</string>
     <string name="assistants_add_assistant">Add assistant</string>
     <string name="assistants_choose_default_title">Choose your default assistant</string>
     <string name="assistants_choose_default_body">New chats use the default assistant automatically. Tap any card to refine its setup later.</string>

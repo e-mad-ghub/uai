@@ -15,7 +15,7 @@ class SettingsViewModel(private val repo: AgentRepository) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     val colorTheme = repo.colorThemeFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppColorTheme.TERRACOTTA)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppColorTheme.DEFAULT)
 
     fun setBubbleEnabled(enabled: Boolean) {
         viewModelScope.launch { repo.setBubbleEnabled(enabled) }

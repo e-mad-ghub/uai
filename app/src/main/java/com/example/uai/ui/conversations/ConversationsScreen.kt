@@ -12,10 +12,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.uai.R
 import com.example.uai.data.db.ConversationEntity
+import com.example.uai.ui.components.ProductEmptyStateCard
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -34,7 +37,7 @@ fun ConversationsScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text("Chats") },
+                title = { Text(stringResource(R.string.feature_chats)) },
                 navigationIcon = {
                     IconButton(onClick = openDrawer) {
                         Icon(Icons.Default.Menu, contentDescription = "Menu")
@@ -53,15 +56,16 @@ fun ConversationsScreen(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("No conversations yet", style = MaterialTheme.typography.bodyLarge)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Tap + to start a new chat",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                ProductEmptyStateCard(
+                    title = stringResource(R.string.conversations_empty_title),
+                    body = stringResource(R.string.conversations_empty_body),
+                    actionLabel = stringResource(R.string.conversations_empty_cta),
+                    onAction = onNewConversation,
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    titleAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    bodyAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
             }
         } else {
             LazyColumn(

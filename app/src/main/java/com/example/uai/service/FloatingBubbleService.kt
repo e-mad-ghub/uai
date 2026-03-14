@@ -116,7 +116,7 @@ class FloatingBubbleService : Service() {
     private var activeAgent: AgentConfig? by mutableStateOf(null)
     private var allAgents by mutableStateOf<List<AgentConfig>>(emptyList())
     private var availableConversations by mutableStateOf<List<ConversationEntity>>(emptyList())
-    private var colorTheme by mutableStateOf(AppColorTheme.TERRACOTTA)
+    private var colorTheme by mutableStateOf(AppColorTheme.DEFAULT)
     private var isDismissTargetActive by mutableStateOf(false)
     private var isAppUiVisible = false
 
@@ -1735,7 +1735,7 @@ class FloatingBubbleService : Service() {
         val notification: Notification = NotificationCompat.Builder(this, UaiApplication.BUBBLE_CHANNEL_ID)
             .setContentTitle(getString(R.string.bubble_notification_title))
             .setContentText(getString(R.string.bubble_notification_text))
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_launcher_monochrome)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()

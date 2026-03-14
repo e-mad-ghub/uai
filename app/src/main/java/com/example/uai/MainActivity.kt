@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -37,6 +36,7 @@ import androidx.navigation.compose.rememberNavController
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.model.AppColorTheme
 import com.example.uai.service.FloatingBubbleService
+import com.example.uai.ui.components.BrandMarkBadge
 import com.example.uai.ui.navigation.AppNavGraph
 import com.example.uai.ui.navigation.Routes
 import com.example.uai.ui.theme.UaiTheme
@@ -66,7 +66,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val colorTheme by container.agentRepository.colorThemeFlow
-                .collectAsState(AppColorTheme.TERRACOTTA)
+                .collectAsState(AppColorTheme.DEFAULT)
 
             UaiTheme(colorTheme = colorTheme) {
                 val navController = rememberNavController()
@@ -114,16 +114,19 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.Chat,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(Modifier.width(10.dp))
-                                Text(
-                                    stringResource(R.string.app_name),
-                                    style = MaterialTheme.typography.titleLarge
-                                )
+                                BrandMarkBadge()
+                                Spacer(Modifier.width(12.dp))
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        stringResource(R.string.app_name),
+                                        style = MaterialTheme.typography.titleLarge
+                                    )
+                                    Text(
+                                        stringResource(R.string.drawer_workspace_subtitle),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
 
                             // New Chat button

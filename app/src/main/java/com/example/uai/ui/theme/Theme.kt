@@ -8,12 +8,13 @@ import com.example.uai.data.model.AppColorTheme
 @Composable
 fun UaiTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    colorTheme: AppColorTheme = AppColorTheme.TERRACOTTA,
+    colorTheme: AppColorTheme = AppColorTheme.DEFAULT,
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
         colorScheme = if (darkTheme) colorTheme.darkScheme() else colorTheme.lightScheme(),
         typography = Typography,
+        shapes = UaiShapes,
         content = content
     )
 }

@@ -52,7 +52,7 @@ class AppPreferences(context: Context) {
     val bubbleEnabledFlow: Flow<Boolean> = store.data.map { it[Keys.BUBBLE_ENABLED] ?: false }
 
     val colorThemeFlow: Flow<AppColorTheme> = store.data.map {
-        AppColorTheme.fromKey(it[Keys.COLOR_THEME] ?: AppColorTheme.TERRACOTTA.name)
+        AppColorTheme.fromKey(it[Keys.COLOR_THEME] ?: AppColorTheme.DEFAULT.name)
     }
 
     val openRouterCatalogFlow: Flow<OpenRouterCatalog> = store.data.map { prefs ->

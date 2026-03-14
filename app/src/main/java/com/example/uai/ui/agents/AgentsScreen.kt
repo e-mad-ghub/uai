@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -53,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.ui.components.ProductEmptyStateCard
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -157,37 +157,12 @@ private fun AssistantsEmptyState(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                horizontalAlignment = Alignment.Start
-            ) {
-                Surface(
-                    shape = MaterialTheme.shapes.large,
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Icon(
-                        Icons.Default.SmartToy,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(14.dp)
-                    )
-                }
-                Text(
-                    stringResource(R.string.assistants_empty_title),
-                    style = MaterialTheme.typography.headlineSmall
-                )
-                Text(
-                    stringResource(R.string.assistants_empty_body),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Button(onClick = onAddAgent) {
-                    Text(stringResource(R.string.assistants_empty_cta))
-                }
-            }
-        }
+        ProductEmptyStateCard(
+            title = stringResource(R.string.assistants_empty_title),
+            body = stringResource(R.string.assistants_empty_body),
+            actionLabel = stringResource(R.string.assistants_empty_cta),
+            onAction = onAddAgent
+        )
     }
 }
 

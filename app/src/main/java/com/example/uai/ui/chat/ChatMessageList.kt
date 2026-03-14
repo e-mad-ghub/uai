@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -99,7 +100,6 @@ fun rememberChatMessageListBehavior(messages: List<MessageEntity>): ChatMessageL
 
         if (latestMessage.id != lastSeenMessageId && latestMessage.role == "user") {
             autoScrollEnabled = true
-            listState.scrollToConversationEnd()
         }
 
         lastSeenMessageId = latestMessage.id
@@ -119,16 +119,10 @@ fun rememberChatMessageListBehavior(messages: List<MessageEntity>): ChatMessageL
         }
     }
 
-    LaunchedEffect(listState, autoScrollEnabled, messages.isNotEmpty()) {
-        if (!autoScrollEnabled || messages.isEmpty()) return@LaunchedEffect
-        snapshotFlow {
-            listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-        }.collect {
-            listState.scrollToConversationEnd()
-        }
-    }
-
-    LaunchedEffect(listState, autoScrollEnabled, isAtBottom) {
+    val latestAutoScrollEnabled by rememberUpdatedState(autoScrollEnabled)
+    val latestIsAtBottom by rememberUpdatedState(isAtBottom)
+    val hasMessages by rememberUpdatedState(messages.isNotEmpty())
+    LaunchedEffect(listState) {
         snapshotFlow {
             listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
         }.collect { viewportHeight ->
@@ -136,13 +130,17 @@ fun rememberChatMessageListBehavior(messages: List<MessageEntity>): ChatMessageL
             lastViewportHeight = viewportHeight
 
             if (previousViewportHeight == null) return@collect
-            if (autoScrollEnabled || isAtBottom) return@collect
 
             val viewportDelta = viewportHeight - previousViewportHeight
-            if (viewportDelta != 0) {
+            when {
+                hasMessages && (latestAutoScrollEnabled || latestIsAtBottom) -> {
+                    listState.scrollToConversationEnd()
+                }
+                viewportDelta != 0 -> {
                 // The mini chat panel grows upward from the bottom. Compensate the list scroll
                 // by the same amount so the text the user is reading stays visually anchored.
-                listState.scrollBy(-viewportDelta.toFloat())
+                    listState.scrollBy(-viewportDelta.toFloat())
+                }
             }
         }
     }
@@ -207,14 +205,14 @@ fun ChatMessageList(
                 item(contentType = "empty") { emptyContent() }
             }
 
-            items(messages, key = { it.id }) { message ->
-                val displayMessage = if (!showAssistantNames && message.role == "assistant") {
-                    message.copy(agentName = null)
-                } else {
-                    message
-                }
+            items(
+                items = messages,
+                key = { it.id },
+                contentType = { it.role }
+            ) { message ->
                 MessageBubble(
-                    message = displayMessage,
+                    message = message,
+                    showAgentName = message.role != "assistant" || showAssistantNames,
                     thumbnails = messageThumbnails[message.id] ?: emptyList(),
                     onDoubleTap = onMessageDoubleTap,
                     onReply = replyActionForMessage(message)

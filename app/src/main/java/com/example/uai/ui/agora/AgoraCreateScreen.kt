@@ -13,7 +13,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
-import com.example.uai.ui.components.ProductHeroCard
+import com.example.uai.ui.components.ProductScreenIntro
 import com.example.uai.ui.components.ProductTopBarTitle
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -58,7 +58,7 @@ fun AgoraCreateScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                ProductHeroCard(
+                ProductScreenIntro(
                     eyebrow = stringResource(R.string.feature_rooms),
                     title = stringResource(R.string.new_room),
                     body = stringResource(R.string.agora_hero_body)

@@ -57,6 +57,7 @@ import kotlin.math.roundToInt
 @Composable
 fun MessageBubble(
     message: MessageEntity,
+    showAgentName: Boolean = true,
     thumbnails: List<ImageBitmap> = emptyList(),
     onDoubleTap: (() -> Unit)? = null,
     onReply: (() -> Unit)? = null,
@@ -139,7 +140,7 @@ fun MessageBubble(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
-        if (!isUser && message.agentName != null) {
+        if (!isUser && showAgentName && message.agentName != null) {
             Text(
                 text = message.agentName,
                 style = MaterialTheme.typography.labelSmall,

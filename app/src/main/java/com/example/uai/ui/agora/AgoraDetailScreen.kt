@@ -31,7 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.data.db.MessageEntity
-import com.example.uai.ui.components.ProductHeroCard
+import com.example.uai.ui.components.ProductScreenIntro
 import com.example.uai.ui.components.ProductTopBarTitle
 import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.ChatInputBar
@@ -285,7 +285,7 @@ fun AgoraDetailScreen(
 
             if (messages.isEmpty() && !isLoading) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    ProductHeroCard(
+                    ProductScreenIntro(
                         eyebrow = stringResource(R.string.feature_room),
                         title = "Ask anything",
                         body = if (participantNames.isEmpty()) {

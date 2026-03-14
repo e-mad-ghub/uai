@@ -17,6 +17,7 @@ import com.example.uai.data.model.ProviderModelCatalog
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore("uai_prefs")
@@ -34,6 +35,10 @@ class AppPreferences(context: Context) {
         val BUBBLE_USER_SET = booleanPreferencesKey("bubble_user_set")
         val BUBBLE_POS_X = intPreferencesKey("bubble_pos_x")
         val BUBBLE_POS_Y = intPreferencesKey("bubble_pos_y")
+        val BUBBLE_POS_PORTRAIT_X = intPreferencesKey("bubble_pos_portrait_x")
+        val BUBBLE_POS_PORTRAIT_Y = intPreferencesKey("bubble_pos_portrait_y")
+        val BUBBLE_POS_WIDE_X = intPreferencesKey("bubble_pos_wide_x")
+        val BUBBLE_POS_WIDE_Y = intPreferencesKey("bubble_pos_wide_y")
         val COLOR_THEME = stringPreferencesKey("color_theme")
         val MINI_CHAT_ENTRY_TIP_DISMISSED = booleanPreferencesKey("mini_chat_entry_tip_dismissed")
         val MINI_CHAT_MINIMIZE_TIP_DISMISSED = booleanPreferencesKey("mini_chat_minimize_tip_dismissed")
@@ -153,6 +158,36 @@ class AppPreferences(context: Context) {
 
     suspend fun saveBubblePosition(x: Int, y: Int) {
         store.edit {
+            it[Keys.BUBBLE_POS_X] = x
+            it[Keys.BUBBLE_POS_Y] = y
+        }
+    }
+
+    suspend fun getBubblePosition(isWideMode: Boolean): Pair<Int, Int>? {
+        val prefs = store.data.first()
+        val xKey = if (isWideMode) Keys.BUBBLE_POS_WIDE_X else Keys.BUBBLE_POS_PORTRAIT_X
+        val yKey = if (isWideMode) Keys.BUBBLE_POS_WIDE_Y else Keys.BUBBLE_POS_PORTRAIT_Y
+        val modeX = prefs[xKey]
+        val modeY = prefs[yKey]
+        if (modeX != null && modeY != null) {
+            return modeX to modeY
+        }
+
+        val legacyX = prefs[Keys.BUBBLE_POS_X]
+        val legacyY = prefs[Keys.BUBBLE_POS_Y]
+        return if (legacyX != null && legacyY != null) {
+            legacyX to legacyY
+        } else {
+            null
+        }
+    }
+
+    suspend fun saveBubblePositionForMode(x: Int, y: Int, isWideMode: Boolean) {
+        store.edit {
+            val xKey = if (isWideMode) Keys.BUBBLE_POS_WIDE_X else Keys.BUBBLE_POS_PORTRAIT_X
+            val yKey = if (isWideMode) Keys.BUBBLE_POS_WIDE_Y else Keys.BUBBLE_POS_PORTRAIT_Y
+            it[xKey] = x
+            it[yKey] = y
             it[Keys.BUBBLE_POS_X] = x
             it[Keys.BUBBLE_POS_Y] = y
         }

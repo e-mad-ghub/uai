@@ -2,6 +2,7 @@ package com.example.uai.ai
 
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
+import com.example.uai.data.model.normalizeOpenAiCompatibleBaseUrl
 import com.example.uai.data.repository.OpenRouterCatalogRepository
 import okhttp3.OkHttpClient
 
@@ -18,6 +19,10 @@ object AiProviderFactory {
             client = client,
             openRouterCatalogRepository = openRouterCatalogRepository,
             bestFreeRoutingStateStore = openRouterBestFreeRoutingStateStore
+        )
+        AiProviderType.CUSTOM -> OpenAiProvider(
+            client = client,
+            baseUrl = normalizeOpenAiCompatibleBaseUrl(config.customBaseUrl)
         )
     }
 }

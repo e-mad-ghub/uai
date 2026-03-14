@@ -2,6 +2,8 @@ package com.example.uai
 
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.buildOpenAiCompatibleChatCompletionsUrl
+import com.example.uai.data.model.normalizeOpenAiCompatibleBaseUrl
 import com.example.uai.ui.agents.defaultRecommendedModelId
 import com.example.uai.ui.agents.recommendedModelChoices
 import org.junit.Assert.assertEquals
@@ -112,5 +114,27 @@ class ProviderModelRecommendationsTest {
         )
 
         assertTrue(agent.supportsVision)
+    }
+
+    @Test
+    fun customProviderDefaultRecommendationFallsBackToManualModelEntry() {
+        val selected = defaultRecommendedModelId(
+            provider = AiProviderType.CUSTOM
+        )
+
+        assertEquals("", selected)
+    }
+
+    @Test
+    fun openAiCompatibleBaseUrlNormalizationStripsEndpointSuffixes() {
+        val normalized = normalizeOpenAiCompatibleBaseUrl(
+            "https://api.x.ai/v1/chat/completions/"
+        )
+
+        assertEquals("https://api.x.ai/v1", normalized)
+        assertEquals(
+            "https://api.x.ai/v1/chat/completions",
+            buildOpenAiCompatibleChatCompletionsUrl(normalized)
+        )
     }
 }

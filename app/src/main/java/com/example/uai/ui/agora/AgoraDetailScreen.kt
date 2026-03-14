@@ -31,6 +31,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.data.db.MessageEntity
+import com.example.uai.ui.components.ProductHeroCard
+import com.example.uai.ui.components.ProductTopBarTitle
 import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
@@ -258,22 +260,13 @@ fun AgoraDetailScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            conversation?.title ?: stringResource(R.string.feature_room),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                    ProductTopBarTitle(
+                        title = conversation?.title ?: stringResource(R.string.feature_room),
+                        subtitle = stringResource(
+                            R.string.room_participants_subtitle,
+                            participantNames.size
                         )
-                        if (participantNames.isNotEmpty()) {
-                            Text(
-                                participantNames.joinToString(" · "),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
+                    )
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -292,27 +285,16 @@ fun AgoraDetailScreen(
 
             if (messages.isEmpty() && !isLoading) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.padding(32.dp)
-                    ) {
-                        Text(
-                            "Ask anything",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            textAlign = TextAlign.Center
-                        )
-                        Text(
-                            if (participantNames.isEmpty())
-                                "No agents in this council room yet. Tap ⚙ to add agents."
-                            else
-                                "All agents reply by default.\nType @Name or tap a chip to address one.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
-                        )
-                    }
+                    ProductHeroCard(
+                        eyebrow = stringResource(R.string.feature_room),
+                        title = "Ask anything",
+                        body = if (participantNames.isEmpty()) {
+                            "No assistants are active in this council room yet. Open room settings to add participants."
+                        } else {
+                            "All assistants reply by default. Type @Name or tap a chip when you want to direct the next turn."
+                        },
+                        modifier = Modifier.padding(24.dp)
+                    )
                 }
             } else {
                 ChatMessageList(

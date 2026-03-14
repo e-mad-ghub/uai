@@ -13,12 +13,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
 import com.example.uai.data.db.ConversationEntity
+import com.example.uai.ui.components.BrandMarkBadge
 import com.example.uai.ui.components.ProductEmptyStateCard
+import com.example.uai.ui.components.ProductHeroCard
+import com.example.uai.ui.components.ProductPill
+import com.example.uai.ui.components.ProductTopBarTitle
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -37,7 +42,12 @@ fun ConversationsScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.feature_chats)) },
+                title = {
+                    ProductTopBarTitle(
+                        title = stringResource(R.string.feature_chats),
+                        subtitle = stringResource(R.string.screen_chats_subtitle)
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = openDrawer) {
                         Icon(Icons.Default.Menu, contentDescription = "Menu")
@@ -63,17 +73,29 @@ fun ConversationsScreen(
                     onAction = onNewConversation,
                     modifier = Modifier.padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    titleAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    bodyAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    titleAlign = TextAlign.Center,
+                    bodyAlign = TextAlign.Center
                 )
             }
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(
-                    top = padding.calculateTopPadding() + 8.dp,
-                    bottom = padding.calculateBottomPadding() + 8.dp
-                )
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = padding.calculateTopPadding() + 12.dp,
+                    bottom = padding.calculateBottomPadding() + 96.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                item {
+                    ProductHeroCard(
+                        eyebrow = stringResource(R.string.feature_chats),
+                        title = stringResource(R.string.conversations_hero_title),
+                        body = stringResource(R.string.conversations_hero_body),
+                        actionLabel = stringResource(R.string.conversations_empty_cta),
+                        onAction = onNewConversation
+                    )
+                }
                 items(conversations, key = { it.id }) { conv ->
                     ConversationItem(
                         conversation = conv,
@@ -94,18 +116,45 @@ private fun ConversationItem(
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
 
-    ListItem(
-        headlineContent = {
-            Text(conversation.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        },
-        supportingContent = {
-            Text(
-                "${conversation.agentName} · ${formatDate(conversation.updatedAt)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+    ElevatedCard(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            BrandMarkBadge(
+                modifier = Modifier.size(52.dp),
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.primary
             )
-        },
-        trailingContent = {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    conversation.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ProductPill(
+                        label = conversation.agentName ?: "Assistant",
+                        emphasized = conversation.isPinned
+                    )
+                    Text(
+                        formatDate(conversation.updatedAt),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
             IconButton(onClick = { showDeleteDialog = true }) {
                 Icon(
                     Icons.Default.Delete,
@@ -113,10 +162,8 @@ private fun ConversationItem(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-        },
-        modifier = Modifier.clickable(onClick = onClick)
-    )
-    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        }
+    }
 
     if (showDeleteDialog) {
         AlertDialog(

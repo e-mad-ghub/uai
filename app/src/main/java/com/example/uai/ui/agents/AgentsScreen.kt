@@ -52,7 +52,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.ui.components.ProductEmptyStateCard
+import com.example.uai.ui.components.ProductHeroCard
+import com.example.uai.ui.components.ProductPill
+import com.example.uai.ui.components.ProductTopBarTitle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,7 +74,12 @@ fun AgentsScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.feature_agents)) },
+                title = {
+                    ProductTopBarTitle(
+                        title = stringResource(R.string.feature_agents),
+                        subtitle = stringResource(R.string.screen_assistants_subtitle)
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -110,22 +119,13 @@ fun AgentsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
-                    ElevatedCard {
-                        Column(
-                            modifier = Modifier.padding(18.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                stringResource(R.string.assistants_choose_default_title),
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            Text(
-                                stringResource(R.string.assistants_choose_default_body),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+                    ProductHeroCard(
+                        eyebrow = stringResource(R.string.feature_agents),
+                        title = stringResource(R.string.assistants_choose_default_title),
+                        body = stringResource(R.string.assistants_choose_default_body),
+                        actionLabel = stringResource(R.string.assistants_add_assistant),
+                        onAction = onAddAgent
+                    )
                 }
 
                 items(uiState.agents, key = { it.id }) { agent ->
@@ -230,8 +230,19 @@ private fun AgentItem(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ProductPill(label = agent.provider.displayName, emphasized = true)
+                        ProductPill(label = agent.model)
+                    }
                     Text(
-                        "${agent.provider.displayName} · ${agent.model}",
+                        buildString {
+                            append(if (agent.apiKey.isBlank()) "Connection pending" else "Configured")
+                            append(" · ")
+                            append(if (agent.canHandleImageRequests()) "Images enabled" else "Text only")
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

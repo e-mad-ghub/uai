@@ -48,6 +48,9 @@ import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.isOpenRouterFreeModel
+import com.example.uai.ui.components.ProductHeroCard
+import com.example.uai.ui.components.ProductPill
+import com.example.uai.ui.components.ProductTopBarTitle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -110,11 +113,16 @@ fun AgentEditScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        when {
+                    ProductTopBarTitle(
+                        title = when {
                             viewModel.isEditing -> stringResource(R.string.assistants_edit_title)
                             viewModel.isDuplicating -> stringResource(R.string.assistants_duplicate_title)
                             else -> stringResource(R.string.assistants_create_title)
+                        },
+                        subtitle = when {
+                            viewModel.isEditing -> stringResource(R.string.screen_assistant_edit_subtitle)
+                            viewModel.isDuplicating -> stringResource(R.string.screen_assistant_duplicate_subtitle)
+                            else -> stringResource(R.string.screen_assistant_create_subtitle)
                         }
                     )
                 },
@@ -167,46 +175,22 @@ fun AgentEditScreen(
                 .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            ElevatedCard {
-                Row(
-                    modifier = Modifier.padding(18.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Surface(
-                        shape = MaterialTheme.shapes.large,
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Icon(
-                            Icons.Default.Tune,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(12.dp)
-                        )
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            when {
-                                viewModel.isEditing -> stringResource(R.string.assistants_hero_edit_title)
-                                viewModel.isDuplicating -> stringResource(R.string.assistants_hero_duplicate_title)
-                                else -> stringResource(R.string.assistants_hero_create_title)
-                            },
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(
-                            when {
-                                viewModel.isEditing -> stringResource(R.string.assistants_hero_edit_body)
-                                viewModel.isDuplicating -> stringResource(R.string.assistants_hero_duplicate_body)
-                                else -> stringResource(R.string.assistants_hero_create_body)
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+            ProductHeroCard(
+                eyebrow = stringResource(R.string.agent_edit_hero_eyebrow),
+                title = when {
+                    viewModel.isEditing -> stringResource(R.string.assistants_hero_edit_title)
+                    viewModel.isDuplicating -> stringResource(R.string.assistants_hero_duplicate_title)
+                    else -> stringResource(R.string.assistants_hero_create_title)
+                },
+                body = when {
+                    viewModel.isEditing -> stringResource(R.string.assistants_hero_edit_body)
+                    viewModel.isDuplicating -> stringResource(R.string.assistants_hero_duplicate_body)
+                    else -> stringResource(R.string.assistants_hero_create_body)
                 }
-            }
+            )
 
             SetupSection(
+                eyebrow = stringResource(R.string.agent_edit_basic_eyebrow),
                 title = stringResource(R.string.assistants_section_basic_title),
                 description = stringResource(R.string.assistants_section_basic_body)
             ) {
@@ -253,6 +237,14 @@ fun AgentEditScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 ProviderInfoCard(info = providerInfo)
+
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ProductPill(label = agent.provider.displayName, emphasized = true)
+                    ProductPill(label = selectedModelChoice.label)
+                }
 
                 OutlinedTextField(
                     value = agent.apiKey,
@@ -322,6 +314,7 @@ fun AgentEditScreen(
             }
 
             SetupSection(
+                eyebrow = stringResource(R.string.agent_edit_advanced_eyebrow),
                 title = stringResource(R.string.assistants_section_advanced_title),
                 description = stringResource(R.string.assistants_section_advanced_body)
             ) {
@@ -428,6 +421,7 @@ fun AgentEditScreen(
 
 @Composable
 private fun SetupSection(
+    eyebrow: String,
     title: String,
     description: String,
     content: @Composable ColumnScope.() -> Unit
@@ -437,6 +431,11 @@ private fun SetupSection(
             modifier = Modifier.padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
             content = {
+                Text(
+                    eyebrow.uppercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 Text(
                     description,

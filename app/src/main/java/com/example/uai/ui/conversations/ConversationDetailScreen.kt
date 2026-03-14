@@ -26,17 +26,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.uai.R
 import com.example.uai.UaiApplication
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.service.FloatingBubbleService
 import com.example.uai.ui.components.ProductEmptyStateCard
+import com.example.uai.ui.components.ProductPill
+import com.example.uai.ui.components.ProductTopBarTitle
 import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.ChatInputBar
 import com.example.uai.ui.chat.ChatMessageList
@@ -241,7 +245,13 @@ fun ConversationDetailScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text(conversation?.title ?: "New Chat") },
+                title = {
+                    ProductTopBarTitle(
+                        title = conversation?.title ?: "New Chat",
+                        subtitle = activeAgent?.let { "${it.name} · ${it.provider.displayName}" }
+                            ?: stringResource(R.string.chat_choose_assistant_subtitle)
+                    )
+                },
                 navigationIcon = { IconButton(onClick = openDrawer) { Icon(Icons.Default.Menu, "Menu") } },
                 actions = {
                     if (agents.isNotEmpty()) {
@@ -307,9 +317,10 @@ fun ConversationDetailScreen(
                             Text("What can I help you with?", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.Center)
                             Text("Type a message below to get started.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                             Spacer(Modifier.height(4.dp))
-                            AssistChip(onClick = { agentMenuExpanded = true }, label = {
-                                Text("${activeAgent!!.name} · ${activeAgent!!.provider.displayName}", style = MaterialTheme.typography.labelSmall)
-                            })
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ProductPill(label = activeAgent!!.name, emphasized = true)
+                                ProductPill(label = activeAgent!!.provider.displayName)
+                            }
                         }
                     }
                 }
@@ -333,9 +344,10 @@ fun ConversationDetailScreen(
                     conversation != null || messages.isNotEmpty() -> "Choose an assistant for this conversation."
                     else -> "Choose which assistant this new chat should use."
                 }
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth()
+                ElevatedCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
                     Row(
                         modifier = Modifier

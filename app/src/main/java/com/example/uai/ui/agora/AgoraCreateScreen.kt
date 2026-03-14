@@ -13,6 +13,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
+import com.example.uai.ui.components.ProductHeroCard
+import com.example.uai.ui.components.ProductTopBarTitle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -36,7 +38,12 @@ fun AgoraCreateScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.new_room)) },
+                title = {
+                    ProductTopBarTitle(
+                        title = stringResource(R.string.new_room),
+                        subtitle = stringResource(R.string.screen_new_council_subtitle)
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -50,6 +57,13 @@ fun AgoraCreateScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            item {
+                ProductHeroCard(
+                    eyebrow = stringResource(R.string.feature_rooms),
+                    title = stringResource(R.string.new_room),
+                    body = stringResource(R.string.agora_hero_body)
+                )
+            }
             item {
                 OutlinedTextField(
                     value = roomName,

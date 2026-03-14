@@ -46,6 +46,9 @@ import com.example.uai.R
 import com.example.uai.data.model.AppColorTheme
 import com.example.uai.service.FloatingBubbleService
 import com.example.uai.service.MiniChatScreenshotAccessibilityService
+import com.example.uai.ui.components.ProductHeroCard
+import com.example.uai.ui.components.ProductPill
+import com.example.uai.ui.components.ProductTopBarTitle
 import com.example.uai.ui.theme.lightScheme
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -125,7 +128,12 @@ fun SettingsScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.settings_title)) },
+                title = {
+                    ProductTopBarTitle(
+                        title = stringResource(R.string.settings_title),
+                        subtitle = stringResource(R.string.screen_settings_subtitle)
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -145,6 +153,12 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            ProductHeroCard(
+                eyebrow = stringResource(R.string.settings_title),
+                title = stringResource(R.string.settings_hero_title),
+                body = stringResource(R.string.settings_hero_body)
+            )
+
             SettingsSectionHeader(title = stringResource(R.string.settings_section_mini_chat))
 
             if (!hasOverlayPermission && showOverlayPermissionCallout) {
@@ -185,53 +199,53 @@ fun SettingsScreen(
                 }
             }
 
-            ListItem(
-                leadingContent = { Icon(Icons.Default.BubbleChart, contentDescription = null) },
-                headlineContent = { Text(stringResource(R.string.feature_mini_chat)) },
-                supportingContent = {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            miniChatStateDescription,
-                            color = if (isMiniChatActive) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
+            ElevatedCard {
+                ListItem(
+                    leadingContent = { Icon(Icons.Default.BubbleChart, contentDescription = null) },
+                    headlineContent = { Text(stringResource(R.string.feature_mini_chat)) },
+                    supportingContent = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ProductPill(
+                                    label = miniChatStateDescription,
+                                    emphasized = isMiniChatActive
+                                )
                             }
-                        )
-                        Text(
-                            stringResource(R.string.mini_chat_description),
-                            style = MaterialTheme.typography.bodySmall
+                            Text(
+                                stringResource(R.string.mini_chat_description),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = isMiniChatActive,
+                            onCheckedChange = { enabled ->
+                                if (enabled && !hasOverlayPermission) {
+                                    pendingEnableMiniChat = true
+                                    showOverlayPermissionCallout = true
+                                    openOverlaySettings()
+                                } else {
+                                    pendingEnableMiniChat = false
+                                    if (!enabled) {
+                                        showOverlayPermissionCallout = false
+                                    }
+                                    viewModel.setBubbleEnabled(enabled)
+                                    if (enabled) {
+                                        FloatingBubbleService.startService(context)
+                                    } else {
+                                        FloatingBubbleService.stopService(context)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.semantics {
+                                contentDescription = context.getString(R.string.feature_mini_chat)
+                                stateDescription = miniChatStateDescription
+                            }
                         )
                     }
-                },
-                trailingContent = {
-                    Switch(
-                        checked = isMiniChatActive,
-                        onCheckedChange = { enabled ->
-                            if (enabled && !hasOverlayPermission) {
-                                pendingEnableMiniChat = true
-                                showOverlayPermissionCallout = true
-                                openOverlaySettings()
-                            } else {
-                                pendingEnableMiniChat = false
-                                if (!enabled) {
-                                    showOverlayPermissionCallout = false
-                                }
-                                viewModel.setBubbleEnabled(enabled)
-                                if (enabled) {
-                                    FloatingBubbleService.startService(context)
-                                } else {
-                                    FloatingBubbleService.stopService(context)
-                                }
-                            }
-                        },
-                        modifier = Modifier.semantics {
-                            contentDescription = context.getString(R.string.feature_mini_chat)
-                            stateDescription = miniChatStateDescription
-                        }
-                    )
-                }
-            )
+                )
+            }
             if (showMiniChatScreenshotsCard) {
                 MiniChatScreenshotsCard(
                     isEnabled = isScreenshotAccessibilityEnabled,
@@ -244,39 +258,57 @@ fun SettingsScreen(
 
             SettingsSectionHeader(title = stringResource(R.string.settings_section_appearance))
 
-            Text(
-                stringResource(R.string.settings_color_theme),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                stringResource(R.string.settings_color_theme_description),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Row(
-                modifier = Modifier
-                    .horizontalScroll(rememberScrollState())
-                    .selectableGroup(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                AppColorTheme.entries.forEach { theme ->
-                    ThemeCard(
-                        theme = theme,
-                        isSelected = theme == colorTheme,
-                        onClick = { viewModel.setColorTheme(theme) }
+            ElevatedCard {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.settings_color_theme),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ProductPill(
+                            label = stringResource(R.string.settings_current_theme_label, colorTheme.displayName),
+                            emphasized = true
+                        )
+                    }
+                    Text(
+                        stringResource(R.string.settings_color_theme_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier
+                            .horizontalScroll(rememberScrollState())
+                            .selectableGroup(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        AppColorTheme.entries.forEach { theme ->
+                            ThemeCard(
+                                theme = theme,
+                                isSelected = theme == colorTheme,
+                                onClick = { viewModel.setColorTheme(theme) }
+                            )
+                        }
+                    }
                 }
             }
 
             HorizontalDivider()
 
             SettingsSectionHeader(title = stringResource(R.string.settings_section_about))
-            Text(
-                stringResource(R.string.settings_version, appVersionName),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            ElevatedCard {
+                Text(
+                    stringResource(R.string.settings_version, appVersionName),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
         }
     }
 }

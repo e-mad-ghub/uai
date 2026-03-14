@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 class UaiApplication : Application() {
 
@@ -30,6 +31,9 @@ class UaiApplication : Application() {
         super.onCreate()
         PDFBoxResourceLoader.init(this)
         container = AppContainer(this)
+        runBlocking {
+            container.preferences.initializeMiniChatDefaultIfNeeded()
+        }
         applicationScope.launch {
             container.openRouterCatalogRepository.refreshCatalogIfStale()
             val agents = container.agentRepository.agentsFlow.first()

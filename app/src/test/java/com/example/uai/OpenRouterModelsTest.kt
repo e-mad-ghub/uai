@@ -22,11 +22,11 @@ import org.junit.Test
 class OpenRouterModelsTest {
 
     @Test
-    fun newAgentDefaultsToOpenRouterFreeRouter() {
+    fun newAgentDefaultsToSideAgentBestFreeRoute() {
         val agent = AgentConfig()
 
         assertEquals(AiProviderType.OPENROUTER, agent.provider)
-        assertEquals(OPENROUTER_FREE_ROUTER_MODEL, agent.model)
+        assertEquals(SIDEAGENT_OPENROUTER_BEST_FREE_MODEL, agent.model)
     }
 
     @Test

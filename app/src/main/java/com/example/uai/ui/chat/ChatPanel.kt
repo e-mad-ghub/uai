@@ -24,6 +24,7 @@ import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -34,6 +35,7 @@ import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.ui.components.ProductHintPill
 
 @Composable
 fun ChatPanel(
@@ -63,6 +65,8 @@ fun ChatPanel(
     onPickFile: () -> Unit,
     onTakeScreenshot: () -> Unit,
     onClearAttachment: () -> Unit,
+    showMiniChatMinimizeTip: Boolean = false,
+    onDismissMiniChatMinimizeTip: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val configuration = LocalConfiguration.current
@@ -230,63 +234,82 @@ fun ChatPanel(
                 }
 
                 // Slot 1: messages list
-                ChatMessageList(
-                    messages = messages,
-                    isLoading = isLoading,
-                    behavior = messageListBehavior,
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface),
-                    messageThumbnails = messageThumbnails,
-                    onBackgroundDoubleTap = onMinimize,
-                    onMessageDoubleTap = onMinimize,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    emptyContent = {
+                        .background(MaterialTheme.colorScheme.surface)
+                ) {
+                    if (showMiniChatMinimizeTip && onDismissMiniChatMinimizeTip != null) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(32.dp),
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                if (hasSelectedAgent) {
-                                    "Start a conversation with $agentName"
-                                } else {
-                                    "Choose an assistant to start this chat"
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 56.dp)
+                            ProductHintPill(
+                                message = stringResource(R.string.mini_chat_panel_hint),
+                                onDismiss = onDismissMiniChatMinimizeTip
                             )
                         }
-                    },
-                    overlayContent = { isAtBottom ->
-                        if (messages.isNotEmpty() && !isAtBottom && onOpenInApp != null) {
-                            FilledTonalButton(
-                                onClick = onOpenInApp,
+                    }
+                    ChatMessageList(
+                        messages = messages,
+                        isLoading = isLoading,
+                        behavior = messageListBehavior,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        messageThumbnails = messageThumbnails,
+                        onBackgroundDoubleTap = onMinimize,
+                        onMessageDoubleTap = onMinimize,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        emptyContent = {
+                            Box(
                                 modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 8.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                    .fillMaxWidth()
+                                    .padding(32.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Icon(
-                                    Icons.Default.OpenInFull,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(14.dp)
+                                Text(
+                                    if (hasSelectedAgent) {
+                                        "Start a conversation with $agentName"
+                                    } else {
+                                        "Choose an assistant to start this chat"
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 56.dp)
                                 )
-                                Spacer(Modifier.width(6.dp))
-                                Text("Open in app", style = MaterialTheme.typography.labelSmall)
+                            }
+                        },
+                        overlayContent = { isAtBottom ->
+                            if (messages.isNotEmpty() && !isAtBottom && onOpenInApp != null) {
+                                FilledTonalButton(
+                                    onClick = onOpenInApp,
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .padding(top = 8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.OpenInFull,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Open in app", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        },
+                        replyActionForMessage = { message ->
+                            if (!message.isStreaming && message.role == "assistant") {
+                                { replyToMessage = message }
+                            } else {
+                                null
                             }
                         }
-                    },
-                    replyActionForMessage = { message ->
-                        if (!message.isStreaming && message.role == "assistant") {
-                            { replyToMessage = message }
-                        } else {
-                            null
-                        }
-                    }
-                )
+                    )
+                }
 
                 // Slot 2: divider + ChatInputBar (unified input chrome)
                 Column(modifier = Modifier.fillMaxWidth()) {

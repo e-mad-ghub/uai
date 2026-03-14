@@ -12,7 +12,7 @@ import kotlinx.coroutines.launch
 class SettingsViewModel(private val repo: AgentRepository) : ViewModel() {
 
     val bubbleEnabled = repo.bubbleEnabledFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
     val colorTheme = repo.colorThemeFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppColorTheme.DEFAULT)

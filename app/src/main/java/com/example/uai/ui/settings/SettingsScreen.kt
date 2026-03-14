@@ -46,8 +46,8 @@ import com.example.uai.R
 import com.example.uai.data.model.AppColorTheme
 import com.example.uai.service.FloatingBubbleService
 import com.example.uai.service.MiniChatScreenshotAccessibilityService
-import com.example.uai.ui.components.ProductHeroCard
 import com.example.uai.ui.components.ProductPill
+import com.example.uai.ui.components.ProductScreenIntro
 import com.example.uai.ui.components.ProductTopBarTitle
 import com.example.uai.ui.theme.lightScheme
 
@@ -76,11 +76,26 @@ fun SettingsScreen(
     }
     var pendingEnableMiniChat by rememberSaveable { mutableStateOf(false) }
     var showOverlayPermissionCallout by rememberSaveable { mutableStateOf(false) }
+    var showMiniChatTipsSheet by rememberSaveable { mutableStateOf(false) }
+    val isMiniChatConfigured = bubbleEnabled
     val isMiniChatActive = bubbleEnabled && hasOverlayPermission
+    val showOverlayPermissionCard = !hasOverlayPermission &&
+        (showOverlayPermissionCallout || isMiniChatConfigured)
     val showMiniChatScreenshotsCard =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && isMiniChatActive
+    val miniChatStatusLabel = stringResource(
+        when {
+            isMiniChatActive -> R.string.mini_chat_status_active
+            isMiniChatConfigured -> R.string.mini_chat_status_needs_permission
+            else -> R.string.mini_chat_status_off
+        }
+    )
     val miniChatStateDescription = stringResource(
-        if (isMiniChatActive) R.string.mini_chat_active else R.string.mini_chat_inactive
+        when {
+            isMiniChatActive -> R.string.mini_chat_active
+            isMiniChatConfigured -> R.string.mini_chat_needs_permission
+            else -> R.string.mini_chat_inactive
+        }
     )
 
     fun openOverlaySettings() {
@@ -95,6 +110,7 @@ fun SettingsScreen(
     DisposableEffect(lifecycleOwner, context, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                val previousOverlayPermission = hasOverlayPermission
                 val overlayPermissionGranted = Settings.canDrawOverlays(context)
                 hasOverlayPermission = overlayPermissionGranted
                 isScreenshotAccessibilityEnabled =
@@ -102,8 +118,7 @@ fun SettingsScreen(
                         MiniChatScreenshotAccessibilityService.isEnabled(context)
 
                 if (overlayPermissionGranted) {
-                    if (pendingEnableMiniChat && !currentBubbleEnabled) {
-                        viewModel.setBubbleEnabled(true)
+                    if (currentBubbleEnabled) {
                         FloatingBubbleService.startService(context)
                     }
                     pendingEnableMiniChat = false
@@ -112,16 +127,25 @@ fun SettingsScreen(
 
                 // Prevent the UI from showing the mini chat as enabled when Android permission
                 // was revoked outside the app.
-                if (!overlayPermissionGranted && currentBubbleEnabled) {
+                if (!overlayPermissionGranted && previousOverlayPermission && currentBubbleEnabled) {
                     pendingEnableMiniChat = false
                     showOverlayPermissionCallout = true
-                    viewModel.setBubbleEnabled(false)
                     FloatingBubbleService.stopService(context)
                 }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    if (showMiniChatTipsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showMiniChatTipsSheet = false }
+        ) {
+            MiniChatTipsSheet(
+                onDismiss = { showMiniChatTipsSheet = false }
+            )
+        }
     }
 
     Scaffold(
@@ -153,7 +177,7 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            ProductHeroCard(
+            ProductScreenIntro(
                 eyebrow = stringResource(R.string.settings_title),
                 title = stringResource(R.string.settings_hero_title),
                 body = stringResource(R.string.settings_hero_body)
@@ -161,7 +185,7 @@ fun SettingsScreen(
 
             SettingsSectionHeader(title = stringResource(R.string.settings_section_mini_chat))
 
-            if (!hasOverlayPermission && showOverlayPermissionCallout) {
+            if (showOverlayPermissionCard) {
                 OutlinedCard {
                     Row(
                         modifier = Modifier.padding(16.dp),
@@ -180,7 +204,13 @@ fun SettingsScreen(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                stringResource(R.string.overlay_permission_message),
+                                stringResource(
+                                    if (isMiniChatConfigured) {
+                                        R.string.mini_chat_permission_needed_message
+                                    } else {
+                                        R.string.overlay_permission_message
+                                    }
+                                ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -207,35 +237,41 @@ fun SettingsScreen(
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 ProductPill(
-                                    label = miniChatStateDescription,
-                                    emphasized = isMiniChatActive
+                                    label = miniChatStatusLabel,
+                                    emphasized = isMiniChatConfigured
                                 )
                             }
                             Text(
-                                stringResource(R.string.mini_chat_description),
+                                stringResource(
+                                    if (isMiniChatConfigured && !hasOverlayPermission) {
+                                        R.string.mini_chat_enabled_waiting_for_permission
+                                    } else {
+                                        R.string.mini_chat_description
+                                    }
+                                ),
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
                     },
                     trailingContent = {
                         Switch(
-                            checked = isMiniChatActive,
+                            checked = bubbleEnabled,
                             onCheckedChange = { enabled ->
-                                if (enabled && !hasOverlayPermission) {
-                                    pendingEnableMiniChat = true
-                                    showOverlayPermissionCallout = true
-                                    openOverlaySettings()
+                                viewModel.setBubbleEnabled(enabled)
+                                if (enabled) {
+                                    if (!hasOverlayPermission) {
+                                        pendingEnableMiniChat = true
+                                        showOverlayPermissionCallout = true
+                                        openOverlaySettings()
+                                    } else {
+                                        pendingEnableMiniChat = false
+                                        showOverlayPermissionCallout = false
+                                        FloatingBubbleService.startService(context)
+                                    }
                                 } else {
                                     pendingEnableMiniChat = false
-                                    if (!enabled) {
-                                        showOverlayPermissionCallout = false
-                                    }
-                                    viewModel.setBubbleEnabled(enabled)
-                                    if (enabled) {
-                                        FloatingBubbleService.startService(context)
-                                    } else {
-                                        FloatingBubbleService.stopService(context)
-                                    }
+                                    showOverlayPermissionCallout = false
+                                    FloatingBubbleService.stopService(context)
                                 }
                             },
                             modifier = Modifier.semantics {
@@ -246,6 +282,11 @@ fun SettingsScreen(
                     }
                 )
             }
+
+            MiniChatTipsRow(
+                onClick = { showMiniChatTipsSheet = true }
+            )
+
             if (showMiniChatScreenshotsCard) {
                 MiniChatScreenshotsCard(
                     isEnabled = isScreenshotAccessibilityEnabled,
@@ -310,6 +351,86 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun MiniChatTipsRow(onClick: () -> Unit) {
+    OutlinedCard(onClick = onClick) {
+        ListItem(
+            headlineContent = {
+                Text(stringResource(R.string.mini_chat_tips_row_title))
+            },
+            supportingContent = {
+                Text(
+                    stringResource(R.string.mini_chat_tips_row_body),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            trailingContent = {
+                Text(
+                    stringResource(R.string.action_view),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        )
+    }
+}
+
+@Composable
+private fun MiniChatTipsSheet(onDismiss: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp)
+            .padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            stringResource(R.string.mini_chat_tips_title),
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            stringResource(R.string.mini_chat_tips_body),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        MiniChatTipRow(
+            title = stringResource(R.string.mini_chat_tip_enter_title),
+            body = stringResource(R.string.mini_chat_tip_enter_body)
+        )
+        MiniChatTipRow(
+            title = stringResource(R.string.mini_chat_tip_minimize_title),
+            body = stringResource(R.string.mini_chat_tip_minimize_body)
+        )
+        MiniChatTipRow(
+            title = stringResource(R.string.mini_chat_tip_rooms_title),
+            body = stringResource(R.string.mini_chat_tip_rooms_body)
+        )
+        TextButton(
+            onClick = onDismiss,
+            modifier = Modifier.align(Alignment.End)
+        ) {
+            Text(stringResource(R.string.action_got_it))
+        }
+    }
+}
+
+@Composable
+private fun MiniChatTipRow(title: String, body: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            text = body,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

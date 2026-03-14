@@ -1,6 +1,7 @@
 package com.example.uai.ui.conversations
 
 import android.app.Activity
+import android.content.Intent
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -39,6 +40,7 @@ import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.service.FloatingBubbleService
 import com.example.uai.ui.components.ProductEmptyStateCard
+import com.example.uai.ui.components.ProductInlineHintStrip
 import com.example.uai.ui.components.ProductPill
 import com.example.uai.ui.components.ProductTopBarTitle
 import com.example.uai.ui.chat.FileAttachmentImportResult
@@ -65,16 +67,18 @@ fun ConversationDetailScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val appContainer = (context.applicationContext as UaiApplication).container
     val conversation by viewModel.conversation.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val inputText by viewModel.inputText.collectAsStateWithLifecycle()
     val activeAgent by viewModel.activeAgent.collectAsStateWithLifecycle()
     val agents by viewModel.agents.collectAsStateWithLifecycle()
-    val bubbleEnabled by (context.applicationContext as UaiApplication)
-        .container
-        .agentRepository
+    val bubbleEnabled by appContainer.agentRepository
         .bubbleEnabledFlow
+        .collectAsStateWithLifecycle(initialValue = true)
+    val miniChatEntryTipDismissed by appContainer.preferences
+        .miniChatEntryTipDismissedFlow
         .collectAsStateWithLifecycle(initialValue = false)
 
     val scope = rememberCoroutineScope()
@@ -194,6 +198,16 @@ fun ConversationDetailScreen(
     val hasAttachment = pendingImageBitmap != null || pendingFileName != null
     val canTransferToMiniChat = bubbleEnabled &&
         Settings.canDrawOverlays(context)
+    val showMiniChatEntryTip = bubbleEnabled && !miniChatEntryTipDismissed
+
+    fun openOverlaySettings() {
+        context.startActivity(
+            Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}")
+            )
+        )
+    }
 
     fun minimizeIntoMiniChat() {
         val conversationId = conversation?.id
@@ -288,6 +302,25 @@ fun ConversationDetailScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (showMiniChatEntryTip) {
+                ProductInlineHintStrip(
+                    message = stringResource(
+                        if (canTransferToMiniChat) {
+                            R.string.mini_chat_entry_hint_ready
+                        } else {
+                            R.string.mini_chat_entry_hint_permission
+                        }
+                    ),
+                    actionLabel = if (canTransferToMiniChat) null else stringResource(R.string.action_allow_display_over_other_apps),
+                    onAction = if (canTransferToMiniChat) null else ::openOverlaySettings,
+                    onDismiss = {
+                        scope.launch {
+                            appContainer.preferences.setMiniChatEntryTipDismissed(true)
+                        }
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            }
 
             if (messages.isEmpty() && !isLoading) {
                 Box(

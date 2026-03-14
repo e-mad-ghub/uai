@@ -13,7 +13,7 @@ data class AgentConfig(
     val name: String = "New Agent",
     val provider: AiProviderType = AiProviderType.OPENROUTER,
     val apiKey: String = "",
-    val model: String = OPENROUTER_FREE_ROUTER_MODEL,
+    val model: String = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
     val systemPrompt: String = "You are a helpful assistant.",
     val temperature: Float = 0.7f
 ) {
@@ -59,6 +59,7 @@ data class AgentConfig(
                 "claude-opus-4-6"
             ),
             AiProviderType.OPENROUTER to listOf(
+                SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
                 OPENROUTER_FREE_ROUTER_MODEL,
                 "meta-llama/llama-3.3-70b-instruct:free",
                 "openai/gpt-oss-20b:free",

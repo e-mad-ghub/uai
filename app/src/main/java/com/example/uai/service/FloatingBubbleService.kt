@@ -119,6 +119,7 @@ class FloatingBubbleService : Service() {
     private var colorTheme by mutableStateOf(AppColorTheme.DEFAULT)
     private var isDismissTargetActive by mutableStateOf(false)
     private var isAppUiVisible = false
+    private var miniChatMinimizeTipDismissed by mutableStateOf(false)
 
     // Attachment state
     // Each Triple: (base64, ImageBitmap?, uriStr?)
@@ -189,6 +190,11 @@ class FloatingBubbleService : Service() {
 
         container.preferences.colorThemeFlow
             .onEach { colorTheme = it }
+            .catch { }
+            .launchIn(serviceScope)
+
+        container.preferences.miniChatMinimizeTipDismissedFlow
+            .onEach { miniChatMinimizeTipDismissed = it }
             .catch { }
             .launchIn(serviceScope)
 
@@ -696,6 +702,7 @@ class FloatingBubbleService : Service() {
     // ----- Chat panel setup -----
 
     private fun setupChatPanel() {
+        val container = (application as UaiApplication).container
         panelParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -739,7 +746,6 @@ class FloatingBubbleService : Service() {
                         onAgentSelect = { agent ->
                             serviceScope.launch {
                                 val conversation = currentConversationEntity()
-                                val container = (application as UaiApplication).container
                                 if (conversation != null) {
                                     container.conversationRepository.upsertConversation(
                                         conversation.copy(
@@ -764,7 +770,13 @@ class FloatingBubbleService : Service() {
                         onPickCamera = ::launchCameraCapture,
                         onPickFile = ::launchFilePicker,
                         onTakeScreenshot = ::launchScreenshotCapture,
-                        onClearAttachment = ::clearAttachment
+                        onClearAttachment = ::clearAttachment,
+                        showMiniChatMinimizeTip = !miniChatMinimizeTipDismissed,
+                        onDismissMiniChatMinimizeTip = {
+                            serviceScope.launch {
+                                container.preferences.setMiniChatMinimizeTipDismissed(true)
+                            }
+                        }
                     )
                 }
             }

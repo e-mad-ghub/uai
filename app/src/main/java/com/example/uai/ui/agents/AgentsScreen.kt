@@ -54,8 +54,8 @@ import com.example.uai.R
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.ui.components.ProductEmptyStateCard
-import com.example.uai.ui.components.ProductHeroCard
 import com.example.uai.ui.components.ProductPill
+import com.example.uai.ui.components.ProductScreenIntro
 import com.example.uai.ui.components.ProductTopBarTitle
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -119,12 +119,10 @@ fun AgentsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
-                    ProductHeroCard(
+                    ProductScreenIntro(
                         eyebrow = stringResource(R.string.feature_agents),
                         title = stringResource(R.string.assistants_choose_default_title),
-                        body = stringResource(R.string.assistants_choose_default_body),
-                        actionLabel = stringResource(R.string.assistants_add_assistant),
-                        onAction = onAddAgent
+                        body = stringResource(R.string.assistants_choose_default_body)
                     )
                 }
 

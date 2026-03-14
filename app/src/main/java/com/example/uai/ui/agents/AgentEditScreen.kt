@@ -48,8 +48,8 @@ import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.isOpenRouterFreeModel
-import com.example.uai.ui.components.ProductHeroCard
 import com.example.uai.ui.components.ProductPill
+import com.example.uai.ui.components.ProductScreenIntro
 import com.example.uai.ui.components.ProductTopBarTitle
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -175,7 +175,7 @@ fun AgentEditScreen(
                 .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            ProductHeroCard(
+            ProductScreenIntro(
                 eyebrow = stringResource(R.string.agent_edit_hero_eyebrow),
                 title = when {
                     viewModel.isEditing -> stringResource(R.string.assistants_hero_edit_title)

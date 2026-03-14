@@ -28,7 +28,7 @@ class OpenRouterProvider(
         .addInterceptor { chain ->
             val request = chain.request().newBuilder()
                 .header("HTTP-Referer", "https://uai.app")
-                .header("X-Title", "SideAgent")
+                .header("X-Title", "ScreenAgent")
                 .build()
             chain.proceed(request)
         }
@@ -118,9 +118,9 @@ class OpenRouterProvider(
         }
 
         val summary = if (requestBucket == OpenRouterFreeRoutingBucket.VISION) {
-            "No available free OpenRouter image model responded. SideAgent tried fallback models automatically."
+            "No available free OpenRouter image model responded. ScreenAgent tried fallback models automatically."
         } else {
-            "No available free OpenRouter model responded. SideAgent tried fallback models automatically."
+            "No available free OpenRouter model responded. ScreenAgent tried fallback models automatically."
         }
         if (isBestFreeRoute) {
             bestFreeRoutingStateStore?.clear(

@@ -320,7 +320,7 @@ fun AgentEditScreen(
                         supportingText = if (providerModels.isNotEmpty()) {
                             "Choose a detected model or type a model ID from this endpoint."
                         } else {
-                            "Enter a model ID from this endpoint. SideAgent will detect models after a successful availability check."
+                            "Enter a model ID from this endpoint. ScreenAgent will detect models after a successful availability check."
                         }
                     )
                 } else if (selectedModelChoice != null) {
@@ -594,27 +594,27 @@ private fun ProviderCatalogStatusNote(
     val (title, body) = when {
         hasProviderCatalog -> Pair(
             "Latest ${provider.displayName} catalog loaded",
-            "Recommended and custom model choices are using the latest catalog SideAgent has loaded for ${provider.displayName}."
+            "Recommended and custom model choices are using the latest catalog ScreenAgent has loaded for ${provider.displayName}."
         )
         isLoadingModels -> Pair(
             "Loading latest ${provider.displayName} catalog…",
-            "SideAgent is updating the available model list for this provider."
+            "ScreenAgent is updating the available model list for this provider."
         )
         provider == AiProviderType.OPENROUTER -> Pair(
             "Showing fallback list",
-            "OpenRouter's live catalog is not available right now, so SideAgent is using its built-in fallback list."
+            "OpenRouter's live catalog is not available right now, so ScreenAgent is using its built-in fallback list."
         )
         provider == AiProviderType.CUSTOM && !hasBaseUrl -> Pair(
             "Waiting for endpoint",
-            "Enter a base URL for Grok, NVIDIA, or another compatible provider before SideAgent can load its model list."
+            "Enter a base URL for Grok, NVIDIA, or another compatible provider before ScreenAgent can load its model list."
         )
         provider == AiProviderType.CUSTOM && hasApiKey -> Pair(
             "Manual model entry",
-            "SideAgent could not load models from this endpoint right now, so you can still enter the model ID manually."
+            "ScreenAgent could not load models from this endpoint right now, so you can still enter the model ID manually."
         )
         hasApiKey -> Pair(
             "Showing starter list",
-            "SideAgent could not load the latest ${provider.displayName} catalog right now, so the editor is using its starter list."
+            "ScreenAgent could not load the latest ${provider.displayName} catalog right now, so the editor is using its starter list."
         )
         else -> Pair(
             "Showing starter list",
@@ -939,7 +939,7 @@ private fun CustomProviderPresetSelector(
 private fun customProviderPresetDescription(preset: CustomProviderPreset): String = when (preset) {
     CustomProviderPreset.MANUAL -> "Use Grok, NVIDIA, or another compatible provider by entering the endpoint manually."
     CustomProviderPreset.GROK -> "Prefills xAI's endpoint so you can connect Grok with your own API key."
-    CustomProviderPreset.NVIDIA -> "Prefills NVIDIA's endpoint so you can bring compatible NVIDIA-hosted models into SideAgent."
+    CustomProviderPreset.NVIDIA -> "Prefills NVIDIA's endpoint so you can bring compatible NVIDIA-hosted models into ScreenAgent."
 }
 
 private fun customProviderBaseUrlHint(preset: CustomProviderPreset): String = when (preset) {

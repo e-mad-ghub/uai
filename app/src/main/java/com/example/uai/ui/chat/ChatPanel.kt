@@ -441,14 +441,17 @@ fun BubbleContent(isLoading: Boolean, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(18.dp)),
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFF17193A)),
         contentAlignment = Alignment.Center
     ) {
         Image(
             painter = painterResource(R.drawable.floating_bubble_icon),
-            contentDescription = "SideAgent Mini Chat",
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop
+            contentDescription = "ScreenAgent Mini Chat",
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(4.dp),
+            contentScale = ContentScale.Fit
         )
         if (isLoading) {
             CircularProgressIndicator(

@@ -8,6 +8,7 @@ import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.ai.StreamChunk
+import com.example.uai.ai.ThrottledStreamingMessageWriter
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.db.toChatMessage
@@ -278,6 +279,9 @@ class ConversationDetailViewModel(
                 )
             )
             var accumulated = ""
+            val streamingWriter = ThrottledStreamingMessageWriter { content, isStreaming ->
+                repo.updateMessageContent(assistantId, content, isStreaming)
+            }
 
             // If the agent doesn't support the attachment type, say so in the chat
             if (imageBase64 != null && !agent.canHandleImageRequests()) {
@@ -321,7 +325,7 @@ class ConversationDetailViewModel(
                         when (chunk) {
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
-                                repo.updateMessageContent(assistantId, accumulated, true)
+                                streamingWriter.emitStreaming(accumulated)
                             }
                             is StreamChunk.ModelSelection -> {
                                 repo.updateMessageResponseModel(
@@ -330,17 +334,14 @@ class ConversationDetailViewModel(
                                     chunk.viaFallback
                                 )
                             }
-                            is StreamChunk.Done -> {
-                                repo.updateMessageContent(assistantId, accumulated, false)
-                                repo.touchConversation(conversationId)
-                            }
+                            is StreamChunk.Done -> Unit
                             is StreamChunk.Error -> {
                                 val errMsg = chunk.cause.message ?: "Unknown error"
-                                repo.updateMessageContent(
-                                    assistantId,
-                                    "$accumulated\n[Error: $errMsg]",
-                                    false
-                                )
+                                accumulated = if (accumulated.isBlank()) {
+                                    "[Error: $errMsg]"
+                                } else {
+                                    "$accumulated\n[Error: $errMsg]"
+                                }
                                 _errorEvent.trySend(
                                     "Request failed: $errMsg\n\nThe model \"${agent.model}\" may not support this request. Try switching to a different model."
                                 )
@@ -354,7 +355,7 @@ class ConversationDetailViewModel(
                     if (accumulated.isBlank()) {
                         repo.deleteMessage(assistantId)
                     } else {
-                        repo.updateMessageContent(assistantId, accumulated, false)
+                        streamingWriter.emitFinal(accumulated)
                     }
                     repo.touchConversation(conversationId)
                     _isLoading.value = false

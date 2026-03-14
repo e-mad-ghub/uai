@@ -75,10 +75,17 @@ fun MessageBubble(
         MaterialTheme.colorScheme.onSurfaceVariant
 
     // Load image from URI if present
-    var imageBitmap by remember(message.imageUri) { mutableStateOf<ImageBitmap?>(null) }
+    val cachedBitmap = remember(message.imageUri) {
+        message.imageUri?.let { MessageImageBitmapCache.get(it) }
+    }
+    var imageBitmap by remember(message.imageUri) { mutableStateOf<ImageBitmap?>(cachedBitmap) }
     val context = LocalContext.current
     LaunchedEffect(message.imageUri) {
         val uriStr = message.imageUri ?: return@LaunchedEffect
+        MessageImageBitmapCache.get(uriStr)?.let {
+            imageBitmap = it
+            return@LaunchedEffect
+        }
         imageBitmap = withContext(Dispatchers.IO) {
             try {
                 val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
@@ -87,6 +94,7 @@ fun MessageBubble(
                 }
             } catch (_: Exception) { null }
         }
+        imageBitmap?.let { MessageImageBitmapCache.put(uriStr, it) }
     }
 
     val clipboardManager = LocalClipboardManager.current

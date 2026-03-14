@@ -9,6 +9,7 @@ import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.ai.StreamChunk
+import com.example.uai.ai.ThrottledStreamingMessageWriter
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.db.toChatMessage
 import com.example.uai.data.model.AgentConfig
@@ -314,6 +315,9 @@ class AgoraDetailViewModel(
                     }
 
                     var accumulated = ""
+                    val streamingWriter = ThrottledStreamingMessageWriter { content, isStreaming ->
+                        repo.updateMessageContent(assistantId, content, isStreaming)
+                    }
                     try {
                         AiProviderFactory.create(
                             config = agoraAgent,
@@ -327,7 +331,7 @@ class AgoraDetailViewModel(
                                 when (chunk) {
                                     is StreamChunk.Token -> {
                                         accumulated = (accumulated + chunk.text).stripNamePrefix()
-                                        repo.updateMessageContent(assistantId, accumulated, true)
+                                        streamingWriter.emitStreaming(accumulated)
                                     }
                                     is StreamChunk.ModelSelection -> {
                                         repo.updateMessageResponseModel(
@@ -356,7 +360,7 @@ class AgoraDetailViewModel(
                     } finally {
                         withContext(NonCancellable) {
                             if (accumulated.isBlank()) repo.deleteMessage(assistantId)
-                            else repo.updateMessageContent(assistantId, accumulated, false)
+                            else streamingWriter.emitFinal(accumulated)
                         }
                     }
 

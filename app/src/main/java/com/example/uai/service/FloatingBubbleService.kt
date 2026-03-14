@@ -59,6 +59,7 @@ import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
+import com.example.uai.ai.ThrottledStreamingMessageWriter
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.db.toChatMessage
@@ -1510,8 +1511,10 @@ class FloatingBubbleService : Service() {
             isLoading = true
             inputText = ""
 
+            var convId: String? = null
             var assistantId: String? = null
             var accumulated = ""
+            var streamingWriter: ThrottledStreamingMessageWriter? = null
 
             try {
                 if (currentConversationId == null) {
@@ -1538,7 +1541,8 @@ class FloatingBubbleService : Service() {
                     prefersDraftConversation = false
                     switchConversation(conv.id, force = true)
                 }
-                val convId = currentConversationId!!
+                convId = currentConversationId!!
+                val activeConversationId = convId!!
                 val persistedImageUri = imageList.firstOrNull()?.third
                     ?: imageList.firstOrNull()?.first?.let {
                         withContext(Dispatchers.IO) { persistImageAttachment(applicationContext, it) }
@@ -1546,7 +1550,7 @@ class FloatingBubbleService : Service() {
 
                 val userMsg = MessageEntity(
                     id = UUID.randomUUID().toString(),
-                    conversationId = convId,
+                    conversationId = activeConversationId,
                     role = "user",
                     content = fullText,
                     createdAt = System.currentTimeMillis(),
@@ -1561,9 +1565,10 @@ class FloatingBubbleService : Service() {
                 if (thumbs.isNotEmpty()) messageThumbnails[userMsg.id] = thumbs
 
                 assistantId = UUID.randomUUID().toString()
+                val messageId = assistantId!!
                 val assistantMsg = MessageEntity(
-                    id = assistantId,
-                    conversationId = convId,
+                    id = messageId,
+                    conversationId = activeConversationId,
                     role = "assistant",
                     content = "",
                     createdAt = System.currentTimeMillis(),
@@ -1579,10 +1584,10 @@ class FloatingBubbleService : Service() {
                     val notice = "I don't support image analysis with \"${agent.model}\". " +
                             "Please switch to a vision-capable model in agent settings."
                     accumulated = notice  // must be non-blank so finally doesn't delete the message
-                    val idx = chatMessages.indexOfFirst { it.id == assistantId }
+                    val idx = chatMessages.indexOfFirst { it.id == messageId }
                     if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = notice, isStreaming = false)
-                    container.conversationRepository.updateMessageContent(assistantId, notice, false)
-                    container.conversationRepository.touchConversation(convId)
+                    container.conversationRepository.updateMessageContent(messageId, notice, false)
+                    container.conversationRepository.touchConversation(activeConversationId)
                     return@launch
                 }
 
@@ -1607,6 +1612,20 @@ class FloatingBubbleService : Service() {
                     openRouterCatalogRepository = container.openRouterCatalogRepository,
                     openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
                 )
+                streamingWriter = ThrottledStreamingMessageWriter { content, isStreaming ->
+                    val idx = chatMessages.indexOfFirst { it.id == messageId }
+                    if (idx != -1) {
+                        chatMessages[idx] = chatMessages[idx].copy(
+                            content = content,
+                            isStreaming = isStreaming
+                        )
+                    }
+                    container.conversationRepository.updateMessageContent(
+                        messageId,
+                        content,
+                        isStreaming
+                    )
+                }
 
                 provider.streamResponse(history, agent)
                     .catch { e -> emit(StreamChunk.Error(e)) }
@@ -1616,8 +1635,7 @@ class FloatingBubbleService : Service() {
                         when (chunk) {
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
-                                if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = accumulated)
-                                container.conversationRepository.updateMessageContent(id, accumulated, true)
+                                streamingWriter?.emitStreaming(accumulated)
                             }
                             is StreamChunk.ModelSelection -> {
                                 if (idx != -1) {
@@ -1632,17 +1650,11 @@ class FloatingBubbleService : Service() {
                                     chunk.viaFallback
                                 )
                             }
-                            is StreamChunk.Done -> {
-                                if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(isStreaming = false)
-                                container.conversationRepository.updateMessageContent(id, accumulated, false)
-                                container.conversationRepository.touchConversation(convId)
-                            }
+                            is StreamChunk.Done -> Unit
                             is StreamChunk.Error -> {
                                 val errContent = if (accumulated.isBlank()) "[Error: ${chunk.cause.message}]"
                                                  else "$accumulated\n[Error: ${chunk.cause.message}]"
                                 accumulated = errContent  // must be non-blank so finally doesn't delete the message
-                                if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = errContent, isStreaming = false)
-                                container.conversationRepository.updateMessageContent(id, errContent, false)
                             }
                         }
                     }
@@ -1655,9 +1667,9 @@ class FloatingBubbleService : Service() {
                             if (idx != -1) chatMessages.removeAt(idx)
                             container.conversationRepository.deleteMessage(id)
                         } else {
-                            if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(isStreaming = false)
-                            container.conversationRepository.updateMessageContent(id, accumulated, false)
+                            streamingWriter?.emitFinal(accumulated)
                         }
+                        convId?.let { container.conversationRepository.touchConversation(it) }
                     }
                     isLoading = false
                 }

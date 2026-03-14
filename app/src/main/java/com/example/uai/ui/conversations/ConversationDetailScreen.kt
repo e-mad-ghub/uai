@@ -471,7 +471,7 @@ private fun AssistantSetupPromptCard(
         body = if (hasAnyAssistants) {
             "You already have assistants configured. Choose one for this chat from the top bar, or open Assistants to set a default for future chats."
         } else {
-            "Add one connection, choose a role, and SideAgent will be ready for new chats."
+            "Add one connection, choose a role, and ScreenAgent will be ready for new chats."
         },
         actionLabel = "Open Assistants",
         onAction = onOpenAssistants,

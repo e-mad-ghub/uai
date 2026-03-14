@@ -1,5 +1,7 @@
 package com.example.uai.ui.components
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -8,17 +10,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.style.TextAlign
@@ -39,23 +43,21 @@ fun BrandMarkIcon(
 }
 
 @Composable
+@Suppress("UNUSED_PARAMETER")
 fun BrandMarkBadge(
     modifier: Modifier = Modifier,
     containerColor: Color = MaterialTheme.colorScheme.primaryContainer,
     contentColor: Color = MaterialTheme.colorScheme.onPrimaryContainer
 ) {
-    Surface(
-        color = containerColor,
-        shape = MaterialTheme.shapes.medium,
-        modifier = modifier
-    ) {
-        BrandMarkIcon(
-            modifier = Modifier
-                .padding(14.dp)
-                .size(24.dp),
-            tint = contentColor
-        )
-    }
+    Image(
+        painter = painterResource(R.drawable.ic_screenagent_brand_tile),
+        contentDescription = null,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+            .size(52.dp)
+            .clip(RoundedCornerShape(15.dp))
+            .then(modifier)
+    )
 }
 
 @Composable

@@ -279,7 +279,7 @@ fun recommendedModelChoices(
                 RecommendedModelChoice(
                     id = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
                     label = "Best free",
-                    description = "SideAgent chooses the best available free model for each chat, file, or vision request, and reroutes automatically when needed.",
+                    description = "ScreenAgent chooses the best available free model for each chat, file, or vision request, and reroutes automatically when needed.",
                     isRecommended = true,
                     isFree = true,
                     supportsVision = true,

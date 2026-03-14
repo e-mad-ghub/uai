@@ -304,15 +304,15 @@ class AgentEditViewModel(
                 if (candidate != agent.model) {
                     return ConnectionTestState.Success(
                         if (requireVision) {
-                            "Vision free is ready. The selected model did not respond, but SideAgent found a working free vision fallback: $candidate. Your selection will stay on Vision free."
+                            "Vision free is ready. The selected model did not respond, but ScreenAgent found a working free vision fallback: $candidate. Your selection will stay on Vision free."
                         } else {
-                            "Free model is ready. The selected model did not respond, but SideAgent found another working free fallback: $candidate. Your selected option will stay the same."
+                            "Free model is ready. The selected model did not respond, but ScreenAgent found another working free fallback: $candidate. Your selected option will stay the same."
                         }
                     )
                 }
                 return if (requireVision) {
                     ConnectionTestState.Success(
-                        "Vision free is ready. SideAgent can route image requests through a working free vision model."
+                        "Vision free is ready. ScreenAgent can route image requests through a working free vision model."
                     )
                 } else {
                     if (candidate == OPENROUTER_FREE_ROUTER_MODEL) {
@@ -321,7 +321,7 @@ class AgentEditViewModel(
                         )
                     } else {
                         ConnectionTestState.Success(
-                            "Free model is ready. SideAgent found a working free model for general chat."
+                            "Free model is ready. ScreenAgent found a working free model for general chat."
                         )
                     }
                 }
@@ -336,9 +336,9 @@ class AgentEditViewModel(
         val lastMessage = lastRetryableFailure?.message ?: "Connection failed"
         return ConnectionTestState.Failure(
             if (requireVision) {
-                "OpenRouter's free vision models are not responding right now. SideAgent tried alternate free vision options automatically. $lastMessage"
+                "OpenRouter's free vision models are not responding right now. ScreenAgent tried alternate free vision options automatically. $lastMessage"
             } else {
-                "OpenRouter's best free models are not responding right now. SideAgent tried alternate free options automatically. $lastMessage"
+                "OpenRouter's best free models are not responding right now. ScreenAgent tried alternate free options automatically. $lastMessage"
             }
         )
     }
@@ -379,7 +379,7 @@ class AgentEditViewModel(
                 }
                 if (agent.provider == AiProviderType.OPENROUTER) {
                     header("HTTP-Referer", "https://uai.app")
-                    header("X-Title", "SideAgent")
+                    header("X-Title", "ScreenAgent")
                 }
             }
             .post(requestBody.toRequestBody("application/json".toMediaType()))

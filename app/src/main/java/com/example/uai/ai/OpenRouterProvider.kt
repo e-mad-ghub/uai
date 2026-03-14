@@ -1,9 +1,12 @@
 package com.example.uai.ai
 
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.OpenRouterFreeRoutingBucket
 import com.example.uai.data.repository.OpenRouterCatalogRepository
-import com.example.uai.data.model.isOpenRouterFreeModel
+import com.example.uai.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
+import com.example.uai.data.model.isOpenRouterConcreteFreeModel
 import com.example.uai.data.model.openRouterFreeFallbackModels
+import com.example.uai.data.model.openRouterBestFreeCandidates
 import com.example.uai.data.model.shouldRetryOpenRouterFreeFallback
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +20,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 class OpenRouterProvider(
     client: OkHttpClient,
-    private val openRouterCatalogRepository: OpenRouterCatalogRepository? = null
+    private val openRouterCatalogRepository: OpenRouterCatalogRepository? = null,
+    private val bestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore? = null
 ) : AiProvider {
 
     private val routedClient = client.newBuilder()
@@ -39,32 +43,67 @@ class OpenRouterProvider(
     private val json = "application/json".toMediaType()
 
     override fun streamResponse(messages: List<ChatMessage>, config: AgentConfig): Flow<StreamChunk> = flow {
-        if (!isOpenRouterFreeModel(config.model)) {
+        val isBestFreeRoute = config.model == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
+        val requestBucket = classifyRequestBucket(messages)
+        val catalogEntries = openRouterCatalogRepository
+            ?.refreshCatalogIfStale(
+                maxAgeMs = if (isBestFreeRoute) BEST_FREE_CATALOG_MAX_AGE_MS
+                else OpenRouterCatalogRepository.DEFAULT_CATALOG_MAX_AGE_MS
+            )
+            ?.models
+            .orEmpty()
+        val fetchedModelIds = catalogEntries.map { it.id }
+        val freeModelIds = catalogEntries
+            .asSequence()
+            .filter { it.isFree }
+            .map { it.id }
+            .toSet()
+
+        if (!isBestFreeRoute && !isOpenRouterConcreteFreeModel(config.model, freeModelIds)) {
             emit(StreamChunk.ModelSelection(config.model))
             delegate.streamResponse(messages, config).collect { emit(it) }
             return@flow
         }
 
-        val requiresVision = messages.any { it.images.isNotEmpty() }
-        val catalogEntries = openRouterCatalogRepository
-            ?.refreshCatalogIfStale()
-            ?.models
-            .orEmpty()
-        val candidates = openRouterFreeFallbackModels(
-            catalogEntries = catalogEntries,
-            currentModel = config.model,
-            requireVision = requiresVision
-        )
+        val candidates = if (isBestFreeRoute) {
+            val startModelId = bestFreeRoutingStateStore?.lastSuccessfulModelId(
+                assistantId = config.id,
+                bucket = requestBucket,
+                idleTimeoutMs = BEST_FREE_IDLE_TIMEOUT_MS
+            )
+            openRouterBestFreeCandidates(
+                bucket = requestBucket,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedModelIds,
+                freeModelIds = freeModelIds,
+                startModelId = startModelId
+            )
+        } else {
+            openRouterFreeFallbackModels(
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedModelIds,
+                freeModelIds = freeModelIds,
+                currentModel = config.model,
+                requireVision = requestBucket == OpenRouterFreeRoutingBucket.VISION
+            )
+        }
 
         var lastFailure: Exception? = null
-        for (candidate in candidates) {
+        for ((index, candidate) in candidates.withIndex()) {
             val candidateConfig = config.copy(model = candidate)
             val failure = probeCandidate(messages, candidateConfig)
             if (failure == null) {
+                if (isBestFreeRoute) {
+                    bestFreeRoutingStateStore?.recordSuccess(
+                        assistantId = config.id,
+                        bucket = requestBucket,
+                        modelId = candidate
+                    )
+                }
                 emit(
                     StreamChunk.ModelSelection(
                         modelId = candidate,
-                        viaFallback = candidate != config.model
+                        viaFallback = index > 0
                     )
                 )
                 delegate.streamResponse(messages, candidateConfig).collect { emit(it) }
@@ -78,10 +117,16 @@ class OpenRouterProvider(
             }
         }
 
-        val summary = if (requiresVision) {
+        val summary = if (requestBucket == OpenRouterFreeRoutingBucket.VISION) {
             "No available free OpenRouter image model responded. SideAgent tried fallback models automatically."
         } else {
             "No available free OpenRouter model responded. SideAgent tried fallback models automatically."
+        }
+        if (isBestFreeRoute) {
+            bestFreeRoutingStateStore?.clear(
+                assistantId = config.id,
+                bucket = requestBucket
+            )
         }
         emit(StreamChunk.Error(Exception(lastFailure?.message ?: summary)))
     }.flowOn(Dispatchers.IO)
@@ -117,6 +162,7 @@ class OpenRouterProvider(
                 add(mapOf("role" to "system", "content" to config.systemPrompt))
             }
             addAll(messages.map { msg ->
+                val textContent = msg.contentWithFileContext()
                 val content: Any = if (msg.images.isNotEmpty()) {
                     buildList {
                         for (img in msg.images) {
@@ -129,12 +175,12 @@ class OpenRouterProvider(
                                 )
                             )
                         }
-                        if (msg.content.isNotBlank()) {
-                            add(mapOf("type" to "text", "text" to msg.content))
+                        if (textContent.isNotBlank()) {
+                            add(mapOf("type" to "text", "text" to textContent))
                         }
                     }
                 } else {
-                    msg.content
+                    textContent
                 }
                 mapOf("role" to msg.role, "content" to content)
             })
@@ -157,5 +203,22 @@ class OpenRouterProvider(
             ?.groupValues
             ?.getOrNull(1)
             ?.toIntOrNull()
+    }
+
+    private fun classifyRequestBucket(messages: List<ChatMessage>): OpenRouterFreeRoutingBucket {
+        val lastUserMessage = messages.lastOrNull { it.role == "user" }
+        val lastUserContent = lastUserMessage?.content.orEmpty()
+        return when {
+            lastUserMessage?.images?.isNotEmpty() == true -> OpenRouterFreeRoutingBucket.VISION
+            lastUserMessage?.fileAttachment != null ||
+                lastUserContent.contains("<attached_file ", ignoreCase = true) ->
+                OpenRouterFreeRoutingBucket.DOCUMENT
+            else -> OpenRouterFreeRoutingBucket.GENERAL
+        }
+    }
+
+    companion object {
+        const val BEST_FREE_CATALOG_MAX_AGE_MS = 10L * 60L * 1_000L
+        const val BEST_FREE_IDLE_TIMEOUT_MS = 10L * 60L * 1_000L
     }
 }

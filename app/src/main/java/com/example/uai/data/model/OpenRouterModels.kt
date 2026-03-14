@@ -1,6 +1,13 @@
 package com.example.uai.data.model
 
 const val OPENROUTER_FREE_ROUTER_MODEL = "openrouter/free"
+const val SIDEAGENT_OPENROUTER_BEST_FREE_MODEL = "sideagent/openrouter-best-free"
+
+enum class OpenRouterFreeRoutingBucket {
+    GENERAL,
+    DOCUMENT,
+    VISION
+}
 
 data class OpenRouterCatalogEntry(
     val id: String,
@@ -35,6 +42,17 @@ private val preferredOpenRouterGeneralFreeModels = listOf(
     OPENROUTER_FREE_ROUTER_MODEL
 )
 
+private val preferredOpenRouterDocumentFreeModels = listOf(
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "openai/gpt-oss-120b:free",
+    "qwen/qwen3-coder:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "openai/gpt-oss-20b:free",
+    "google/gemma-3-27b-it:free",
+    OPENROUTER_FREE_ROUTER_MODEL
+)
+
 private val preferredOpenRouterReasoningFreeModels = listOf(
     "openai/gpt-oss-120b:free",
     "qwen/qwen3-next-80b-a3b-instruct:free",
@@ -53,6 +71,7 @@ private val preferredOpenRouterVisionFreeModels = listOf(
 
 private enum class OpenRouterRankingUseCase {
     GENERAL,
+    DOCUMENT,
     REASONING,
     VISION
 }
@@ -85,10 +104,100 @@ private data class OpenRouterMetadataSignals(
     val isRouterFallback: Boolean
 )
 
-fun isOpenRouterFreeModel(modelId: String, freeModelIds: Set<String> = emptySet()): Boolean {
+fun isSideAgentManagedOpenRouterFreeRoute(modelId: String): Boolean {
+    return modelId == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
+}
+
+fun isOpenRouterConcreteFreeModel(modelId: String, freeModelIds: Set<String> = emptySet()): Boolean {
     return modelId == OPENROUTER_FREE_ROUTER_MODEL ||
         modelId.endsWith(":free") ||
         modelId in freeModelIds
+}
+
+fun isOpenRouterFreeModel(modelId: String, freeModelIds: Set<String> = emptySet()): Boolean {
+    return isSideAgentManagedOpenRouterFreeRoute(modelId) ||
+        isOpenRouterConcreteFreeModel(modelId, freeModelIds)
+}
+
+fun openRouterBestFreeCandidates(
+    bucket: OpenRouterFreeRoutingBucket,
+    catalogEntries: List<OpenRouterCatalogEntry> = emptyList(),
+    fetchedOpenRouterModels: List<String> = emptyList(),
+    freeModelIds: Set<String> = emptySet(),
+    startModelId: String? = null
+): List<String> {
+    val rankedModels = when (bucket) {
+        OpenRouterFreeRoutingBucket.GENERAL ->
+            rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.GENERAL,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            ) + rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.DOCUMENT,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            ) + rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.REASONING,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            ) + rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.VISION,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            )
+        OpenRouterFreeRoutingBucket.DOCUMENT ->
+            rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.DOCUMENT,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            ) + rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.GENERAL,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            ) + rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.REASONING,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            ) + rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.VISION,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            )
+        OpenRouterFreeRoutingBucket.VISION ->
+            rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.VISION,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            ) + rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.DOCUMENT,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            ) + rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.GENERAL,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            ) + rankedOpenRouterFreeModels(
+                useCase = OpenRouterRankingUseCase.REASONING,
+                catalogEntries = catalogEntries,
+                fetchedOpenRouterModels = fetchedOpenRouterModels,
+                freeModelIds = freeModelIds
+            )
+    }.distinct()
+
+    if (rankedModels.isEmpty()) return emptyList()
+    val startIndex = startModelId?.let(rankedModels::indexOf)?.takeIf { it >= 0 } ?: 0
+    return rankedModels.drop(startIndex) + rankedModels.take(startIndex)
 }
 
 fun preferredOpenRouterFastFreeModel(
@@ -132,8 +241,8 @@ fun openRouterFreeFallbackModels(
     requireVision: Boolean = false
 ): List<String> {
     val fetchedFreeModels = fetchedOpenRouterModels
-        .filter { isOpenRouterFreeModel(it, freeModelIds) }
-        .filter { !requireVision || openRouterFreeSupportsVision(it) }
+        .filter { isOpenRouterConcreteFreeModel(it, freeModelIds) }
+        .filter { !requireVision || openRouterFreeSupportsVision(it, catalogEntries) }
 
     val rankedModels = if (catalogEntries.isNotEmpty()) {
         if (requireVision) {
@@ -186,12 +295,12 @@ fun openRouterFreeFallbackModels(
     return buildList {
         if (
             currentModel != null &&
-            isOpenRouterFreeModel(currentModel, freeModelIds) &&
-            (!requireVision || openRouterFreeSupportsVision(currentModel))
+            isOpenRouterConcreteFreeModel(currentModel, freeModelIds) &&
+            (!requireVision || openRouterFreeSupportsVision(currentModel, catalogEntries))
         ) {
             add(currentModel)
         }
-        addAll(rankedModels.filter { !requireVision || openRouterFreeSupportsVision(it) })
+        addAll(rankedModels.filter { !requireVision || openRouterFreeSupportsVision(it, catalogEntries) })
         addAll(fetchedFreeModels)
     }.distinct()
 }
@@ -205,7 +314,12 @@ private fun rankedOpenRouterFreeModels(
     val availableEntries = if (catalogEntries.isNotEmpty()) {
         catalogEntries
             .filter { it.isFree }
-            .filter { useCase != OpenRouterRankingUseCase.VISION || it.supportsVision }
+            .filter {
+                when (useCase) {
+                    OpenRouterRankingUseCase.VISION -> it.supportsVision
+                    else -> true
+                }
+            }
     } else {
         emptyList()
     }
@@ -226,13 +340,19 @@ private fun rankedOpenRouterFreeModels(
     val otherAvailable = fetchedOpenRouterModels
         .filter { isOpenRouterFreeModel(it, freeModelIds) }
         .filter { it !in preferredAvailable }
-        .filter { useCase != OpenRouterRankingUseCase.VISION || openRouterFreeSupportsVision(it) }
+        .filter {
+            when (useCase) {
+                OpenRouterRankingUseCase.VISION -> openRouterFreeSupportsVision(it, catalogEntries)
+                else -> true
+            }
+        }
 
     return (preferredAvailable + otherAvailable).ifEmpty { preferredIds }
 }
 
 private fun preferredIdsFor(useCase: OpenRouterRankingUseCase): List<String> = when (useCase) {
     OpenRouterRankingUseCase.GENERAL -> preferredOpenRouterGeneralFreeModels
+    OpenRouterRankingUseCase.DOCUMENT -> preferredOpenRouterDocumentFreeModels
     OpenRouterRankingUseCase.REASONING -> preferredOpenRouterReasoningFreeModels
     OpenRouterRankingUseCase.VISION -> preferredOpenRouterVisionFreeModels
 }
@@ -250,6 +370,20 @@ private fun rankingProfileFor(useCase: OpenRouterRankingUseCase): OpenRouterRank
         codingKeywordBonus = 40,
         flashPenalty = 40,
         nanoPenalty = 220,
+        routerPenalty = 20_000
+    )
+    OpenRouterRankingUseCase.DOCUMENT -> OpenRouterRankingProfile(
+        preferredIds = preferredOpenRouterDocumentFreeModels,
+        preferredIdBoost = 4_200,
+        preferredIdStepPenalty = 230,
+        modelSizeWeight = 10,
+        contextWeightPer4k = 22,
+        visionSupportBonus = 40,
+        reasoningKeywordBonus = 90,
+        multimodalKeywordBonus = 20,
+        codingKeywordBonus = 120,
+        flashPenalty = 100,
+        nanoPenalty = 260,
         routerPenalty = 20_000
     )
     OpenRouterRankingUseCase.REASONING -> OpenRouterRankingProfile(
@@ -348,9 +482,16 @@ private fun looksLikeReasoningModel(searchText: String): Boolean {
     ).any(searchText::contains)
 }
 
-fun openRouterFreeSupportsVision(modelId: String): Boolean {
-    return modelId == OPENROUTER_FREE_ROUTER_MODEL ||
-        AgentConfig(provider = AiProviderType.OPENROUTER, model = modelId).supportsVision
+fun openRouterFreeSupportsVision(
+    modelId: String,
+    catalogEntries: List<OpenRouterCatalogEntry> = emptyList()
+): Boolean {
+    val catalogSupport = catalogEntries.firstOrNull { it.id == modelId }?.supportsVision
+    return catalogSupport ?: (
+        modelId == OPENROUTER_FREE_ROUTER_MODEL ||
+            isSideAgentManagedOpenRouterFreeRoute(modelId) ||
+            AgentConfig(provider = AiProviderType.OPENROUTER, model = modelId).supportsVision
+        )
 }
 
 fun AgentConfig.canHandleImageRequests(): Boolean {

@@ -82,6 +82,7 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
         val apiMessages = messages
             .filter { it.role != "system" }
             .map { msg ->
+                val textContent = msg.contentWithFileContext()
                 val content: Any = when {
                     msg.images.isNotEmpty() -> buildList {
                         for (img in msg.images) {
@@ -94,8 +95,8 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
                                 )
                             ))
                         }
-                        if (msg.content.isNotBlank()) {
-                            add(mapOf("type" to "text", "text" to msg.content))
+                        if (textContent.isNotBlank()) {
+                            add(mapOf("type" to "text", "text" to textContent))
                         }
                     }
                     msg.documentBase64 != null -> buildList {
@@ -107,11 +108,11 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
                                 "data" to msg.documentBase64
                             )
                         ))
-                        if (msg.content.isNotBlank()) {
-                            add(mapOf("type" to "text", "text" to msg.content))
+                        if (textContent.isNotBlank()) {
+                            add(mapOf("type" to "text", "text" to textContent))
                         }
                     }
-                    else -> msg.content
+                    else -> textContent
                 }
                 mapOf("role" to msg.role, "content" to content)
             }

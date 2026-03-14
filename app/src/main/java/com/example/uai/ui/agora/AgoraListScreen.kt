@@ -16,12 +16,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
 import com.example.uai.data.db.ConversationEntity
+import com.example.uai.ui.components.ProductHeroCard
+import com.example.uai.ui.components.ProductEmptyStateCard
+import com.example.uai.ui.components.ProductPill
+import com.example.uai.ui.components.ProductTopBarTitle
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.text.SimpleDateFormat
@@ -43,7 +48,12 @@ fun AgoraListScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.feature_rooms)) },
+                title = {
+                    ProductTopBarTitle(
+                        title = stringResource(R.string.feature_rooms),
+                        subtitle = stringResource(R.string.screen_council_subtitle)
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -64,35 +74,32 @@ fun AgoraListScreen(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center
             ) {
-                Column(
+                ProductEmptyStateCard(
+                    title = stringResource(R.string.rooms_empty_title),
+                    body = stringResource(R.string.rooms_empty_message),
+                    actionLabel = stringResource(R.string.new_room),
+                    onAction = onCreateRoom,
+                    modifier = Modifier.padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(32.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Forum,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        stringResource(R.string.rooms_empty_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        stringResource(R.string.rooms_empty_message),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                    titleAlign = TextAlign.Center,
+                    bodyAlign = TextAlign.Center
+                )
             }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                item {
+                    ProductHeroCard(
+                        eyebrow = stringResource(R.string.feature_rooms),
+                        title = stringResource(R.string.agora_hero_title),
+                        body = stringResource(R.string.agora_hero_body),
+                        actionLabel = stringResource(R.string.new_room),
+                        onAction = onCreateRoom
+                    )
+                }
                 items(rooms, key = { it.id }) { room ->
                     AgoraRoomItem(
                         room = room,
@@ -131,11 +138,11 @@ private fun AgoraRoomItem(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
+                .clip(RoundedCornerShape(20.dp))
                 .combinedClickable(onClick = onClick, onLongClick = { showMenu = true }),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            tonalElevation = 1.dp
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 2.dp
         ) {
             Row(
                 modifier = Modifier.padding(16.dp),
@@ -151,14 +158,34 @@ private fun AgoraRoomItem(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         room.title,
-                        style = MaterialTheme.typography.titleSmall,
+                        style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        "$agentCount agents · $dateStr",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Row(
+                        modifier = Modifier.padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        ProductPill(label = "$agentCount agents", emphasized = agentCount >= 3)
+                        Text(
+                            dateStr,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (room.isPinned) {
+                    ProductPill(label = "Pinned", emphasized = true)
+                } else {
+                    Spacer(Modifier.width(4.dp))
+                }
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(
+                        Icons.Default.Forum,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }

@@ -3,6 +3,7 @@ package com.example.uai
 import android.content.Context
 import com.example.uai.data.db.AppDatabase
 import com.example.uai.data.prefs.AppPreferences
+import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
 import com.example.uai.data.repository.OpenRouterCatalogRepository
@@ -29,11 +30,14 @@ class AppContainer(context: Context) {
     val openRouterCatalogRepository: OpenRouterCatalogRepository =
         OpenRouterCatalogRepository(preferences, okHttpClient)
 
+    val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore =
+        OpenRouterBestFreeRoutingStateStore()
+
     val providerModelCatalogRepository: ProviderModelCatalogRepository =
         ProviderModelCatalogRepository(preferences, okHttpClient)
 
     val conversationRepository: ConversationRepository =
-        ConversationRepository(db.conversationDao(), db.messageDao())
+        ConversationRepository(db.conversationDao(), db.messageDao(), context.applicationContext)
 
     val agentRepository: AgentRepository = AgentRepository(preferences)
 }

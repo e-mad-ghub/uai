@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.os.Bundle
 import android.os.Build
 import com.example.uai.data.model.AiProviderType
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 class UaiApplication : Application() {
 
@@ -27,7 +29,11 @@ class UaiApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        PDFBoxResourceLoader.init(this)
         container = AppContainer(this)
+        runBlocking {
+            container.preferences.initializeMiniChatDefaultIfNeeded()
+        }
         applicationScope.launch {
             container.openRouterCatalogRepository.refreshCatalogIfStale()
             val agents = container.agentRepository.agentsFlow.first()

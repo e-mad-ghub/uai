@@ -4,9 +4,9 @@ import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.OPENROUTER_FREE_ROUTER_MODEL
 import com.example.uai.data.model.OpenRouterCatalogEntry
+import com.example.uai.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.isOpenRouterFreeModel
-import com.example.uai.data.model.preferredOpenRouterFastFreeModel
 import com.example.uai.data.model.preferredOpenRouterReasoningFreeModel
 import com.example.uai.data.model.preferredOpenRouterVisionFreeModel
 
@@ -190,7 +190,8 @@ fun recommendedModelChoices(
                     } else {
                         "Best default for general chat."
                     },
-                    supportsVision = balancedVision
+                    supportsVision = balancedVision,
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = fastModel,
@@ -200,7 +201,8 @@ fun recommendedModelChoices(
                     } else {
                         "Lower cost and quick replies for everyday questions."
                     },
-                    supportsVision = fastVision
+                    supportsVision = fastVision,
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = detailedModel,
@@ -210,7 +212,8 @@ fun recommendedModelChoices(
                     } else {
                         "Useful when you want more deliberate answers."
                     },
-                    supportsVision = detailedVision
+                    supportsVision = detailedVision,
+                    supportsDocuments = true
                 )
             )
         }
@@ -252,11 +255,6 @@ fun recommendedModelChoices(
             )
         }
         AiProviderType.OPENROUTER -> {
-            val fastFreeModel = preferredOpenRouterFastFreeModel(
-                catalogEntries = openRouterCatalogEntries,
-                fetchedOpenRouterModels = fetchedProviderModels,
-                freeModelIds = freeModelIds
-            )
             val reasoningFreeModel = preferredOpenRouterReasoningFreeModel(
                 catalogEntries = openRouterCatalogEntries,
                 fetchedOpenRouterModels = fetchedProviderModels,
@@ -269,35 +267,47 @@ fun recommendedModelChoices(
             )
             val knownChoices = listOf(
                 RecommendedModelChoice(
-                    id = fastFreeModel,
+                    id = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
                     label = "Best free",
-                    description = "Best zero-cost option for chat and images. SideAgent automatically uses the best available free model for the request.",
+                    description = "SideAgent chooses the best available free model for each chat, file, or vision request, and reroutes automatically when needed.",
                     isRecommended = true,
                     isFree = true,
-                    supportsVision = AgentConfig(provider = provider, model = fastFreeModel).canHandleImageRequests()
+                    supportsVision = true,
+                    supportsDocuments = true
+                ),
+                RecommendedModelChoice(
+                    id = OPENROUTER_FREE_ROUTER_MODEL,
+                    label = "OpenRouter router",
+                    description = "Lets OpenRouter choose a compatible free model from its own free router.",
+                    isFree = true,
+                    supportsVision = true,
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = reasoningFreeModel,
                     label = "Reasoning free",
                     description = "Best for step-by-step thinking when you want a free model.",
-                    isFree = true
+                    isFree = true,
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = visionFreeModel,
                     label = "Vision free",
                     description = "Prioritizes free vision models first for screenshots and photos.",
                     isFree = true,
-                    supportsVision = AgentConfig(provider = provider, model = visionFreeModel).canHandleImageRequests()
+                    supportsVision = AgentConfig(provider = provider, model = visionFreeModel).canHandleImageRequests(),
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = "openai/gpt-4o",
                     label = "Balanced",
                     description = "Reliable all-round choice with image support.",
-                    supportsVision = true
+                    supportsVision = true,
+                    supportsDocuments = true
                 ),
                 RecommendedModelChoice(
                     id = "anthropic/claude-3.5-sonnet",
-                    label = "Documents",
+                    label = "Files",
                     description = "Strong option for file-heavy work through OpenRouter.",
                     supportsVision = true,
                     supportsDocuments = true
@@ -307,7 +317,10 @@ fun recommendedModelChoices(
                 knownChoices
             } else {
                 val available = fetchedProviderModels.toSet()
-                knownChoices.filter { it.id in available }.ifEmpty {
+                knownChoices.filter {
+                    it.id in available ||
+                        it.id == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
+                }.ifEmpty {
                     knownChoices
                 }
             }
@@ -348,8 +361,8 @@ fun defaultRecommendedModelId(
 }
 
 fun assistantSummary(agent: AgentConfig): String = when {
-    agent.canHandleImageRequests() && agent.supportsDocuments -> "Ready for chat, images, and documents."
-    agent.supportsDocuments -> "Strong for chat and document-based tasks."
+    agent.canHandleImageRequests() && agent.supportsDocuments -> "Ready for chat, images, and files."
+    agent.supportsDocuments -> "Strong for chat and file-based tasks."
     agent.canHandleImageRequests() -> "Great for chat, screenshots, and photos."
     else -> "A good everyday assistant for text conversations."
 }
@@ -359,5 +372,6 @@ fun assistantCapabilities(agent: AgentConfig): List<String> = buildList {
     if (agent.canHandleImageRequests()) add("Images")
     if (agent.supportsDocuments) add("Documents")
     if (agent.provider == AiProviderType.OPENROUTER && isOpenRouterFreeModel(agent.model)) add("Free")
+    if (agent.provider == AiProviderType.OPENROUTER && agent.model == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL) add("Adaptive")
     if (agent.provider == AiProviderType.OPENROUTER && agent.model == OPENROUTER_FREE_ROUTER_MODEL) add("Auto route")
 }

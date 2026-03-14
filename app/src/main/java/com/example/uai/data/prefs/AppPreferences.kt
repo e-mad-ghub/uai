@@ -30,9 +30,13 @@ class AppPreferences(context: Context) {
         val AGENT_LIST_JSON = stringPreferencesKey("agent_list_json")
         val ACTIVE_AGENT_ID = stringPreferencesKey("active_agent_id")
         val BUBBLE_ENABLED = booleanPreferencesKey("bubble_enabled")
+        val BUBBLE_DEFAULT_INITIALIZED = booleanPreferencesKey("bubble_default_initialized")
+        val BUBBLE_USER_SET = booleanPreferencesKey("bubble_user_set")
         val BUBBLE_POS_X = intPreferencesKey("bubble_pos_x")
         val BUBBLE_POS_Y = intPreferencesKey("bubble_pos_y")
         val COLOR_THEME = stringPreferencesKey("color_theme")
+        val MINI_CHAT_ENTRY_TIP_DISMISSED = booleanPreferencesKey("mini_chat_entry_tip_dismissed")
+        val MINI_CHAT_MINIMIZE_TIP_DISMISSED = booleanPreferencesKey("mini_chat_minimize_tip_dismissed")
         val OPENROUTER_CATALOG_JSON = stringPreferencesKey("openrouter_catalog_json")
         val OPENROUTER_CATALOG_FETCHED_AT = longPreferencesKey("openrouter_catalog_fetched_at")
         val OPENAI_MODEL_CATALOG_JSON = stringPreferencesKey("openai_model_catalog_json")
@@ -49,10 +53,22 @@ class AppPreferences(context: Context) {
 
     val activeAgentIdFlow: Flow<String?> = store.data.map { it[Keys.ACTIVE_AGENT_ID] }
 
-    val bubbleEnabledFlow: Flow<Boolean> = store.data.map { it[Keys.BUBBLE_ENABLED] ?: false }
+    val bubbleEnabledFlow: Flow<Boolean> = store.data.map { prefs ->
+        if (prefs[Keys.BUBBLE_USER_SET] == true) {
+            prefs[Keys.BUBBLE_ENABLED] ?: true
+        } else {
+            true
+        }
+    }
+
+    val miniChatEntryTipDismissedFlow: Flow<Boolean> =
+        store.data.map { it[Keys.MINI_CHAT_ENTRY_TIP_DISMISSED] ?: false }
+
+    val miniChatMinimizeTipDismissedFlow: Flow<Boolean> =
+        store.data.map { it[Keys.MINI_CHAT_MINIMIZE_TIP_DISMISSED] ?: false }
 
     val colorThemeFlow: Flow<AppColorTheme> = store.data.map {
-        AppColorTheme.fromKey(it[Keys.COLOR_THEME] ?: AppColorTheme.TERRACOTTA.name)
+        AppColorTheme.fromKey(it[Keys.COLOR_THEME] ?: AppColorTheme.DEFAULT.name)
     }
 
     val openRouterCatalogFlow: Flow<OpenRouterCatalog> = store.data.map { prefs ->
@@ -108,7 +124,31 @@ class AppPreferences(context: Context) {
     }
 
     suspend fun setBubbleEnabled(enabled: Boolean) {
-        store.edit { it[Keys.BUBBLE_ENABLED] = enabled }
+        store.edit {
+            it[Keys.BUBBLE_ENABLED] = enabled
+            it[Keys.BUBBLE_USER_SET] = true
+        }
+    }
+
+    suspend fun initializeMiniChatDefaultIfNeeded() {
+        store.edit { prefs ->
+            if (prefs[Keys.BUBBLE_DEFAULT_INITIALIZED] == true) return@edit
+            if (!prefs.contains(Keys.BUBBLE_ENABLED)) {
+                prefs[Keys.BUBBLE_ENABLED] = true
+            }
+            if (!prefs.contains(Keys.BUBBLE_USER_SET)) {
+                prefs[Keys.BUBBLE_USER_SET] = false
+            }
+            prefs[Keys.BUBBLE_DEFAULT_INITIALIZED] = true
+        }
+    }
+
+    suspend fun setMiniChatEntryTipDismissed(dismissed: Boolean) {
+        store.edit { it[Keys.MINI_CHAT_ENTRY_TIP_DISMISSED] = dismissed }
+    }
+
+    suspend fun setMiniChatMinimizeTipDismissed(dismissed: Boolean) {
+        store.edit { it[Keys.MINI_CHAT_MINIMIZE_TIP_DISMISSED] = dismissed }
     }
 
     suspend fun saveBubblePosition(x: Int, y: Int) {

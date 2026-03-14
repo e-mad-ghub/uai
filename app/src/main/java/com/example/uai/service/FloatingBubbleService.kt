@@ -56,11 +56,13 @@ import com.example.uai.MainActivity
 import com.example.uai.R
 import com.example.uai.UaiApplication
 import com.example.uai.ai.AiProviderFactory
-import com.example.uai.ai.ChatMessage
+import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
+import com.example.uai.ai.ThrottledStreamingMessageWriter
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
+import com.example.uai.data.db.toChatMessage
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AppColorTheme
@@ -68,8 +70,10 @@ import com.example.uai.ui.MediaPickerActivity
 import com.example.uai.ui.OverlayScreenCaptureActivity
 import com.example.uai.ui.OverlayScreenCaptureOutcome
 import com.example.uai.ui.chat.persistImageAttachment
+import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.BubbleContent
 import com.example.uai.ui.chat.ChatPanel
+import com.example.uai.ui.chat.importFileAttachment
 import com.example.uai.ui.theme.UaiTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -97,6 +101,11 @@ class FloatingBubbleService : Service() {
         AppForegroundSuppressed
     }
 
+    private data class PendingAssistantRepairToast(
+        val conversationId: String,
+        val message: String
+    )
+
     private lateinit var windowManager: WindowManager
     private val lifecycleOwner = ServiceLifecycleOwner()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -108,9 +117,10 @@ class FloatingBubbleService : Service() {
     private var activeAgent: AgentConfig? by mutableStateOf(null)
     private var allAgents by mutableStateOf<List<AgentConfig>>(emptyList())
     private var availableConversations by mutableStateOf<List<ConversationEntity>>(emptyList())
-    private var colorTheme by mutableStateOf(AppColorTheme.TERRACOTTA)
+    private var colorTheme by mutableStateOf(AppColorTheme.DEFAULT)
     private var isDismissTargetActive by mutableStateOf(false)
     private var isAppUiVisible = false
+    private var miniChatMinimizeTipDismissed by mutableStateOf(false)
 
     // Attachment state
     // Each Triple: (base64, ImageBitmap?, uriStr?)
@@ -119,7 +129,6 @@ class FloatingBubbleService : Service() {
     private val messageThumbnails = mutableStateMapOf<String, List<ImageBitmap>>()
     private var pendingFileName by mutableStateOf<String?>(null)
     private var pendingFileText by mutableStateOf<String?>(null)
-    private var pendingDocumentBase64 by mutableStateOf<String?>(null)
     private var isOverlayScreenshotCaptureInProgress = false
 
     private var bubbleView: ComposeView? = null
@@ -138,6 +147,9 @@ class FloatingBubbleService : Service() {
     private var currentConversationId: String? = null
     private var currentConversationMessagesJob: Job? = null
     private var prefersDraftConversation = false
+    private var draftAgentId: String? = null
+    private var pendingAssistantRepairToast: PendingAssistantRepairToast? = null
+    private var pendingPanelShowAfterAppHidden = false
     private var screenshotRestoreJob: Job? = null
     private var streamingJob: Job? = null
     private var isChatPanelAnimating = false
@@ -145,6 +157,8 @@ class FloatingBubbleService : Service() {
     private var pendingPanelRestoreAfterExternalFlow = false
     private var panelTransitionGeneration = 0L
     private var externalFlowGeneration = 0L
+    private var repairInFlightKey: String? = null
+    private var lastAssistantRepairNotificationKey: String? = null
     private val systemDialogsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != Intent.ACTION_CLOSE_SYSTEM_DIALOGS) return
@@ -180,6 +194,11 @@ class FloatingBubbleService : Service() {
             .catch { }
             .launchIn(serviceScope)
 
+        container.preferences.miniChatMinimizeTipDismissedFlow
+            .onEach { miniChatMinimizeTipDismissed = it }
+            .catch { }
+            .launchIn(serviceScope)
+
         app.isAppUiVisible
             .onEach { visible ->
                 isAppUiVisible = visible
@@ -190,21 +209,20 @@ class FloatingBubbleService : Service() {
             .launchIn(serviceScope)
 
         container.agentRepository.agentsFlow
-            .onEach { allAgents = it }
+            .onEach { agents ->
+                allAgents = agents
+                if (hasConversationSnapshot) {
+                    synchronizeConversationSelection()
+                }
+            }
             .catch { }
             .launchIn(serviceScope)
 
         container.agentRepository.activeAgentFlow
             .onEach { agent ->
-                val previousAgentId = activeAgent?.id
                 activeAgent = agent
-                if (agent?.id != previousAgentId) {
-                    streamingJob?.cancel()
-                    streamingJob = null
-                    isLoading = false
-                    if (hasConversationSnapshot) {
-                        synchronizeConversationSelection()
-                    }
+                if (hasConversationSnapshot) {
+                    synchronizeConversationSelection()
                 }
             }
             .catch { }
@@ -247,40 +265,186 @@ class FloatingBubbleService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        handleStartIntent(intent)
+        return START_STICKY
+    }
+
+    private fun handleStartIntent(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_OPEN_CHAT_PANEL -> {
+                val conversationId = intent.getStringExtra(EXTRA_CONVERSATION_ID) ?: return
+                prefersDraftConversation = false
+                switchConversation(conversationId, force = true)
+                pendingPanelShowAfterAppHidden = true
+                if (!isAppUiVisible) {
+                    showChatPanel()
+                }
+            }
+            ACTION_OPEN_DRAFT_CHAT_PANEL -> {
+                val assistantId = intent.getStringExtra(EXTRA_ASSISTANT_ID)
+                prefersDraftConversation = true
+                draftAgentId = assistantId ?: draftAgentId
+                switchConversation(null, force = true)
+                pendingPanelShowAfterAppHidden = true
+                if (!isAppUiVisible) {
+                    showChatPanel()
+                }
+            }
+            ACTION_SUPPRESS_FOR_FOREGROUND_APP -> {
+                pendingPanelRestoreAfterExternalFlow = false
+                pendingPanelShowAfterAppHidden = false
+                forceHideOverlayWindows("foreground-app-command")
+                overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
+            }
+        }
+    }
 
     // ----- Conversation sync -----
 
-    private fun conversationsForActiveAgent(): List<ConversationEntity> {
-        val agentId = activeAgent?.id ?: return emptyList()
+    private fun currentConversationEntity(): ConversationEntity? {
+        val conversationId = currentConversationId ?: return null
+        return allConversations.firstOrNull { !it.isAgora && it.id == conversationId }
+    }
+
+    private fun conversationsForOverlay(): List<ConversationEntity> {
         return allConversations
-            .filter { !it.isAgora && it.agentId == agentId }
+            .filter { !it.isAgora }
             .sortedWith(compareByDescending<ConversationEntity> { it.isPinned }.thenByDescending { it.updatedAt })
     }
 
+    private fun resolvedDefaultAgent(): AgentConfig? {
+        val currentDefault = activeAgent ?: return null
+        return currentDefault.takeIf { candidate ->
+            allAgents.any { it.id == candidate.id }
+        }
+    }
+
+    private fun fallbackAgentForCurrentContext(): AgentConfig? =
+        resolvedDefaultAgent() ?: allAgents.firstOrNull()
+
+    private fun selectedAgentForCurrentContext(): AgentConfig? {
+        currentConversationEntity()?.let { conversation ->
+            return allAgents.firstOrNull { it.id == conversation.agentId }
+                ?: fallbackAgentForCurrentContext()
+        }
+
+        val draftAgentId = draftAgentId
+        if (draftAgentId != null) {
+            return allAgents.firstOrNull { it.id == draftAgentId }
+                ?: fallbackAgentForCurrentContext()
+        }
+
+        return fallbackAgentForCurrentContext()
+    }
+
+    private fun queueOrShowAssistantRepairToast(conversationId: String, message: String) {
+        val pendingToast = PendingAssistantRepairToast(conversationId, message)
+        if (isChatPanelToastVisible() && currentConversationId == conversationId) {
+            pendingAssistantRepairToast = null
+            Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
+        } else {
+            pendingAssistantRepairToast = pendingToast
+        }
+    }
+
+    private fun flushPendingAssistantRepairToast() {
+        if (!isChatPanelToastVisible()) return
+        val pendingToast = pendingAssistantRepairToast ?: return
+        if (pendingToast.conversationId != currentConversationId) return
+        pendingAssistantRepairToast = null
+        Toast.makeText(applicationContext, pendingToast.message, Toast.LENGTH_LONG).show()
+    }
+
+    private fun isChatPanelToastVisible(): Boolean {
+        return overlaySurfaceState == OverlaySurfaceState.PanelVisible ||
+                (isChatPanelVisible && chatPanelContainer?.isAttachedToWindow == true)
+    }
+
+    private fun repairCurrentConversationAssignmentIfNeeded(conversation: ConversationEntity) {
+        val assignedAgent = allAgents.firstOrNull { it.id == conversation.agentId }
+        when {
+            assignedAgent != null -> {
+                val syncKey = "sync:${conversation.id}:${assignedAgent.id}:${assignedAgent.name}"
+                if (conversation.agentName == assignedAgent.name || repairInFlightKey == syncKey) return
+                repairInFlightKey = syncKey
+                val container = (application as UaiApplication).container
+                serviceScope.launch {
+                    try {
+                        container.conversationRepository.upsertConversation(
+                            conversation.copy(agentName = assignedAgent.name)
+                        )
+                    } finally {
+                        if (repairInFlightKey == syncKey) {
+                            repairInFlightKey = null
+                        }
+                    }
+                }
+            }
+
+            else -> {
+                val fallbackAgent = fallbackAgentForCurrentContext() ?: return
+                val repairKey = "repair:${conversation.id}:${conversation.agentId}:${fallbackAgent.id}"
+                if (repairInFlightKey == repairKey) return
+                repairInFlightKey = repairKey
+                val container = (application as UaiApplication).container
+                serviceScope.launch {
+                    try {
+                        if (resolvedDefaultAgent() == null) {
+                            container.agentRepository.setActiveAgent(fallbackAgent.id)
+                        }
+                        container.conversationRepository.upsertConversation(
+                            conversation.copy(
+                                agentId = fallbackAgent.id,
+                                agentName = fallbackAgent.name
+                            )
+                        )
+                        if (lastAssistantRepairNotificationKey != repairKey) {
+                            lastAssistantRepairNotificationKey = repairKey
+                            queueOrShowAssistantRepairToast(
+                                conversationId = conversation.id,
+                                message = "This chat's previous assistant is no longer available. Switched to ${fallbackAgent.name}."
+                            )
+                        }
+                    } finally {
+                        if (repairInFlightKey == repairKey) {
+                            repairInFlightKey = null
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun synchronizeConversationSelection() {
-        availableConversations = conversationsForActiveAgent()
-        val currentConversation = currentConversationId?.let { id ->
-            availableConversations.firstOrNull { it.id == id }
+        availableConversations = conversationsForOverlay()
+        val currentConversation = currentConversationEntity()
+        val fallbackAgent = fallbackAgentForCurrentContext()
+
+        if (draftAgentId != null && allAgents.none { it.id == draftAgentId }) {
+            draftAgentId = fallbackAgent?.id
+            if (resolvedDefaultAgent() == null && fallbackAgent != null) {
+                serviceScope.launch {
+                    (application as UaiApplication).container.agentRepository.setActiveAgent(fallbackAgent.id)
+                }
+            }
         }
 
         when {
-            activeAgent == null -> {
-                prefersDraftConversation = true
-                switchConversation(null, force = currentConversationId != null || chatMessages.isNotEmpty())
-            }
             currentConversation != null -> {
                 if (currentConversationMessagesJob == null) {
                     switchConversation(currentConversation.id, force = true)
+                } else {
+                    repairCurrentConversationAssignmentIfNeeded(currentConversation)
                 }
             }
             prefersDraftConversation -> {
                 switchConversation(null, force = currentConversationId != null || chatMessages.isNotEmpty())
             }
             else -> {
-                val fallback = availableConversations.firstOrNull()
-                prefersDraftConversation = fallback == null && hasConversationSnapshot
-                switchConversation(fallback?.id, force = true)
+                val fallbackConversation = availableConversations.firstOrNull()
+                prefersDraftConversation = fallbackConversation == null && hasConversationSnapshot
+                switchConversation(fallbackConversation?.id, force = true)
             }
         }
     }
@@ -299,6 +463,9 @@ class FloatingBubbleService : Service() {
             chatMessages.clear()
             return
         }
+
+        currentConversationEntity()?.let(::repairCurrentConversationAssignmentIfNeeded)
+        flushPendingAssistantRepairToast()
 
         val container = (application as UaiApplication).container
         currentConversationMessagesJob = container.conversationRepository
@@ -536,6 +703,7 @@ class FloatingBubbleService : Service() {
     // ----- Chat panel setup -----
 
     private fun setupChatPanel() {
+        val container = (application as UaiApplication).container
         panelParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -561,7 +729,9 @@ class FloatingBubbleService : Service() {
                         messages = chatMessages,
                         inputText = inputText,
                         isLoading = isLoading,
-                        agentName = activeAgent?.name ?: "Agent",
+                        agentName = selectedAgentForCurrentContext()?.name ?: "Select assistant",
+                        selectedAgentId = selectedAgentForCurrentContext()?.id,
+                        hasSelectedAgent = selectedAgentForCurrentContext() != null,
                         agents = allAgents,
                         conversations = availableConversations,
                         currentConversationId = currentConversationId,
@@ -572,13 +742,21 @@ class FloatingBubbleService : Service() {
                         onInputChange = { inputText = it },
                         onSend = ::sendMessage,
                         onStop = ::stopResponse,
-                        onClose = ::dismissChatPanelAnimated,
                         onMinimize = ::dismissChatPanelAnimated,
                         onOpenInApp = ::openInApp,
                         onAgentSelect = { agent ->
                             serviceScope.launch {
-                                (application as UaiApplication).container
-                                    .agentRepository.setActiveAgent(agent.id)
+                                val conversation = currentConversationEntity()
+                                if (conversation != null) {
+                                    container.conversationRepository.upsertConversation(
+                                        conversation.copy(
+                                            agentId = agent.id,
+                                            agentName = agent.name
+                                        )
+                                    )
+                                } else {
+                                    draftAgentId = agent.id
+                                }
                             }
                         },
                         onConversationSelect = { conversationId ->
@@ -593,7 +771,13 @@ class FloatingBubbleService : Service() {
                         onPickCamera = ::launchCameraCapture,
                         onPickFile = ::launchFilePicker,
                         onTakeScreenshot = ::launchScreenshotCapture,
-                        onClearAttachment = ::clearAttachment
+                        onClearAttachment = ::clearAttachment,
+                        showMiniChatMinimizeTip = !miniChatMinimizeTipDismissed,
+                        onDismissMiniChatMinimizeTip = {
+                            serviceScope.launch {
+                                container.preferences.setMiniChatMinimizeTipDismissed(true)
+                            }
+                        }
                     )
                 }
             }
@@ -716,6 +900,7 @@ class FloatingBubbleService : Service() {
 
     private fun showChatPanel() {
         if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow || isAppUiVisible) return
+        pendingPanelShowAfterAppHidden = false
         if (chatPanelView == null || chatPanelContainer == null) {
             setupChatPanel()
         }
@@ -740,6 +925,7 @@ class FloatingBubbleService : Service() {
                         if (panelTransitionGeneration != transitionGeneration) return@withEndAction
                         isChatPanelAnimating = false
                         overlaySurfaceState = OverlaySurfaceState.PanelVisible
+                        flushPendingAssistantRepairToast()
                     }
                     ?.start()
             } else {
@@ -747,6 +933,7 @@ class FloatingBubbleService : Service() {
                 chatPanelView?.animate()?.cancel()
                 chatPanelView?.translationY = 0f
                 overlaySurfaceState = OverlaySurfaceState.PanelVisible
+                flushPendingAssistantRepairToast()
             }
         }
     }
@@ -899,21 +1086,16 @@ class FloatingBubbleService : Service() {
         if (overlaySurfaceState == OverlaySurfaceState.ExternalFlow || isOverlayScreenshotCaptureInProgress) {
             return
         }
-        removeSafely(dismissZoneView, immediate = true)
-        isDismissTargetActive = false
-        clearChatPanelInteractionState()
-        removeSafely(chatPanelContainer, immediate = true)
-        chatPanelView?.disposeComposition()
-        chatPanelContainer = null
-        chatPanelView = null
-        isChatPanelVisible = false
-        isChatPanelAnimating = false
-        hideBubbleWindow(immediate = true)
+        forceHideOverlayWindows("app-visible")
         overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
     }
 
     private fun restoreOverlayAfterAppHidden() {
         if (overlaySurfaceState != OverlaySurfaceState.AppForegroundSuppressed || isOverlayScreenshotCaptureInProgress) {
+            return
+        }
+        if (pendingPanelShowAfterAppHidden) {
+            showChatPanel()
             return
         }
         if (bubbleView == null) {
@@ -963,7 +1145,6 @@ class FloatingBubbleService : Service() {
         pendingImages.clear()
         pendingFileName = null
         pendingFileText = null
-        pendingDocumentBase64 = null
     }
 
     private fun launchGalleryPicker() {
@@ -1023,7 +1204,6 @@ class FloatingBubbleService : Service() {
                 serviceScope.launch {
                     // Process then always restore the panel
                     val mimeType = contentResolver.getType(uri) ?: ""
-                    val name = uri.lastPathSegment ?: "file"
                     when {
                         mimeType.startsWith("image/") -> {
                             val (base64, bitmap) = encodeImageFromUri(uri)
@@ -1032,42 +1212,35 @@ class FloatingBubbleService : Service() {
                                 pendingImages.clear()
                                 pendingFileName = null
                                 pendingFileText = null
-                                pendingDocumentBase64 = null
                                 val persistedUri = withContext(Dispatchers.IO) {
                                     persistImageAttachment(applicationContext, base64)
                                 } ?: uri.toString()
                                 pendingImages.add(Triple(base64, bitmap, persistedUri))
                             }
                         }
-                        mimeType.startsWith("text/") -> {
-                            val text = withContext(Dispatchers.IO) {
-                                runCatching {
-                                    contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
-                                }.getOrNull()
-                            }
-                            if (text != null) {
-                                pendingImages.clear()
-                                pendingFileName = name
-                                pendingFileText = text
-                                pendingDocumentBase64 = null
-                            }
-                        }
-                        mimeType == "application/pdf" -> {
-                            val base64 = withContext(Dispatchers.IO) {
-                                runCatching {
-                                    contentResolver.openInputStream(uri)?.use {
-                                        Base64.encodeToString(it.readBytes(), Base64.NO_WRAP)
-                                    }
-                                }.getOrNull()
-                            }
-                            if (base64 != null) {
-                                pendingImages.clear()
-                                pendingFileName = name
-                                pendingFileText = null
-                                pendingDocumentBase64 = base64
+                        else -> {
+                            when (val result = importFileAttachment(applicationContext, uri)) {
+                                is FileAttachmentImportResult.Success -> {
+                                    pendingImages.clear()
+                                    pendingFileName = result.attachment.displayName
+                                    pendingFileText = result.attachment.extractedText
+                                }
+                                is FileAttachmentImportResult.Unsupported -> {
+                                    Toast.makeText(
+                                        applicationContext,
+                                        result.message,
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                                is FileAttachmentImportResult.Failure -> {
+                                    Toast.makeText(
+                                        applicationContext,
+                                        result.message,
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
                         }
-                        else -> { /* unsupported — silently ignore */ }
                     }
                     restoreOverlaysAfterExternalFlow(
                         flowGeneration = flowGeneration,
@@ -1095,13 +1268,23 @@ class FloatingBubbleService : Service() {
     private fun launchAccessibilityScreenshotCapture() {
         if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
         if (!MiniChatScreenshotAccessibilityService.isAvailable()) {
+            val accessibilityHelperEnabled =
+                MiniChatScreenshotAccessibilityService.isEnabled(this)
             minimizeChatPanelToBubble(immediate = true)
             Toast.makeText(
                 this,
-                getString(R.string.mini_chat_screenshot_accessibility_hint),
+                getString(
+                    if (accessibilityHelperEnabled) {
+                        R.string.mini_chat_screenshot_accessibility_wait
+                    } else {
+                        R.string.mini_chat_screenshot_accessibility_hint
+                    }
+                ),
                 Toast.LENGTH_LONG
             ).show()
-            MiniChatScreenshotAccessibilityService.openSettings(this)
+            if (!accessibilityHelperEnabled) {
+                MiniChatScreenshotAccessibilityService.openSettings(this)
+            }
             return
         }
 
@@ -1155,6 +1338,8 @@ class FloatingBubbleService : Service() {
             }
 
             if (!started) {
+                val accessibilityHelperEnabled =
+                    MiniChatScreenshotAccessibilityService.isEnabled(applicationContext)
                 android.util.Log.e("UAI_CAP", "accessibility screenshot service unavailable at capture time")
                 restoreOverlaysAfterExternalFlow(
                     flowGeneration = flowGeneration,
@@ -1163,10 +1348,18 @@ class FloatingBubbleService : Service() {
                 minimizeChatPanelToBubble(immediate = true)
                 Toast.makeText(
                     applicationContext,
-                    getString(R.string.mini_chat_screenshot_accessibility_hint),
+                    getString(
+                        if (accessibilityHelperEnabled) {
+                            R.string.mini_chat_screenshot_accessibility_wait
+                        } else {
+                            R.string.mini_chat_screenshot_accessibility_hint
+                        }
+                    ),
                     Toast.LENGTH_LONG
                 ).show()
-                MiniChatScreenshotAccessibilityService.openSettings(applicationContext)
+                if (!accessibilityHelperEnabled) {
+                    MiniChatScreenshotAccessibilityService.openSettings(applicationContext)
+                }
             }
         }
     }
@@ -1259,6 +1452,7 @@ class FloatingBubbleService : Service() {
         isLoading = false
         currentConversationId = null
         prefersDraftConversation = true
+        draftAgentId = null
         isOverlayScreenshotCaptureInProgress = false
         pendingPanelRestoreAfterExternalFlow = false
         removeSafely(dismissZoneView, immediate = true)
@@ -1271,13 +1465,21 @@ class FloatingBubbleService : Service() {
 
     private fun openInApp() {
         val convId = currentConversationId ?: return
-        minimizeChatPanelToBubble(immediate = true)
+        pendingPanelRestoreAfterExternalFlow = false
+        pendingPanelShowAfterAppHidden = false
+        forceHideOverlayWindows("open-in-app-prelaunch")
+        overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
         val intent = Intent(this, MainActivity::class.java).apply {
             action = "com.example.uai.OPEN_CONVERSATION"
             putExtra("conversationId", convId)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         startActivity(intent)
+        serviceScope.launch {
+            delay(250L)
+            forceHideOverlayWindows("open-in-app-postlaunch")
+            overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
+        }
     }
 
     private fun stopResponse() {
@@ -1287,13 +1489,18 @@ class FloatingBubbleService : Service() {
     }
 
     private fun sendMessage(text: String) {
-        val agent = activeAgent
+        val agent = selectedAgentForCurrentContext()
         val imageList = pendingImages.toList()
-        val docBase64 = pendingDocumentBase64
-        val fileCtx = pendingFileText?.let { "```\n$it\n```\n\n" } ?: ""
-        val fullText = fileCtx + text
+        val attachedFile = pendingFileText?.let {
+            FileAttachmentContext(
+                displayName = pendingFileName ?: "file",
+                extractedText = it
+            )
+        }
+        val fullText = text
+        val titleHint = text.trim().ifBlank { pendingFileName.orEmpty() }
 
-        if ((fullText.isBlank() && imageList.isEmpty() && docBase64 == null) || isLoading || agent == null) return
+        if ((fullText.isBlank() && imageList.isEmpty() && attachedFile == null) || isLoading || agent == null) return
 
         // Clear attachment before starting the stream (don't wait for it)
         clearAttachment()
@@ -1304,14 +1511,24 @@ class FloatingBubbleService : Service() {
             isLoading = true
             inputText = ""
 
+            var convId: String? = null
             var assistantId: String? = null
             var accumulated = ""
+            var streamingWriter: ThrottledStreamingMessageWriter? = null
 
             try {
                 if (currentConversationId == null) {
-                    val title = fullText.trim().ifBlank {
-                        if (docBase64 != null) "Document" else if (imageList.isNotEmpty()) "Image" else "Chat"
-                    }.take(60)
+                    val title = titleHint
+                        .trim()
+                        .takeIf { it.isNotBlank() }
+                        ?.take(60)
+                        ?: fullText.trim().ifBlank {
+                            when {
+                                attachedFile != null -> attachedFile.displayName
+                                imageList.isNotEmpty() -> "Image"
+                                else -> "Chat"
+                            }
+                        }.take(60)
                     val conv = ConversationEntity(
                         id = UUID.randomUUID().toString(),
                         title = title,
@@ -1324,7 +1541,8 @@ class FloatingBubbleService : Service() {
                     prefersDraftConversation = false
                     switchConversation(conv.id, force = true)
                 }
-                val convId = currentConversationId!!
+                convId = currentConversationId!!
+                val activeConversationId = convId!!
                 val persistedImageUri = imageList.firstOrNull()?.third
                     ?: imageList.firstOrNull()?.first?.let {
                         withContext(Dispatchers.IO) { persistImageAttachment(applicationContext, it) }
@@ -1332,11 +1550,13 @@ class FloatingBubbleService : Service() {
 
                 val userMsg = MessageEntity(
                     id = UUID.randomUUID().toString(),
-                    conversationId = convId,
+                    conversationId = activeConversationId,
                     role = "user",
                     content = fullText,
                     createdAt = System.currentTimeMillis(),
-                    imageUri = persistedImageUri
+                    imageUri = persistedImageUri,
+                    attachedFileName = attachedFile?.displayName,
+                    attachedFileText = attachedFile?.extractedText
                 )
                 container.conversationRepository.insertMessage(userMsg)
                 chatMessages.add(userMsg)
@@ -1345,13 +1565,15 @@ class FloatingBubbleService : Service() {
                 if (thumbs.isNotEmpty()) messageThumbnails[userMsg.id] = thumbs
 
                 assistantId = UUID.randomUUID().toString()
+                val messageId = assistantId!!
                 val assistantMsg = MessageEntity(
-                    id = assistantId,
-                    conversationId = convId,
+                    id = messageId,
+                    conversationId = activeConversationId,
                     role = "assistant",
                     content = "",
                     createdAt = System.currentTimeMillis(),
                     isStreaming = true,
+                    agentId = agent.id,
                     agentName = agent.name
                 )
                 container.conversationRepository.insertMessage(assistantMsg)
@@ -1362,35 +1584,48 @@ class FloatingBubbleService : Service() {
                     val notice = "I don't support image analysis with \"${agent.model}\". " +
                             "Please switch to a vision-capable model in agent settings."
                     accumulated = notice  // must be non-blank so finally doesn't delete the message
-                    val idx = chatMessages.indexOfFirst { it.id == assistantId }
+                    val idx = chatMessages.indexOfFirst { it.id == messageId }
                     if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = notice, isStreaming = false)
-                    container.conversationRepository.updateMessageContent(assistantId, notice, false)
-                    container.conversationRepository.touchConversation(convId)
+                    container.conversationRepository.updateMessageContent(messageId, notice, false)
+                    container.conversationRepository.touchConversation(activeConversationId)
                     return@launch
                 }
 
-                // Build history, attaching images/document to the last user message
+                // Build history, attaching images to the last user message.
                 val allHistory = chatMessages.filter { !it.isStreaming }
                 val history = allHistory.mapIndexed { idx, msg ->
                     if (idx == allHistory.lastIndex && msg.role == "user") {
                         when {
-                            imageList.isNotEmpty() -> ChatMessage(
-                                msg.role, msg.content,
+                            imageList.isNotEmpty() -> msg.toChatMessage(
                                 images = imageList.map { ImageAttachment(it.first) }
                             )
-                            docBase64 != null      -> ChatMessage(msg.role, msg.content, documentBase64 = docBase64)
-                            else                   -> ChatMessage(msg.role, msg.content)
+                            else -> msg.toChatMessage()
                         }
                     } else {
-                        ChatMessage(msg.role, msg.content)
+                        msg.toChatMessage()
                     }
                 }
 
                 val provider = AiProviderFactory.create(
-                    agent,
-                    container.okHttpClient,
-                    container.openRouterCatalogRepository
+                    config = agent,
+                    client = container.okHttpClient,
+                    openRouterCatalogRepository = container.openRouterCatalogRepository,
+                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
                 )
+                streamingWriter = ThrottledStreamingMessageWriter { content, isStreaming ->
+                    val idx = chatMessages.indexOfFirst { it.id == messageId }
+                    if (idx != -1) {
+                        chatMessages[idx] = chatMessages[idx].copy(
+                            content = content,
+                            isStreaming = isStreaming
+                        )
+                    }
+                    container.conversationRepository.updateMessageContent(
+                        messageId,
+                        content,
+                        isStreaming
+                    )
+                }
 
                 provider.streamResponse(history, agent)
                     .catch { e -> emit(StreamChunk.Error(e)) }
@@ -1400,8 +1635,7 @@ class FloatingBubbleService : Service() {
                         when (chunk) {
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
-                                if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = accumulated)
-                                container.conversationRepository.updateMessageContent(id, accumulated, true)
+                                streamingWriter?.emitStreaming(accumulated)
                             }
                             is StreamChunk.ModelSelection -> {
                                 if (idx != -1) {
@@ -1416,17 +1650,11 @@ class FloatingBubbleService : Service() {
                                     chunk.viaFallback
                                 )
                             }
-                            is StreamChunk.Done -> {
-                                if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(isStreaming = false)
-                                container.conversationRepository.updateMessageContent(id, accumulated, false)
-                                container.conversationRepository.touchConversation(convId)
-                            }
+                            is StreamChunk.Done -> Unit
                             is StreamChunk.Error -> {
                                 val errContent = if (accumulated.isBlank()) "[Error: ${chunk.cause.message}]"
                                                  else "$accumulated\n[Error: ${chunk.cause.message}]"
                                 accumulated = errContent  // must be non-blank so finally doesn't delete the message
-                                if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = errContent, isStreaming = false)
-                                container.conversationRepository.updateMessageContent(id, errContent, false)
                             }
                         }
                     }
@@ -1439,9 +1667,9 @@ class FloatingBubbleService : Service() {
                             if (idx != -1) chatMessages.removeAt(idx)
                             container.conversationRepository.deleteMessage(id)
                         } else {
-                            if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(isStreaming = false)
-                            container.conversationRepository.updateMessageContent(id, accumulated, false)
+                            streamingWriter?.emitFinal(accumulated)
                         }
+                        convId?.let { container.conversationRepository.touchConversation(it) }
                     }
                     isLoading = false
                 }
@@ -1476,8 +1704,31 @@ class FloatingBubbleService : Service() {
         if (view != null && view.isAttachedToWindow) {
             runCatching {
                 if (immediate) windowManager.removeViewImmediate(view) else windowManager.removeView(view)
+            }.onFailure { throwable ->
+                android.util.Log.e(
+                    "UAI_OVERLAY",
+                    "Failed to remove ${view.javaClass.simpleName} immediate=$immediate attached=${view.isAttachedToWindow}",
+                    throwable
+                )
             }
         }
+    }
+
+    private fun forceHideOverlayWindows(reason: String) {
+        android.util.Log.d(
+            "UAI_OVERLAY",
+            "forceHideOverlayWindows reason=$reason panelAttached=${chatPanelContainer?.isAttachedToWindow == true} bubbleAttached=${bubbleView?.isAttachedToWindow == true} state=$overlaySurfaceState"
+        )
+        removeSafely(dismissZoneView, immediate = true)
+        isDismissTargetActive = false
+        clearChatPanelInteractionState()
+        removeSafely(chatPanelContainer, immediate = true)
+        chatPanelView?.disposeComposition()
+        chatPanelContainer = null
+        chatPanelView = null
+        isChatPanelVisible = false
+        isChatPanelAnimating = false
+        hideBubbleWindow(immediate = true)
     }
 
     private fun nextPanelTransitionGeneration(): Long {
@@ -1508,7 +1759,7 @@ class FloatingBubbleService : Service() {
         val notification: Notification = NotificationCompat.Builder(this, UaiApplication.BUBBLE_CHANNEL_ID)
             .setContentTitle(getString(R.string.bubble_notification_title))
             .setContentText(getString(R.string.bubble_notification_text))
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_launcher_monochrome)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -1530,6 +1781,11 @@ class FloatingBubbleService : Service() {
     }
 
     companion object {
+        private const val ACTION_OPEN_CHAT_PANEL = "com.example.uai.OPEN_CHAT_PANEL"
+        private const val ACTION_OPEN_DRAFT_CHAT_PANEL = "com.example.uai.OPEN_DRAFT_CHAT_PANEL"
+        private const val ACTION_SUPPRESS_FOR_FOREGROUND_APP = "com.example.uai.SUPPRESS_FOR_FOREGROUND_APP"
+        private const val EXTRA_CONVERSATION_ID = "conversationId"
+        private const val EXTRA_ASSISTANT_ID = "assistantId"
         private const val NOTIFICATION_ID = 1001
         private const val DISMISS_BOTTOM_PAD_DP = 48
         private const val DISMISS_RADIUS_DP = 30
@@ -1542,6 +1798,41 @@ class FloatingBubbleService : Service() {
 
         fun startService(context: android.content.Context) {
             val intent = Intent(context, FloatingBubbleService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                context.startForegroundService(intent)
+            else
+                context.startService(intent)
+        }
+
+        fun openConversation(context: android.content.Context, conversationId: String) {
+            val intent = Intent(context, FloatingBubbleService::class.java).apply {
+                action = ACTION_OPEN_CHAT_PANEL
+                putExtra(EXTRA_CONVERSATION_ID, conversationId)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                context.startForegroundService(intent)
+            else
+                context.startService(intent)
+        }
+
+        fun openDraftConversation(
+            context: android.content.Context,
+            assistantId: String?
+        ) {
+            val intent = Intent(context, FloatingBubbleService::class.java).apply {
+                action = ACTION_OPEN_DRAFT_CHAT_PANEL
+                putExtra(EXTRA_ASSISTANT_ID, assistantId)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                context.startForegroundService(intent)
+            else
+                context.startService(intent)
+        }
+
+        fun suppressForForegroundApp(context: android.content.Context) {
+            val intent = Intent(context, FloatingBubbleService::class.java).apply {
+                action = ACTION_SUPPRESS_FOR_FOREGROUND_APP
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 context.startForegroundService(intent)
             else

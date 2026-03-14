@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -56,6 +57,7 @@ import kotlin.math.roundToInt
 @Composable
 fun MessageBubble(
     message: MessageEntity,
+    showAgentName: Boolean = true,
     thumbnails: List<ImageBitmap> = emptyList(),
     onDoubleTap: (() -> Unit)? = null,
     onReply: (() -> Unit)? = null,
@@ -74,10 +76,17 @@ fun MessageBubble(
         MaterialTheme.colorScheme.onSurfaceVariant
 
     // Load image from URI if present
-    var imageBitmap by remember(message.imageUri) { mutableStateOf<ImageBitmap?>(null) }
+    val cachedBitmap = remember(message.imageUri) {
+        message.imageUri?.let { MessageImageBitmapCache.get(it) }
+    }
+    var imageBitmap by remember(message.imageUri) { mutableStateOf<ImageBitmap?>(cachedBitmap) }
     val context = LocalContext.current
     LaunchedEffect(message.imageUri) {
         val uriStr = message.imageUri ?: return@LaunchedEffect
+        MessageImageBitmapCache.get(uriStr)?.let {
+            imageBitmap = it
+            return@LaunchedEffect
+        }
         imageBitmap = withContext(Dispatchers.IO) {
             try {
                 val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
@@ -86,6 +95,7 @@ fun MessageBubble(
                 }
             } catch (_: Exception) { null }
         }
+        imageBitmap?.let { MessageImageBitmapCache.put(uriStr, it) }
     }
 
     val clipboardManager = LocalClipboardManager.current
@@ -101,14 +111,20 @@ fun MessageBubble(
 
     // Icon appearance driven by drag progress (0..1)
     val progress = (dragOffset.value / swipeThresholdPx).coerceIn(0f, 1f)
-    val canCopyMessage = !message.isStreaming && message.content.isNotEmpty()
+    val displayContent = remember(message.content, message.attachedFileName, message.attachedFileText) {
+        parseAttachedFileDisplay(message)
+    }
+    val copyableMessageText = remember(message.content, message.attachedFileName, message.attachedFileText) {
+        buildCopyableMessageText(message)
+    }
+    val canCopyMessage = !message.isStreaming && copyableMessageText.isNotBlank()
     @OptIn(ExperimentalFoundationApi::class)
     val interactionModifier = if (onDoubleTap != null || canCopyMessage) {
         Modifier.combinedClickable(
             onClick = {},
             onLongClick = if (canCopyMessage) {
                 {
-                    clipboardManager.setText(AnnotatedString(message.content))
+                    clipboardManager.setText(AnnotatedString(copyableMessageText))
                     Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
                 }
             } else {
@@ -124,7 +140,7 @@ fun MessageBubble(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
-        if (!isUser && message.agentName != null) {
+        if (!isUser && showAgentName && message.agentName != null) {
             Text(
                 text = message.agentName,
                 style = MaterialTheme.typography.labelSmall,
@@ -258,9 +274,41 @@ fun MessageBubble(
                                     contentScale = ContentScale.FillWidth
                                 )
                             }
-                            if (message.content.isNotEmpty()) {
+                            if (displayContent.fileNames.isNotEmpty()) {
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    displayContent.fileNames.forEach { fileName ->
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = if (isUser) {
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                            } else {
+                                                MaterialTheme.colorScheme.secondaryContainer
+                                            }
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.AttachFile,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp),
+                                                    tint = textColor
+                                                )
+                                                Text(
+                                                    text = fileName,
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = textColor
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (displayContent.visibleText.isNotEmpty()) {
                                 Text(
-                                    text = message.content,
+                                    text = displayContent.visibleText,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = textColor
                                 )

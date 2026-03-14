@@ -45,7 +45,8 @@ fun AppNavGraph(
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
                     httpClient = container.okHttpClient,
-                    openRouterCatalogRepository = container.openRouterCatalogRepository
+                    openRouterCatalogRepository = container.openRouterCatalogRepository,
+                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
                 )
             )
             ConversationDetailScreen(
@@ -66,7 +67,8 @@ fun AppNavGraph(
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
                     httpClient = container.okHttpClient,
-                    openRouterCatalogRepository = container.openRouterCatalogRepository
+                    openRouterCatalogRepository = container.openRouterCatalogRepository,
+                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
                 )
             )
             ConversationDetailScreen(
@@ -84,6 +86,9 @@ fun AppNavGraph(
                 viewModel = vm,
                 onAddAgent = { navController.navigate(Routes.agentEdit()) },
                 onEditAgent = { id -> navController.navigate(Routes.agentEdit(id)) },
+                onDuplicateAgent = { id ->
+                    navController.navigate(Routes.agentEdit(duplicateFromId = id))
+                },
                 onBack = { navController.popBackStack() }
             )
         }
@@ -95,14 +100,22 @@ fun AppNavGraph(
                     type = NavType.StringType
                     nullable = true
                     defaultValue = null
+                },
+                navArgument("duplicateFromId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
                 }
             )
         ) { backStack ->
             val agentId = backStack.arguments?.getString("agentId")?.takeIf { it.isNotEmpty() }
+            val duplicateFromId = backStack.arguments?.getString("duplicateFromId")
+                ?.takeIf { it.isNotEmpty() }
             val vm: AgentEditViewModel = viewModel(
                 factory = AgentEditViewModel.Factory(
                     container.agentRepository,
                     agentId,
+                    duplicateFromId,
                     container.okHttpClient,
                     container.openRouterCatalogRepository,
                     container.providerModelCatalogRepository
@@ -167,7 +180,8 @@ fun AppNavGraph(
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
                     httpClient = container.okHttpClient,
-                    openRouterCatalogRepository = container.openRouterCatalogRepository
+                    openRouterCatalogRepository = container.openRouterCatalogRepository,
+                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
                 )
             )
             AgoraDetailScreen(

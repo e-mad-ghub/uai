@@ -10,10 +10,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.OpenInFull
-import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,6 +24,7 @@ import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -35,6 +34,8 @@ import com.example.uai.R
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.ui.components.ProductHintPill
 
 @Composable
 fun ChatPanel(
@@ -42,6 +43,8 @@ fun ChatPanel(
     inputText: String,
     isLoading: Boolean,
     agentName: String,
+    selectedAgentId: String?,
+    hasSelectedAgent: Boolean,
     agents: List<AgentConfig>,
     conversations: List<ConversationEntity>,
     currentConversationId: String?,
@@ -52,7 +55,6 @@ fun ChatPanel(
     onInputChange: (String) -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
-    onClose: () -> Unit,
     onMinimize: () -> Unit,
     onOpenInApp: (() -> Unit)? = null,
     onAgentSelect: (AgentConfig) -> Unit,
@@ -63,6 +65,8 @@ fun ChatPanel(
     onPickFile: () -> Unit,
     onTakeScreenshot: () -> Unit,
     onClearAttachment: () -> Unit,
+    showMiniChatMinimizeTip: Boolean = false,
+    onDismissMiniChatMinimizeTip: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val configuration = LocalConfiguration.current
@@ -94,71 +98,26 @@ fun ChatPanel(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(
-                            Icons.Default.SmartToy,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Box {
-                            Row(
-                                modifier = Modifier
-                                    .clickable(enabled = agents.size > 1) { agentDropdownExpanded = true },
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(agentName, style = MaterialTheme.typography.titleMedium)
-                                if (agents.size > 1) {
-                                    Icon(
-                                        Icons.Default.ArrowDropDown,
-                                        contentDescription = "Select agent",
-                                        modifier = Modifier.size(20.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            DropdownMenu(
-                                expanded = agentDropdownExpanded,
-                                onDismissRequest = { agentDropdownExpanded = false }
-                            ) {
-                                agents.forEach { agent ->
-                                    DropdownMenuItem(
-                                        text = { Text(agent.name) },
-                                        onClick = {
-                                            agentDropdownExpanded = false
-                                            onAgentSelect(agent)
-                                        },
-                                        leadingIcon = if (agent.name == agentName) ({
-                                            Icon(
-                                                Icons.Default.SmartToy,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }) else null
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Box {
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .clickable(enabled = hasExistingConversations) {
+                        Box(modifier = Modifier.widthIn(max = 172.dp)) {
+                            TextButton(
+                                onClick = {
+                                    if (hasExistingConversations) {
                                         conversationDropdownExpanded = true
                                     }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                },
+                                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
                                     text = currentConversationTitle,
-                                    style = MaterialTheme.typography.labelMedium,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.widthIn(max = 120.dp)
+                                    modifier = Modifier.weight(1f, fill = false)
                                 )
                                 if (hasExistingConversations) {
                                     Icon(
@@ -186,19 +145,14 @@ fun ChatPanel(
                                             conversationDropdownExpanded = false
                                             onConversationSelect(conversation.id)
                                         },
-                                        leadingIcon = if (conversation.id == currentConversationId) ({
-                                            Icon(
-                                                Icons.Default.SmartToy,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
+                                        trailingIcon = if (conversation.id == currentConversationId) ({
+                                            Text("✓", color = MaterialTheme.colorScheme.primary)
                                         }) else null
                                     )
                                 }
                             }
                         }
-                        Spacer(Modifier.width(8.dp))
+
                         FilledTonalButton(
                             onClick = onNewConversation,
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
@@ -208,68 +162,154 @@ fun ChatPanel(
                             Spacer(Modifier.width(4.dp))
                             Text("New chat", style = MaterialTheme.typography.labelMedium)
                         }
+
                         Spacer(Modifier.weight(1f))
-                        IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.Close, "Close")
+
+                        Box {
+                            TextButton(
+                                onClick = {
+                                    if (agents.isNotEmpty()) {
+                                        agentDropdownExpanded = true
+                                    }
+                                }
+                            ) {
+                                Text(
+                                    text = agentName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 128.dp)
+                                )
+                                if (agents.isNotEmpty()) {
+                                    Icon(
+                                        Icons.Default.ArrowDropDown,
+                                        contentDescription = "Select assistant",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                            DropdownMenu(
+                                expanded = agentDropdownExpanded,
+                                onDismissRequest = { agentDropdownExpanded = false }
+                            ) {
+                                agents.forEach { agent ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Text(agent.name)
+                                                    if (agent.canHandleImageRequests()) {
+                                                        Icon(
+                                                            Icons.Default.Image,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(14.dp),
+                                                            tint = MaterialTheme.colorScheme.primary
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    "${agent.provider.displayName} · ${agent.model}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            agentDropdownExpanded = false
+                                            onAgentSelect(agent)
+                                        },
+                                        trailingIcon = if (agent.id == selectedAgentId) ({
+                                            Text("✓", color = MaterialTheme.colorScheme.primary)
+                                        }) else null
+                                    )
+                                }
+                            }
                         }
                     }
                     HorizontalDivider()
                 }
 
                 // Slot 1: messages list
-                ChatMessageList(
-                    messages = messages,
-                    isLoading = isLoading,
-                    behavior = messageListBehavior,
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface),
-                    messageThumbnails = messageThumbnails,
-                    onBackgroundDoubleTap = onMinimize,
-                    onMessageDoubleTap = onMinimize,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    emptyContent = {
+                        .background(MaterialTheme.colorScheme.surface)
+                ) {
+                    if (showMiniChatMinimizeTip && onDismissMiniChatMinimizeTip != null) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(32.dp),
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                "Start a conversation with $agentName",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 56.dp)
+                            ProductHintPill(
+                                message = stringResource(R.string.mini_chat_panel_hint),
+                                onDismiss = onDismissMiniChatMinimizeTip
                             )
                         }
-                    },
-                    overlayContent = { isAtBottom ->
-                        if (messages.isNotEmpty() && !isAtBottom && onOpenInApp != null) {
-                            FilledTonalButton(
-                                onClick = onOpenInApp,
+                    }
+                    ChatMessageList(
+                        messages = messages,
+                        isLoading = isLoading,
+                        behavior = messageListBehavior,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        messageThumbnails = messageThumbnails,
+                        onBackgroundDoubleTap = onMinimize,
+                        onMessageDoubleTap = onMinimize,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        emptyContent = {
+                            Box(
                                 modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 8.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                    .fillMaxWidth()
+                                    .padding(32.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Icon(
-                                    Icons.Default.OpenInFull,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(14.dp)
+                                Text(
+                                    if (hasSelectedAgent) {
+                                        "Start a conversation with $agentName"
+                                    } else {
+                                        "Choose an assistant to start this chat"
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 56.dp)
                                 )
-                                Spacer(Modifier.width(6.dp))
-                                Text("Open in app", style = MaterialTheme.typography.labelSmall)
+                            }
+                        },
+                        overlayContent = { isAtBottom ->
+                            if (messages.isNotEmpty() && !isAtBottom && onOpenInApp != null) {
+                                FilledTonalButton(
+                                    onClick = onOpenInApp,
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .padding(top = 8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.OpenInFull,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Open in app", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        },
+                        replyActionForMessage = { message ->
+                            if (!message.isStreaming && message.role == "assistant") {
+                                { replyToMessage = message }
+                            } else {
+                                null
                             }
                         }
-                    },
-                    replyActionForMessage = { message ->
-                        if (!message.isStreaming && message.role == "assistant") {
-                            { replyToMessage = message }
-                        } else {
-                            null
-                        }
-                    }
-                )
+                    )
+                }
 
                 // Slot 2: divider + ChatInputBar (unified input chrome)
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -280,7 +320,7 @@ fun ChatPanel(
                         pendingImages = pendingImages.map { it.second },
                         pendingFileName = pendingFileName,
                         replyToMessage = replyToMessage,
-                        replyLabel = agentName,
+                        replyLabel = replyToMessage?.agentName ?: agentName,
                         onPickCamera = onPickCamera,
                         onPickGallery = onPickGallery,
                         onPickFile = onPickFile,
@@ -289,14 +329,12 @@ fun ChatPanel(
                         onCancelReply = { replyToMessage = null },
                         onStop = onStop,
                         onSend = {
-                            val replyContext = replyToMessage
-                                ?.let { "> ${it.content.take(200).replace("\n", " ")}\n\n" }
-                                ?: ""
+                            val replyContext = replyToMessage?.let { buildQuotedReplyContext(it) }.orEmpty()
                             onSend(replyContext + inputText)
                             replyToMessage = null
                         },
                         disableScreenshotRipple = true,
-                        sendEnabled = inputText.isNotBlank() || hasAttachment
+                        sendEnabled = (inputText.isNotBlank() || hasAttachment) && hasSelectedAgent
                     ) {
                         val placeholder = when {
                             pendingImages.size > 1 -> "Ask about these images…"
@@ -324,9 +362,7 @@ fun ChatPanel(
                                 imeAction = ImeAction.Send
                             ),
                             keyboardActions = KeyboardActions(onSend = {
-                                val replyContext = replyToMessage
-                                    ?.let { "> ${it.content.take(200).replace("\n", " ")}\n\n" }
-                                    ?: ""
+                                val replyContext = replyToMessage?.let { buildQuotedReplyContext(it) }.orEmpty()
                                 onSend(replyContext + inputText)
                                 replyToMessage = null
                             }),

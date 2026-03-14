@@ -2,10 +2,14 @@ package com.example.uai
 
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
+import com.example.uai.data.model.OpenRouterFreeRoutingBucket
 import com.example.uai.data.model.OPENROUTER_FREE_ROUTER_MODEL
 import com.example.uai.data.model.OpenRouterCatalogEntry
+import com.example.uai.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
 import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.data.model.openRouterBestFreeCandidates
 import com.example.uai.data.model.openRouterFreeFallbackModels
+import com.example.uai.data.model.openRouterFreeSupportsVision
 import com.example.uai.data.model.preferredOpenRouterFastFreeModel
 import com.example.uai.data.model.shouldRetryOpenRouterFreeFallback
 import com.example.uai.ui.agents.assistantProviderOrder
@@ -18,11 +22,11 @@ import org.junit.Test
 class OpenRouterModelsTest {
 
     @Test
-    fun newAgentDefaultsToOpenRouterFreeRouter() {
+    fun newAgentDefaultsToSideAgentBestFreeRoute() {
         val agent = AgentConfig()
 
         assertEquals(AiProviderType.OPENROUTER, agent.provider)
-        assertEquals(OPENROUTER_FREE_ROUTER_MODEL, agent.model)
+        assertEquals(SIDEAGENT_OPENROUTER_BEST_FREE_MODEL, agent.model)
     }
 
     @Test
@@ -92,7 +96,7 @@ class OpenRouterModelsTest {
             freeModelIds = freeModelIds
         )
 
-        assertEquals("google/gemma-3-12b-it:free", selected)
+        assertEquals(SIDEAGENT_OPENROUTER_BEST_FREE_MODEL, selected)
     }
 
     @Test
@@ -150,6 +154,44 @@ class OpenRouterModelsTest {
 
         assertEquals("google/gemma-3-27b-it:free", candidates.first())
         assertFalse(candidates.contains("meta-llama/llama-3.3-70b-instruct:free"))
+    }
+
+    @Test
+    fun bestFreeCandidatesRotateFromLastSuccessfulModel() {
+        val candidates = openRouterBestFreeCandidates(
+            bucket = OpenRouterFreeRoutingBucket.GENERAL,
+            fetchedOpenRouterModels = listOf(
+                OPENROUTER_FREE_ROUTER_MODEL,
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "google/gemma-3-12b-it:free"
+            ),
+            freeModelIds = setOf(
+                OPENROUTER_FREE_ROUTER_MODEL,
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "google/gemma-3-12b-it:free"
+            ),
+            startModelId = "google/gemma-3-12b-it:free"
+        )
+
+        assertEquals("google/gemma-3-12b-it:free", candidates.first())
+        assertEquals(candidates.size, candidates.distinct().size)
+        assertTrue(candidates.contains("meta-llama/llama-3.3-70b-instruct:free"))
+    }
+
+    @Test
+    fun visionSupportUsesCatalogMetadataForNewFreeModels() {
+        assertTrue(
+            openRouterFreeSupportsVision(
+                modelId = "openrouter/healer-alpha",
+                catalogEntries = listOf(
+                    OpenRouterCatalogEntry(
+                        id = "openrouter/healer-alpha",
+                        name = "Healer Alpha",
+                        supportsVision = true
+                    )
+                )
+            )
+        )
     }
 
     @Test

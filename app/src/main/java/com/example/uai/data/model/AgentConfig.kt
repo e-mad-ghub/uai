@@ -13,7 +13,7 @@ data class AgentConfig(
     val name: String = "New Agent",
     val provider: AiProviderType = AiProviderType.OPENROUTER,
     val apiKey: String = "",
-    val model: String = OPENROUTER_FREE_ROUTER_MODEL,
+    val model: String = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
     val systemPrompt: String = "You are a helpful assistant.",
     val temperature: Float = 0.7f
 ) {
@@ -40,16 +40,8 @@ data class AgentConfig(
         }
     }
 
-    /** True when the selected model supports PDF/document upload. */
-    val supportsDocuments: Boolean get() = when (provider) {
-        AiProviderType.ANTHROPIC -> true
-        AiProviderType.OPENAI -> false
-        AiProviderType.OPENROUTER -> {
-            val m = model.lowercase()
-            m.startsWith("anthropic/") || m.contains("claude-3") ||
-            m.contains("claude-sonnet") || m.contains("claude-opus") || m.contains("claude-haiku")
-        }
-    }
+    /** Files are normalized into text context before they reach the provider. */
+    val supportsDocuments: Boolean get() = true
 
     companion object {
         val defaultModels = mapOf(
@@ -67,6 +59,7 @@ data class AgentConfig(
                 "claude-opus-4-6"
             ),
             AiProviderType.OPENROUTER to listOf(
+                SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
                 OPENROUTER_FREE_ROUTER_MODEL,
                 "meta-llama/llama-3.3-70b-instruct:free",
                 "openai/gpt-oss-20b:free",

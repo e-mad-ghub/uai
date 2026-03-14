@@ -9,10 +9,15 @@ object AiProviderFactory {
     fun create(
         config: AgentConfig,
         client: OkHttpClient,
-        openRouterCatalogRepository: OpenRouterCatalogRepository? = null
+        openRouterCatalogRepository: OpenRouterCatalogRepository? = null,
+        openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore? = null
     ): AiProvider = when (config.provider) {
         AiProviderType.OPENAI -> OpenAiProvider(client)
         AiProviderType.ANTHROPIC -> AnthropicProvider(client)
-        AiProviderType.OPENROUTER -> OpenRouterProvider(client, openRouterCatalogRepository)
+        AiProviderType.OPENROUTER -> OpenRouterProvider(
+            client = client,
+            openRouterCatalogRepository = openRouterCatalogRepository,
+            bestFreeRoutingStateStore = openRouterBestFreeRoutingStateStore
+        )
     }
 }

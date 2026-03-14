@@ -64,6 +64,7 @@ class OpenAiProvider(
                 add(mapOf("role" to "system", "content" to config.systemPrompt))
             }
             addAll(messages.map { msg ->
+                val textContent = msg.contentWithFileContext()
                 val content: Any = if (msg.images.isNotEmpty()) {
                     buildList {
                         for (img in msg.images) {
@@ -74,12 +75,12 @@ class OpenAiProvider(
                                 )
                             ))
                         }
-                        if (msg.content.isNotBlank()) {
-                            add(mapOf("type" to "text", "text" to msg.content))
+                        if (textContent.isNotBlank()) {
+                            add(mapOf("type" to "text", "text" to textContent))
                         }
                     }
                 } else {
-                    msg.content
+                    textContent
                 }
                 mapOf("role" to msg.role, "content" to content)
             })

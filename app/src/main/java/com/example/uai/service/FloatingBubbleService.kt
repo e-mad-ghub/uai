@@ -121,6 +121,7 @@ class FloatingBubbleService : Service() {
     private var isDismissTargetActive by mutableStateOf(false)
     private var isAppUiVisible = false
     private var miniChatMinimizeTipDismissed by mutableStateOf(false)
+    private var miniChatScreenshotHintMessage by mutableStateOf<String?>(null)
 
     // Attachment state
     // Each Triple: (base64, ImageBitmap?, uriStr?)
@@ -151,6 +152,7 @@ class FloatingBubbleService : Service() {
     private var pendingAssistantRepairToast: PendingAssistantRepairToast? = null
     private var pendingPanelShowAfterAppHidden = false
     private var screenshotRestoreJob: Job? = null
+    private var screenshotHintJob: Job? = null
     private var streamingJob: Job? = null
     private var isChatPanelAnimating = false
     private var overlaySurfaceState = OverlaySurfaceState.BubbleVisible
@@ -257,6 +259,7 @@ class FloatingBubbleService : Service() {
         lifecycleOwner.onDestroy()
         serviceScope.cancel()
         screenshotRestoreJob?.cancel()
+        screenshotHintJob?.cancel()
         currentConversationMessagesJob?.cancel()
         removeSafely(chatPanelContainer, immediate = true)
         removeSafely(dismissZoneView, immediate = true)
@@ -359,6 +362,17 @@ class FloatingBubbleService : Service() {
     private fun isChatPanelToastVisible(): Boolean {
         return overlaySurfaceState == OverlaySurfaceState.PanelVisible ||
                 (isChatPanelVisible && chatPanelContainer?.isAttachedToWindow == true)
+    }
+
+    private fun showMiniChatScreenshotHint(message: String) {
+        miniChatScreenshotHintMessage = message
+        screenshotHintJob?.cancel()
+        screenshotHintJob = serviceScope.launch {
+            delay(3_500L)
+            if (miniChatScreenshotHintMessage == message) {
+                miniChatScreenshotHintMessage = null
+            }
+        }
     }
 
     private fun repairCurrentConversationAssignmentIfNeeded(conversation: ConversationEntity) {
@@ -777,7 +791,8 @@ class FloatingBubbleService : Service() {
                             serviceScope.launch {
                                 container.preferences.setMiniChatMinimizeTipDismissed(true)
                             }
-                        }
+                        },
+                        screenshotHintMessage = miniChatScreenshotHintMessage
                     )
                 }
             }
@@ -1270,21 +1285,15 @@ class FloatingBubbleService : Service() {
         if (!MiniChatScreenshotAccessibilityService.isAvailable()) {
             val accessibilityHelperEnabled =
                 MiniChatScreenshotAccessibilityService.isEnabled(this)
-            minimizeChatPanelToBubble(immediate = true)
-            Toast.makeText(
-                this,
+            showMiniChatScreenshotHint(
                 getString(
                     if (accessibilityHelperEnabled) {
                         R.string.mini_chat_screenshot_accessibility_wait
                     } else {
                         R.string.mini_chat_screenshot_accessibility_hint
                     }
-                ),
-                Toast.LENGTH_LONG
-            ).show()
-            if (!accessibilityHelperEnabled) {
-                MiniChatScreenshotAccessibilityService.openSettings(this)
-            }
+                )
+            )
             return
         }
 
@@ -1345,21 +1354,15 @@ class FloatingBubbleService : Service() {
                     flowGeneration = flowGeneration,
                     forcePanelVisible = true
                 )
-                minimizeChatPanelToBubble(immediate = true)
-                Toast.makeText(
-                    applicationContext,
+                showMiniChatScreenshotHint(
                     getString(
                         if (accessibilityHelperEnabled) {
                             R.string.mini_chat_screenshot_accessibility_wait
                         } else {
                             R.string.mini_chat_screenshot_accessibility_hint
                         }
-                    ),
-                    Toast.LENGTH_LONG
-                ).show()
-                if (!accessibilityHelperEnabled) {
-                    MiniChatScreenshotAccessibilityService.openSettings(applicationContext)
-                }
+                    )
+                )
             }
         }
     }

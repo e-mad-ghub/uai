@@ -1,5 +1,11 @@
 package com.example.uai.ui.chat
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -36,6 +42,7 @@ import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.ui.components.ProductHintPill
+import com.example.uai.ui.components.ProductInputHintStrip
 
 @Composable
 fun ChatPanel(
@@ -67,11 +74,19 @@ fun ChatPanel(
     onClearAttachment: () -> Unit,
     showMiniChatMinimizeTip: Boolean = false,
     onDismissMiniChatMinimizeTip: (() -> Unit)? = null,
+    screenshotHintMessage: String? = null,
     modifier: Modifier = Modifier
 ) {
     val configuration = LocalConfiguration.current
     val messageListBehavior = rememberChatMessageListBehavior(messages)
     val maxMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(280.dp, 560.dp)
+    var renderedScreenshotHint by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(screenshotHintMessage) {
+        if (screenshotHintMessage != null) {
+            renderedScreenshotHint = screenshotHintMessage
+        }
+    }
 
     var agentDropdownExpanded by remember { mutableStateOf(false) }
     var conversationDropdownExpanded by remember { mutableStateOf(false) }
@@ -298,6 +313,27 @@ fun ChatPanel(
                                     )
                                     Spacer(Modifier.width(6.dp))
                                     Text("Open in app", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = screenshotHintMessage != null,
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                enter = fadeIn(animationSpec = tween(180)) +
+                                    slideInVertically(
+                                        initialOffsetY = { it / 2 },
+                                        animationSpec = tween(220)
+                                    ),
+                                exit = fadeOut(animationSpec = tween(140)) +
+                                    slideOutVertically(
+                                        targetOffsetY = { it / 2 },
+                                        animationSpec = tween(180)
+                                    )
+                            ) {
+                                val hintMessage = renderedScreenshotHint
+                                if (hintMessage != null) {
+                                    ProductInputHintStrip(message = hintMessage)
                                 }
                             }
                         },

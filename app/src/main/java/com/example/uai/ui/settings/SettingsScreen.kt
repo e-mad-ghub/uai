@@ -82,7 +82,7 @@ fun SettingsScreen(
     val showOverlayPermissionCard = !hasOverlayPermission &&
         (showOverlayPermissionCallout || isMiniChatConfigured)
     val showMiniChatScreenshotsCard =
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && isMiniChatActive
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
     val miniChatStatusLabel = stringResource(
         when {
             isMiniChatActive -> R.string.mini_chat_status_active
@@ -439,77 +439,56 @@ private fun MiniChatScreenshotsCard(
     isEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit
 ) {
-    OutlinedCard(
-        colors = CardDefaults.outlinedCardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+    ElevatedCard {
+        ListItem(
+            leadingContent = {
                 Icon(
                     Icons.Default.Security,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary
                 )
-                Text(
-                    stringResource(R.string.mini_chat_screenshots_title),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-            Text(
-                stringResource(
-                    if (isEnabled) {
-                        R.string.mini_chat_screenshots_status_enabled
-                    } else {
-                        R.string.mini_chat_screenshots_status_optional
-                    }
-                ),
-                style = MaterialTheme.typography.labelLarge,
-                color = if (isEnabled) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-            )
-            Text(
-                stringResource(
-                    if (isEnabled) {
-                        R.string.mini_chat_screenshots_enabled_body
-                    } else {
-                        R.string.mini_chat_screenshots_disabled_body
-                    }
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            if (!isEnabled) {
-                Text(
-                    stringResource(R.string.mini_chat_screenshots_settings_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            TextButton(onClick = onOpenAccessibilitySettings) {
-                Text(
-                    stringResource(
-                        if (isEnabled) {
-                            R.string.action_manage_screenshot_helper
-                        } else {
-                            R.string.action_set_up_screenshots
-                        }
+            },
+            headlineContent = {
+                Text(stringResource(R.string.mini_chat_screenshots_title))
+            },
+            supportingContent = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ProductPill(
+                        label = stringResource(
+                            if (isEnabled) {
+                                R.string.mini_chat_screenshots_status_enabled
+                            } else {
+                                R.string.mini_chat_screenshots_status_needs_setup
+                            }
+                        ),
+                        emphasized = isEnabled
                     )
-                )
+                    Text(
+                        stringResource(
+                            if (isEnabled) {
+                                R.string.mini_chat_screenshots_enabled_body
+                            } else {
+                                R.string.mini_chat_screenshots_disabled_body
+                            }
+                        ),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            trailingContent = {
+                TextButton(onClick = onOpenAccessibilitySettings) {
+                    Text(
+                        stringResource(
+                            if (isEnabled) {
+                                R.string.action_manage_screenshot_helper
+                            } else {
+                                R.string.action_set_up_screenshots
+                            }
+                        )
+                    )
+                }
             }
-        }
+        )
     }
 }
 

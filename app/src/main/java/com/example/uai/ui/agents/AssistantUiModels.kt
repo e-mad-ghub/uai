@@ -110,8 +110,8 @@ data class ProviderUiInfo(
     val apiKeyPlaceholder: String,
     val apiKeyCalloutTitle: String,
     val apiKeyCalloutBody: String,
-    val apiKeyActionLabel: String,
-    val apiKeyActionUrl: String
+    val apiKeyActionLabel: String? = null,
+    val apiKeyActionUrl: String? = null
 )
 
 data class RecommendedModelChoice(
@@ -158,12 +158,22 @@ fun providerUiInfo(provider: AiProviderType): ProviderUiInfo = when (provider) {
         apiKeyActionLabel = "Get free API key",
         apiKeyActionUrl = "https://openrouter.ai/keys"
     )
+    AiProviderType.CUSTOM -> ProviderUiInfo(
+        provider = provider,
+        label = "Custom",
+        description = "For Grok, NVIDIA, and other compatible providers.",
+        apiKeyHint = "Paste the API key for Grok, NVIDIA, or another compatible provider.",
+        apiKeyPlaceholder = "Paste API key",
+        apiKeyCalloutTitle = "Custom provider setup",
+        apiKeyCalloutBody = "Choose a preset or enter a manual base URL for Grok, NVIDIA, or another compatible provider."
+    )
 }
 
 fun assistantProviderOrder(): List<AiProviderType> = listOf(
     AiProviderType.OPENROUTER,
     AiProviderType.OPENAI,
-    AiProviderType.ANTHROPIC
+    AiProviderType.ANTHROPIC,
+    AiProviderType.CUSTOM
 )
 
 fun recommendedModelChoices(
@@ -325,6 +335,18 @@ fun recommendedModelChoices(
                 }
             }
         }
+        AiProviderType.CUSTOM -> {
+            val detectedChoices = fetchedProviderModels.take(3).mapIndexed { index, modelId ->
+                RecommendedModelChoice(
+                    id = modelId,
+                    label = if (index == 0) "Detected from endpoint" else modelId,
+                    description = "Available from this custom endpoint.",
+                    supportsVision = AgentConfig(provider = provider, model = modelId).canHandleImageRequests(),
+                    supportsDocuments = true
+                )
+            }
+            if (detectedChoices.isNotEmpty()) detectedChoices else emptyList()
+        }
     }
     val curatedChoices = distinctRecommendedChoices(baseChoices)
 
@@ -357,7 +379,7 @@ fun defaultRecommendedModelId(
         openRouterCatalogEntries = openRouterCatalogEntries,
         fetchedProviderModels = fetchedProviderModels,
         freeModelIds = freeModelIds
-    ).firstOrNull()?.id ?: AgentConfig.defaultModels[provider]?.first().orEmpty()
+    ).firstOrNull()?.id ?: AgentConfig.defaultModels[provider]?.firstOrNull().orEmpty()
 }
 
 fun assistantSummary(agent: AgentConfig): String = when {

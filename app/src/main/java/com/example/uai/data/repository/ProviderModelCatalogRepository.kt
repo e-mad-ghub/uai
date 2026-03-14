@@ -20,6 +20,7 @@ class ProviderModelCatalogRepository(
         AiProviderType.OPENAI -> prefs.openAiModelCatalogFlow
         AiProviderType.ANTHROPIC -> prefs.anthropicModelCatalogFlow
         AiProviderType.OPENROUTER -> error("OpenRouter uses OpenRouterCatalogRepository")
+        AiProviderType.CUSTOM -> error("Custom provider catalogs are fetched per assistant")
     }
 
     suspend fun getCatalog(provider: AiProviderType): ProviderModelCatalog =
@@ -32,6 +33,7 @@ class ProviderModelCatalogRepository(
         force: Boolean = false
     ): ProviderModelCatalog {
         require(provider != AiProviderType.OPENROUTER) { "Use OpenRouterCatalogRepository for OpenRouter" }
+        require(provider != AiProviderType.CUSTOM) { "Custom provider catalogs are fetched per assistant" }
 
         val cached = getCatalog(provider)
         val isFresh = cached.models.isNotEmpty() && (nowMillis() - cached.fetchedAt) < maxAgeMs
@@ -43,6 +45,7 @@ class ProviderModelCatalogRepository(
                 AiProviderType.OPENAI -> fetchOpenAiCatalog(apiKey)
                 AiProviderType.ANTHROPIC -> fetchAnthropicCatalog(apiKey)
                 AiProviderType.OPENROUTER -> error("Unsupported provider")
+                AiProviderType.CUSTOM -> error("Unsupported provider")
             }
         }.getOrElse { cached }
 

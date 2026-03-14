@@ -46,8 +46,10 @@ import androidx.compose.ui.res.stringResource
 import com.example.uai.R
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
+import com.example.uai.data.model.CustomProviderPreset
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.isOpenRouterFreeModel
+import com.example.uai.data.model.normalizeOpenAiCompatibleBaseUrl
 import com.example.uai.ui.components.ProductPill
 import com.example.uai.ui.components.ProductScreenIntro
 import com.example.uai.ui.components.ProductTopBarTitle
@@ -68,6 +70,7 @@ fun AgentEditScreen(
     val connectionTestState by viewModel.connectionTestState.collectAsStateWithLifecycle()
     val nameValidationMessage by viewModel.nameValidationMessage.collectAsStateWithLifecycle()
     val apiKeyValidationMessage by viewModel.apiKeyValidationMessage.collectAsStateWithLifecycle()
+    val baseUrlValidationMessage by viewModel.baseUrlValidationMessage.collectAsStateWithLifecycle()
     val saveValidationMessage by viewModel.saveValidationMessage.collectAsStateWithLifecycle()
     val providerInfo = remember(agent.provider) { providerUiInfo(agent.provider) }
     val uriHandler = LocalUriHandler.current
@@ -81,7 +84,8 @@ fun AgentEditScreen(
         )
     }
     val selectedModelChoice = recommendedModels.firstOrNull { it.id == agent.model }
-        ?: recommendedModels.first()
+        ?: recommendedModels.firstOrNull()
+    val isCustomProvider = agent.provider == AiProviderType.CUSTOM
     val canSave = saveValidationMessage == null
     val saveButtonLabel = when {
         viewModel.isEditing -> stringResource(R.string.assistants_save_changes)
@@ -238,12 +242,38 @@ fun AgentEditScreen(
                 )
                 ProviderInfoCard(info = providerInfo)
 
+                if (isCustomProvider) {
+                    CustomProviderPresetSelector(
+                        selectedPreset = agent.customPreset,
+                        onPresetSelect = viewModel::applyCustomPreset
+                    )
+                    OutlinedTextField(
+                        value = agent.customBaseUrl,
+                        onValueChange = { viewModel.update { copy(customBaseUrl = it) } },
+                        label = { Text("Base URL") },
+                        placeholder = { Text("https://api.example.com/v1") },
+                        modifier = Modifier.fillMaxWidth(),
+                        isError = baseUrlValidationMessage != null,
+                        supportingText = {
+                            Text(
+                                baseUrlValidationMessage
+                                    ?: customProviderBaseUrlHint(agent.customPreset)
+                            )
+                        },
+                        singleLine = true
+                    )
+                }
+
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     ProductPill(label = agent.provider.displayName, emphasized = true)
-                    ProductPill(label = selectedModelChoice.label)
+                    if (isCustomProvider) {
+                        ProductPill(label = agent.customPreset.displayName)
+                    } else if (selectedModelChoice != null) {
+                        ProductPill(label = selectedModelChoice.label)
+                    }
                 }
 
                 OutlinedTextField(
@@ -273,21 +303,41 @@ fun AgentEditScreen(
                 )
                 ApiKeyHelpCallout(
                     info = providerInfo,
-                    onOpenLink = { uriHandler.openUri(providerInfo.apiKeyActionUrl) }
-                )
-
-                RecommendedModelSelector(
-                    selectedModel = selectedModelChoice,
-                    choices = recommendedModels,
-                    onModelChange = { modelId ->
-                        viewModel.update { copy(model = modelId) }
+                    onOpenLink = providerInfo.apiKeyActionUrl?.let { url ->
+                        { uriHandler.openUri(url) }
                     }
                 )
+
+                if (isCustomProvider) {
+                    RawModelSelector(
+                        provider = agent.provider,
+                        selectedModel = agent.model,
+                        onModelChange = { viewModel.update { copy(model = it) } },
+                        fetchedProviderModels = providerModels,
+                        freeModelIds = freeModelIds,
+                        isLoadingModels = isLoadingModels,
+                        labelText = "Model ID",
+                        supportingText = if (providerModels.isNotEmpty()) {
+                            "Choose a detected model or type a model ID from this endpoint."
+                        } else {
+                            "Enter a model ID from this endpoint. SideAgent will detect models after a successful availability check."
+                        }
+                    )
+                } else if (selectedModelChoice != null) {
+                    RecommendedModelSelector(
+                        selectedModel = selectedModelChoice,
+                        choices = recommendedModels,
+                        onModelChange = { modelId ->
+                            viewModel.update { copy(model = modelId) }
+                        }
+                    )
+                }
                 ProviderCatalogStatusNote(
                     provider = agent.provider,
                     hasProviderCatalog = providerModels.isNotEmpty(),
                     isLoadingModels = isLoadingModels,
-                    hasApiKey = agent.apiKey.isNotBlank()
+                    hasApiKey = agent.apiKey.isNotBlank(),
+                    hasBaseUrl = !isCustomProvider || normalizeOpenAiCompatibleBaseUrl(agent.customBaseUrl).isNotBlank()
                 )
 
                 CapabilityRow(agent = agent)
@@ -295,6 +345,7 @@ fun AgentEditScreen(
                 OutlinedButton(
                     onClick = viewModel::testConnection,
                     enabled = agent.apiKey.isNotBlank() &&
+                        (!isCustomProvider || normalizeOpenAiCompatibleBaseUrl(agent.customBaseUrl).isNotBlank()) &&
                         agent.model.isNotBlank() &&
                         connectionTestState !is ConnectionTestState.Testing
                 ) {
@@ -361,14 +412,18 @@ fun AgentEditScreen(
                                 verticalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 HorizontalDivider()
-                                RawModelSelector(
-                                    provider = agent.provider,
-                                    selectedModel = agent.model,
-                                    onModelChange = { viewModel.update { copy(model = it) } },
-                                    fetchedProviderModels = providerModels,
-                                    freeModelIds = freeModelIds,
-                                    isLoadingModels = isLoadingModels
-                                )
+                                if (!isCustomProvider) {
+                                    RawModelSelector(
+                                        provider = agent.provider,
+                                        selectedModel = agent.model,
+                                        onModelChange = { viewModel.update { copy(model = it) } },
+                                        fetchedProviderModels = providerModels,
+                                        freeModelIds = freeModelIds,
+                                        isLoadingModels = isLoadingModels,
+                                        labelText = stringResource(R.string.assistants_custom_model_label),
+                                        supportingText = stringResource(R.string.assistants_custom_model_hint)
+                                    )
+                                }
                                 OutlinedTextField(
                                     value = agent.systemPrompt,
                                     onValueChange = { viewModel.update { copy(systemPrompt = it) } },
@@ -480,7 +535,7 @@ private fun ProviderInfoCard(info: ProviderUiInfo) {
 @Composable
 private fun ApiKeyHelpCallout(
     info: ProviderUiInfo,
-    onOpenLink: () -> Unit
+    onOpenLink: (() -> Unit)? = null
 ) {
     val containerColor = MaterialTheme.colorScheme.secondaryContainer
     val contentColor = MaterialTheme.colorScheme.onSecondaryContainer
@@ -515,11 +570,13 @@ private fun ApiKeyHelpCallout(
                     style = MaterialTheme.typography.bodySmall,
                     color = contentColor
                 )
-                TextButton(
-                    onClick = onOpenLink,
-                    colors = ButtonDefaults.textButtonColors(contentColor = contentColor)
-                ) {
-                    Text(info.apiKeyActionLabel)
+                if (info.apiKeyActionLabel != null && onOpenLink != null) {
+                    TextButton(
+                        onClick = onOpenLink,
+                        colors = ButtonDefaults.textButtonColors(contentColor = contentColor)
+                    ) {
+                        Text(info.apiKeyActionLabel)
+                    }
                 }
             }
         }
@@ -531,7 +588,8 @@ private fun ProviderCatalogStatusNote(
     provider: AiProviderType,
     hasProviderCatalog: Boolean,
     isLoadingModels: Boolean,
-    hasApiKey: Boolean
+    hasApiKey: Boolean,
+    hasBaseUrl: Boolean = true
 ) {
     val (title, body) = when {
         hasProviderCatalog -> Pair(
@@ -546,13 +604,25 @@ private fun ProviderCatalogStatusNote(
             "Showing fallback list",
             "OpenRouter's live catalog is not available right now, so SideAgent is using its built-in fallback list."
         )
+        provider == AiProviderType.CUSTOM && !hasBaseUrl -> Pair(
+            "Waiting for endpoint",
+            "Enter a base URL for Grok, NVIDIA, or another compatible provider before SideAgent can load its model list."
+        )
+        provider == AiProviderType.CUSTOM && hasApiKey -> Pair(
+            "Manual model entry",
+            "SideAgent could not load models from this endpoint right now, so you can still enter the model ID manually."
+        )
         hasApiKey -> Pair(
             "Showing starter list",
             "SideAgent could not load the latest ${provider.displayName} catalog right now, so the editor is using its starter list."
         )
         else -> Pair(
             "Showing starter list",
-            "Enter an API key and test availability to load the latest ${provider.displayName} catalog."
+            if (provider == AiProviderType.CUSTOM) {
+                "Enter a base URL and API key, then test availability to load models from this endpoint."
+            } else {
+                "Enter an API key and test availability to load the latest ${provider.displayName} catalog."
+            }
         )
     }
 
@@ -729,7 +799,9 @@ private fun RawModelSelector(
     onModelChange: (String) -> Unit,
     fetchedProviderModels: List<String> = emptyList(),
     freeModelIds: Set<String> = emptySet(),
-    isLoadingModels: Boolean = false
+    isLoadingModels: Boolean = false,
+    labelText: String,
+    supportingText: String
 ) {
     val presets = if (fetchedProviderModels.isNotEmpty())
         fetchedProviderModels
@@ -742,15 +814,16 @@ private fun RawModelSelector(
             value = selectedModel,
             onValueChange = onModelChange,
             label = {
-                Text(
-                    if (isLoadingModels)
-                        stringResource(R.string.assistants_custom_model_loading_label)
-                    else
-                        stringResource(R.string.assistants_custom_model_label)
-                )
+                Text(labelText)
             },
             supportingText = {
-                Text(stringResource(R.string.assistants_custom_model_hint))
+                Text(
+                    if (isLoadingModels && provider != AiProviderType.CUSTOM) {
+                        stringResource(R.string.assistants_custom_model_hint)
+                    } else {
+                        supportingText
+                    }
+                )
             },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier
@@ -827,6 +900,52 @@ private fun RawModelSelector(
             }
         }
     }
+}
+
+@Composable
+private fun CustomProviderPresetSelector(
+    selectedPreset: CustomProviderPreset,
+    onPresetSelect: (CustomProviderPreset) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Compatibility target",
+            style = MaterialTheme.typography.labelLarge
+        )
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(
+                CustomProviderPreset.GROK,
+                CustomProviderPreset.NVIDIA,
+                CustomProviderPreset.MANUAL
+            ).forEach { preset ->
+                FilterChip(
+                    selected = selectedPreset == preset,
+                    onClick = { onPresetSelect(preset) },
+                    label = { Text(preset.displayName) }
+                )
+            }
+        }
+        Text(
+            customProviderPresetDescription(selectedPreset),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+private fun customProviderPresetDescription(preset: CustomProviderPreset): String = when (preset) {
+    CustomProviderPreset.MANUAL -> "Use Grok, NVIDIA, or another compatible provider by entering the endpoint manually."
+    CustomProviderPreset.GROK -> "Prefills xAI's endpoint so you can connect Grok with your own API key."
+    CustomProviderPreset.NVIDIA -> "Prefills NVIDIA's endpoint so you can bring compatible NVIDIA-hosted models into SideAgent."
+}
+
+private fun customProviderBaseUrlHint(preset: CustomProviderPreset): String = when (preset) {
+    CustomProviderPreset.MANUAL -> "Enter the base URL for Grok, NVIDIA, or another compatible provider."
+    CustomProviderPreset.GROK -> "xAI's endpoint is prefilled. You can still edit it if your account uses a different route."
+    CustomProviderPreset.NVIDIA -> "NVIDIA's endpoint is prefilled. You can still edit it if needed."
 }
 
 @Composable

@@ -176,7 +176,8 @@ class AppPreferences(context: Context) {
                     it[Keys.ANTHROPIC_MODEL_CATALOG_JSON] = gson.toJson(catalog)
                     it[Keys.ANTHROPIC_MODEL_CATALOG_FETCHED_AT] = catalog.fetchedAt
                 }
-                AiProviderType.OPENROUTER -> Unit
+                AiProviderType.OPENROUTER,
+                AiProviderType.CUSTOM -> Unit
             }
         }
     }

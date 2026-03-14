@@ -5,7 +5,8 @@ import java.util.UUID
 enum class AiProviderType(val displayName: String) {
     OPENAI("OpenAI"),
     ANTHROPIC("Anthropic"),
-    OPENROUTER("OpenRouter")
+    OPENROUTER("OpenRouter"),
+    CUSTOM("Custom")
 }
 
 data class AgentConfig(
@@ -14,6 +15,8 @@ data class AgentConfig(
     val provider: AiProviderType = AiProviderType.OPENROUTER,
     val apiKey: String = "",
     val model: String = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
+    val customPreset: CustomProviderPreset = CustomProviderPreset.MANUAL,
+    val customBaseUrl: String = "",
     val systemPrompt: String = "You are a helpful assistant.",
     val temperature: Float = 0.7f
 ) {
@@ -38,6 +41,7 @@ data class AgentConfig(
             m.contains("vision") || m.contains("-vl") ||
             m.contains("llava") || m.contains("pixtral")
         }
+        AiProviderType.CUSTOM -> looksLikeVisionCapableOpenAiCompatibleModel(model)
     }
 
     /** Files are normalized into text context before they reach the provider. */
@@ -67,6 +71,7 @@ data class AgentConfig(
                 "openai/gpt-4o",
                 "anthropic/claude-3.5-sonnet"
             ),
+            AiProviderType.CUSTOM to emptyList(),
         )
     }
 }

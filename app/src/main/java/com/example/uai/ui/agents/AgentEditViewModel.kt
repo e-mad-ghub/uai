@@ -6,15 +6,21 @@ import androidx.lifecycle.viewModelScope
 import com.example.uai.ai.httpErrorMessage
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
+import com.example.uai.data.model.CustomProviderPreset
 import com.example.uai.data.model.OPENROUTER_FREE_ROUTER_MODEL
 import com.example.uai.data.model.OpenRouterCatalogEntry
+import com.example.uai.data.model.buildOpenAiCompatibleChatCompletionsUrl
+import com.example.uai.data.model.buildOpenAiCompatibleModelsUrl
 import com.example.uai.data.model.isOpenRouterFreeModel
+import com.example.uai.data.model.normalizeOpenAiCompatibleBaseUrl
 import com.example.uai.data.model.openRouterFreeFallbackModels
 import com.example.uai.data.model.preferredOpenRouterVisionFreeModel
 import com.example.uai.data.model.shouldRetryOpenRouterFreeFallback
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.OpenRouterCatalogRepository
 import com.example.uai.data.repository.ProviderModelCatalogRepository
+import com.google.gson.Gson
+import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -97,6 +103,14 @@ class AgentEditViewModel(
         validateApiKey(_agent.value)
     )
 
+    val baseUrlValidationMessage: StateFlow<String?> = _agent.map { draft ->
+        validateCustomBaseUrl(draft)
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        validateCustomBaseUrl(_agent.value)
+    )
+
     val saveValidationMessage: StateFlow<String?> = combine(_agent, _allAgents) { draft, agents ->
         validateDraft(draft, agents)
     }.stateIn(
@@ -107,6 +121,7 @@ class AgentEditViewModel(
 
     private var openAiModels: List<String> = emptyList()
     private var anthropicModels: List<String> = emptyList()
+    private var customModels: List<String> = emptyList()
     private var modelRefreshJob: Job? = null
 
     init {
@@ -179,7 +194,8 @@ class AgentEditViewModel(
                 updateCurrentProviderModels(updated.provider)
                 scheduleCurrentProviderModelRefresh(force = true)
             }
-            previous.apiKey != updated.apiKey -> {
+            previous.apiKey != updated.apiKey ||
+                previous.customBaseUrl != updated.customBaseUrl -> {
                 scheduleCurrentProviderModelRefresh()
             }
         }
@@ -234,7 +250,31 @@ class AgentEditViewModel(
             copy(
                 provider = provider,
                 model = defaultModel,
-                apiKey = ""
+                apiKey = "",
+                customPreset = if (provider == AiProviderType.CUSTOM) {
+                    CustomProviderPreset.MANUAL
+                } else {
+                    customPreset
+                },
+                customBaseUrl = if (provider == AiProviderType.CUSTOM) {
+                    customBaseUrl
+                } else {
+                    ""
+                }
+            )
+        }
+    }
+
+    fun applyCustomPreset(preset: CustomProviderPreset) {
+        if (_agent.value.provider != AiProviderType.CUSTOM) return
+        update {
+            copy(
+                customPreset = preset,
+                customBaseUrl = if (preset == CustomProviderPreset.MANUAL) {
+                    customBaseUrl
+                } else {
+                    preset.suggestedBaseUrl
+                }
             )
         }
     }
@@ -323,6 +363,12 @@ class AgentEditViewModel(
                 headerName = "Authorization",
                 headerValue = "Bearer ${agent.apiKey}"
             )
+            AiProviderType.CUSTOM -> Probe(
+                url = buildOpenAiCompatibleChatCompletionsUrl(agent.customBaseUrl),
+                body = """{"model":"${agent.model}","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}""",
+                headerName = "Authorization",
+                headerValue = "Bearer ${agent.apiKey}"
+            )
         }
         val request = Request.Builder()
             .url(url)
@@ -366,6 +412,11 @@ class AgentEditViewModel(
                 apiKey = _agent.value.apiKey,
                 force = force
             )
+            AiProviderType.CUSTOM -> refreshCustomModels(
+                baseUrl = _agent.value.customBaseUrl,
+                apiKey = _agent.value.apiKey,
+                force = force
+            )
         }
     }
 
@@ -401,11 +452,73 @@ class AgentEditViewModel(
         }
     }
 
+    private suspend fun refreshCustomModels(
+        baseUrl: String,
+        apiKey: String,
+        force: Boolean = false
+    ) {
+        val normalizedBaseUrl = normalizeOpenAiCompatibleBaseUrl(baseUrl)
+        if (!force && customModels.isNotEmpty()) {
+            _providerModels.value = customModels
+            return
+        }
+        if (normalizedBaseUrl.isBlank() || apiKey.isBlank()) {
+            customModels = emptyList()
+            _providerModels.value = emptyList()
+            return
+        }
+
+        _isLoadingModels.value = true
+        customModels = emptyList()
+        _providerModels.value = emptyList()
+        try {
+            customModels = fetchCustomCompatibleModels(
+                baseUrl = normalizedBaseUrl,
+                apiKey = apiKey
+            )
+        } catch (_: Exception) {
+            // silently fall back to manual model entry
+        } finally {
+            _providerModels.value = customModels
+            _isLoadingModels.value = false
+        }
+    }
+
     private fun updateCurrentProviderModels(provider: AiProviderType) {
         _providerModels.value = when (provider) {
             AiProviderType.OPENROUTER -> _openRouterModels.value
             AiProviderType.OPENAI -> openAiModels
             AiProviderType.ANTHROPIC -> anthropicModels
+            AiProviderType.CUSTOM -> customModels
+        }
+    }
+
+    private suspend fun fetchCustomCompatibleModels(
+        baseUrl: String,
+        apiKey: String
+    ): List<String> = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(buildOpenAiCompatibleModelsUrl(baseUrl))
+            .header("Authorization", "Bearer $apiKey")
+            .build()
+
+        val gson = Gson()
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@use emptyList()
+
+            val body = response.body?.string().orEmpty()
+            if (body.isBlank()) return@use emptyList()
+
+            val root = gson.fromJson(body, JsonObject::class.java)
+            val data = root.getAsJsonArray("data") ?: return@use emptyList()
+            buildList {
+                data.forEach { element ->
+                    val obj = element.asJsonObject
+                    val id = obj.get("id")?.asString?.trim().orEmpty()
+                    if (id.isBlank()) return@forEach
+                    add(id)
+                }
+            }.distinct().sorted()
         }
     }
 
@@ -432,6 +545,7 @@ class AgentEditViewModel(
 
 private fun validateDraft(draft: AgentConfig, agents: List<AgentConfig>): String? {
     return validateName(draft, agents)
+        ?: validateCustomBaseUrl(draft)
         ?: validateApiKey(draft)
         ?: if (draft.model.trim().isBlank()) "Choose a model before saving." else null
 }
@@ -459,6 +573,18 @@ private fun validateApiKey(draft: AgentConfig): String? {
     }
 }
 
+private fun validateCustomBaseUrl(draft: AgentConfig): String? {
+    if (draft.provider != AiProviderType.CUSTOM) return null
+    val normalized = normalizeOpenAiCompatibleBaseUrl(draft.customBaseUrl)
+    if (normalized.isBlank()) {
+        return "Enter a base URL for the custom provider."
+    }
+    if (!normalized.startsWith("https://") && !normalized.startsWith("http://")) {
+        return "Enter a full http or https base URL."
+    }
+    return null
+}
+
 private fun generateDuplicateName(sourceName: String, agents: List<AgentConfig>): String {
     val baseName = sourceName.trim().ifBlank { "Assistant" }
     val existingNames = agents.map { it.name.trim().lowercase() }.toSet()
@@ -477,5 +603,6 @@ private fun generateDuplicateName(sourceName: String, agents: List<AgentConfig>)
 private fun AgentConfig.normalizedForSave(): AgentConfig = copy(
     name = name.trim(),
     apiKey = apiKey.trim(),
-    model = model.trim()
+    model = model.trim(),
+    customBaseUrl = normalizeOpenAiCompatibleBaseUrl(customBaseUrl)
 )

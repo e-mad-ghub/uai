@@ -56,7 +56,6 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.uai.MainActivity
 import com.example.uai.R
 import com.example.uai.UaiApplication
-import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
@@ -1650,17 +1649,12 @@ class FloatingBubbleService : Service() {
                 }
                 val groundedHistory = container.webGateway.prepareTurn(
                     conversationKey = activeConversationId,
-                    messages = history
+                    messages = history,
+                    planningConfig = agent
                 ) { status ->
                     onlineSearchStatusMessage = status
                 }.messages
 
-                val provider = AiProviderFactory.create(
-                    config = agent,
-                    client = container.okHttpClient,
-                    openRouterCatalogRepository = container.openRouterCatalogRepository,
-                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
-                )
                 streamingWriter = ThrottledStreamingMessageWriter { content, isStreaming ->
                     val idx = chatMessages.indexOfFirst { it.id == messageId }
                     if (idx != -1) {
@@ -1676,7 +1670,13 @@ class FloatingBubbleService : Service() {
                     )
                 }
 
-                provider.streamResponse(groundedHistory, agent)
+                container.assistantRuntime
+                    .streamResponse(
+                        conversationKey = activeConversationId,
+                        messages = groundedHistory,
+                        config = agent,
+                        onStatusChanged = { status -> onlineSearchStatusMessage = status }
+                    )
                     .catch { e -> emit(StreamChunk.Error(e)) }
                     .collect { chunk ->
                         val id = assistantId ?: return@collect

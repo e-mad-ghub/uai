@@ -3,13 +3,12 @@ package com.example.uai.ui.agora
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.ChatMessage
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
-import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.ai.StreamChunk
 import com.example.uai.ai.ThrottledStreamingMessageWriter
+import com.example.uai.ai.ToolAwareAssistantRuntime
 import com.example.uai.ai.WebGateway
 import com.example.uai.ai.sanitizeGroundedAssistantResponse
 import com.example.uai.data.db.MessageEntity
@@ -18,7 +17,6 @@ import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
-import com.example.uai.data.repository.OpenRouterCatalogRepository
 import com.google.gson.Gson
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -27,7 +25,6 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import java.util.UUID
 
 internal fun extractAgentScopedGroundingText(
@@ -58,9 +55,7 @@ class AgoraDetailViewModel(
     val conversationId: String,
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
-    private val httpClient: OkHttpClient,
-    private val openRouterCatalogRepository: OpenRouterCatalogRepository,
-    private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore,
+    private val assistantRuntime: ToolAwareAssistantRuntime,
     private val webGateway: WebGateway
 ) : ViewModel() {
 
@@ -311,6 +306,7 @@ class AgoraDetailViewModel(
                     val groundedHistory = webGateway.prepareTurn(
                         conversationKey = conversationId,
                         messages = groundingSeedHistory,
+                        planningConfig = agent,
                         onStatusChanged = { status -> _onlineSearchStatus.value = status }
                     ).grounding?.let { grounding ->
                         webGateway.applyGrounding(history, grounding)
@@ -368,13 +364,13 @@ class AgoraDetailViewModel(
                         repo.updateMessageContent(assistantId, content, isStreaming)
                     }
                     try {
-                        AiProviderFactory.create(
-                            config = agoraAgent,
-                            client = httpClient,
-                            openRouterCatalogRepository = openRouterCatalogRepository,
-                            openRouterBestFreeRoutingStateStore = openRouterBestFreeRoutingStateStore
-                        )
-                            .streamResponse(groundedHistory, agoraAgent)
+                        assistantRuntime
+                            .streamResponse(
+                                conversationKey = conversationId,
+                                messages = groundedHistory,
+                                config = agoraAgent,
+                                onStatusChanged = { status -> _onlineSearchStatus.value = status }
+                            )
                             .catch { e -> emit(StreamChunk.Error(e)) }
                             .collect { chunk ->
                                 when (chunk) {
@@ -448,9 +444,7 @@ class AgoraDetailViewModel(
         private val conversationId: String,
         private val repo: ConversationRepository,
         private val agentRepo: AgentRepository,
-        private val httpClient: OkHttpClient,
-        private val openRouterCatalogRepository: OpenRouterCatalogRepository,
-        private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore,
+        private val assistantRuntime: ToolAwareAssistantRuntime,
         private val webGateway: WebGateway
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
@@ -459,9 +453,7 @@ class AgoraDetailViewModel(
                 conversationId,
                 repo,
                 agentRepo,
-                httpClient,
-                openRouterCatalogRepository,
-                openRouterBestFreeRoutingStateStore,
+                assistantRuntime,
                 webGateway
             ) as T
     }

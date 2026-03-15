@@ -65,8 +65,7 @@ private val preferredOpenRouterReasoningFreeModels = listOf(
 private val preferredOpenRouterVisionFreeModels = listOf(
     "google/gemma-3-27b-it:free",
     "google/gemma-3-12b-it:free",
-    "nvidia/nemotron-nano-12b-v2-vl:free",
-    OPENROUTER_FREE_ROUTER_MODEL
+    "nvidia/nemotron-nano-12b-v2-vl:free"
 )
 
 private enum class OpenRouterRankingUseCase {
@@ -177,21 +176,6 @@ fun openRouterBestFreeCandidates(
                 catalogEntries = catalogEntries,
                 fetchedOpenRouterModels = fetchedOpenRouterModels,
                 freeModelIds = freeModelIds
-            ) + rankedOpenRouterFreeModels(
-                useCase = OpenRouterRankingUseCase.DOCUMENT,
-                catalogEntries = catalogEntries,
-                fetchedOpenRouterModels = fetchedOpenRouterModels,
-                freeModelIds = freeModelIds
-            ) + rankedOpenRouterFreeModels(
-                useCase = OpenRouterRankingUseCase.GENERAL,
-                catalogEntries = catalogEntries,
-                fetchedOpenRouterModels = fetchedOpenRouterModels,
-                freeModelIds = freeModelIds
-            ) + rankedOpenRouterFreeModels(
-                useCase = OpenRouterRankingUseCase.REASONING,
-                catalogEntries = catalogEntries,
-                fetchedOpenRouterModels = fetchedOpenRouterModels,
-                freeModelIds = freeModelIds
             )
     }.distinct()
 
@@ -242,22 +226,12 @@ fun openRouterFreeFallbackModels(
 ): List<String> {
     val fetchedFreeModels = fetchedOpenRouterModels
         .filter { isOpenRouterConcreteFreeModel(it, freeModelIds) }
-        .filter { !requireVision || openRouterFreeSupportsVision(it, catalogEntries) }
+        .filter { !requireVision || openRouterConcreteSupportsVision(it, catalogEntries) }
 
     val rankedModels = if (catalogEntries.isNotEmpty()) {
         if (requireVision) {
             rankedOpenRouterFreeModels(
                 useCase = OpenRouterRankingUseCase.VISION,
-                catalogEntries = catalogEntries,
-                fetchedOpenRouterModels = fetchedOpenRouterModels,
-                freeModelIds = freeModelIds
-            ) + rankedOpenRouterFreeModels(
-                useCase = OpenRouterRankingUseCase.GENERAL,
-                catalogEntries = catalogEntries,
-                fetchedOpenRouterModels = fetchedOpenRouterModels,
-                freeModelIds = freeModelIds
-            ) + rankedOpenRouterFreeModels(
-                useCase = OpenRouterRankingUseCase.REASONING,
                 catalogEntries = catalogEntries,
                 fetchedOpenRouterModels = fetchedOpenRouterModels,
                 freeModelIds = freeModelIds
@@ -282,9 +256,7 @@ fun openRouterFreeFallbackModels(
         }
     } else {
         if (requireVision) {
-            preferredOpenRouterVisionFreeModels +
-                preferredOpenRouterGeneralFreeModels +
-                preferredOpenRouterReasoningFreeModels
+            preferredOpenRouterVisionFreeModels
         } else {
             preferredOpenRouterGeneralFreeModels +
                 preferredOpenRouterReasoningFreeModels +
@@ -296,11 +268,11 @@ fun openRouterFreeFallbackModels(
         if (
             currentModel != null &&
             isOpenRouterConcreteFreeModel(currentModel, freeModelIds) &&
-            (!requireVision || openRouterFreeSupportsVision(currentModel, catalogEntries))
+            (!requireVision || openRouterConcreteSupportsVision(currentModel, catalogEntries))
         ) {
             add(currentModel)
         }
-        addAll(rankedModels.filter { !requireVision || openRouterFreeSupportsVision(it, catalogEntries) })
+        addAll(rankedModels.filter { !requireVision || openRouterConcreteSupportsVision(it, catalogEntries) })
         addAll(fetchedFreeModels)
     }.distinct()
 }
@@ -316,7 +288,7 @@ private fun rankedOpenRouterFreeModels(
             .filter { it.isFree }
             .filter {
                 when (useCase) {
-                    OpenRouterRankingUseCase.VISION -> it.supportsVision
+                    OpenRouterRankingUseCase.VISION -> openRouterConcreteSupportsVision(it.id, catalogEntries)
                     else -> true
                 }
             }
@@ -342,7 +314,7 @@ private fun rankedOpenRouterFreeModels(
         .filter { it !in preferredAvailable }
         .filter {
             when (useCase) {
-                OpenRouterRankingUseCase.VISION -> openRouterFreeSupportsVision(it, catalogEntries)
+                OpenRouterRankingUseCase.VISION -> openRouterConcreteSupportsVision(it, catalogEntries)
                 else -> true
             }
         }
@@ -494,9 +466,48 @@ fun openRouterFreeSupportsVision(
         )
 }
 
+private fun openRouterConcreteSupportsVision(
+    modelId: String,
+    catalogEntries: List<OpenRouterCatalogEntry> = emptyList()
+): Boolean {
+    if (modelId == OPENROUTER_FREE_ROUTER_MODEL || isSideAgentManagedOpenRouterFreeRoute(modelId)) {
+        return false
+    }
+    val heuristicSupport = AgentConfig(provider = AiProviderType.OPENROUTER, model = modelId).supportsVision
+    if (heuristicSupport) return true
+
+    val entry = catalogEntries.firstOrNull { it.id == modelId } ?: return false
+    if (!entry.supportsVision) return false
+    if (entry.id in preferredOpenRouterVisionFreeModels) return true
+
+    val searchText = "${entry.id} ${entry.name} ${entry.description}".lowercase()
+    val trustedVisionSignals = listOf(
+        "vision",
+        "multimodal",
+        "image",
+        "images",
+        "video",
+        "omni-modal",
+        "ocr",
+        "document parsing",
+        "-vl",
+        " vl ",
+        "gemma 3",
+        "4.5v",
+        "4.6v"
+    )
+    return trustedVisionSignals.any(searchText::contains)
+}
+
 fun AgentConfig.canHandleImageRequests(): Boolean {
     return supportsVision ||
-        (provider == AiProviderType.OPENROUTER && isOpenRouterFreeModel(model))
+        (
+            provider == AiProviderType.OPENROUTER && (
+                model == OPENROUTER_FREE_ROUTER_MODEL ||
+                    isSideAgentManagedOpenRouterFreeRoute(model) ||
+                    openRouterFreeSupportsVision(model)
+                )
+            )
 }
 
 fun shouldRetryOpenRouterFreeFallback(code: Int?, message: String): Boolean {

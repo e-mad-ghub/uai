@@ -29,6 +29,10 @@ data class ResolvedConversationTurn(
     val usedFollowUpContext: Boolean = false
 )
 
+internal fun ChatMessage.hasDirectAttachmentContext(): Boolean {
+    return images.isNotEmpty() || fileAttachment != null || !documentBase64.isNullOrBlank()
+}
+
 class ConversationContextStore {
     private val mutex = Mutex()
     private val sessions = mutableMapOf<String, ConversationWorkingState>()
@@ -60,6 +64,10 @@ class ConversationContextResolver {
 
         if (currentUserText.isBlank()) {
             return ResolvedConversationTurn(state = historicalState)
+        }
+
+        if (lastUserMessage.hasDirectAttachmentContext()) {
+            return ResolvedConversationTurn(state = baseState)
         }
 
         val explicitStockSubjects = extractExplicitStockSubjects(currentUserText)

@@ -1,5 +1,7 @@
 package com.example.uai.ai
 
+import com.example.uai.data.model.AgentConfig
+
 enum class WebTurnMode {
     NONE,
     AUTO_GROUND,
@@ -101,33 +103,101 @@ class WebTurnPlanner(
 
 class WebGateway(
     private val groundingService: WebGroundingService,
+    private val searchPlanningService: SearchPlanningService? = null,
     private val sessionStore: ConversationContextStore = ConversationContextStore(),
     private val planner: WebTurnPlanner = WebTurnPlanner()
 ) {
 
+    private fun inferIntentFromQueries(queries: List<String>): ConversationIntent {
+        if (queries.isEmpty()) return ConversationIntent.NONE
+        val allCurrentTime = queries.all { it.startsWith("current time in ", ignoreCase = true) }
+        if (allCurrentTime) return ConversationIntent.CURRENT_TIME
+
+        val allStock = queries.all { query ->
+            query.contains("stock price", ignoreCase = true) ||
+                query.contains("share price", ignoreCase = true)
+        }
+        if (allStock) return ConversationIntent.STOCK_PRICE
+
+        return ConversationIntent.GENERAL_WEB
+    }
+
+    private fun buildPlanFromQueries(queries: List<String>): WebTurnPlan {
+        val distinctQueries = queries.filter { it.isNotBlank() }.distinct()
+        val intent = inferIntentFromQueries(distinctQueries)
+        val mode = when {
+            distinctQueries.isEmpty() -> WebTurnMode.NONE
+            distinctQueries.size > 1 -> WebTurnMode.TOOL_SEARCH
+            else -> WebTurnMode.AUTO_GROUND
+        }
+        val statusText = when (intent) {
+            ConversationIntent.STOCK_PRICE -> {
+                if (distinctQueries.size > 1) {
+                    "Looking up the latest market prices…"
+                } else {
+                    "Looking up the latest market price…"
+                }
+            }
+            ConversationIntent.CURRENT_TIME -> "Checking the current time…"
+            else -> when (mode) {
+                WebTurnMode.NONE -> null
+                WebTurnMode.AUTO_GROUND -> "Looking online for fresh results…"
+                WebTurnMode.TOOL_SEARCH -> {
+                    if (distinctQueries.size == 1) {
+                        "Searching online for a targeted result…"
+                    } else {
+                        "Searching online across ${distinctQueries.size} targeted lookups…"
+                    }
+                }
+            }
+        }
+        return WebTurnPlan(
+            mode = mode,
+            queries = distinctQueries,
+            statusText = statusText,
+            intent = intent
+        )
+    }
+
     suspend fun prepareTurn(
         conversationKey: String?,
         messages: List<ChatMessage>,
+        planningConfig: AgentConfig? = null,
         onStatusChanged: (String?) -> Unit = {}
     ): PreparedWebTurn {
         val previousSession = sessionStore.get(conversationKey)
-        val plannedTurn = planner.planResolved(
+        val heuristicTurn = planner.planResolved(
             conversationKey = conversationKey,
             messages = messages,
             sessionState = previousSession
         )
-        val plan = plannedTurn.plan
-        val resolvedState = plannedTurn.sessionState
+        val plannedSearches = if (planningConfig != null) {
+            searchPlanningService?.planSearches(
+                messages = messages,
+                config = planningConfig,
+                previousState = previousSession,
+                onStatusChanged = onStatusChanged
+            )
+        } else {
+            null
+        }
+        val plan = when {
+            plannedSearches?.needsSearch == true && plannedSearches.queries.isNotEmpty() ->
+                buildPlanFromQueries(plannedSearches.queries)
+            else -> heuristicTurn.plan
+        }
+        val resolvedState = heuristicTurn.sessionState
 
         if (plan.mode == WebTurnMode.NONE) {
-            resolvedState?.copy(
+            val inertState = resolvedState?.copy(
                 lastUpdatedAt = System.currentTimeMillis()
-            )?.also { sessionStore.put(it) }
+            )
+            inertState?.also { sessionStore.put(it) }
             return PreparedWebTurn(
                 messages = messages,
                 grounding = null,
                 plan = plan,
-                sessionState = resolvedState
+                sessionState = inertState
             )
         }
 
@@ -139,13 +209,36 @@ class WebGateway(
             intent = plan.intent
         )
 
-        val nextSession = resolvedState
-            ?.takeIf { it.conversationKey.isNotBlank() }
-            ?.copy(
-                lastMode = plan.mode,
-                lastGroundedQueries = plan.queries,
-                lastUpdatedAt = System.currentTimeMillis()
-            )
+        val sessionKey = conversationKey ?: resolvedState?.conversationKey.orEmpty()
+        val nextSession = ConversationWorkingState(
+            conversationKey = sessionKey,
+            activeIntent = plan.intent,
+            activeSubjects = when (plan.intent) {
+                ConversationIntent.STOCK_PRICE -> plan.queries.map { query ->
+                    query.replace(Regex("""(?i)\bstock price yahoo finance\b"""), " ")
+                        .replace(Regex("""\s+"""), " ")
+                        .trim()
+                }
+                ConversationIntent.CURRENT_TIME -> plan.queries.map { query ->
+                    query.replace(Regex("""(?i)^current time in\s+"""), "")
+                        .trim()
+                }
+                else -> plan.queries
+            },
+            activeLocation = when (plan.intent) {
+                ConversationIntent.CURRENT_TIME -> plan.queries.firstOrNull()
+                    ?.replace(Regex("""(?i)^current time in\s+"""), "")
+                    ?.trim()
+                else -> resolvedState?.activeLocation
+            },
+            freshnessRequired = plan.mode != WebTurnMode.NONE,
+            lastGroundedQueries = plan.queries,
+            lastMode = plan.mode,
+            lastResolvedUserText = normalizeConversationText(
+                messages.lastOrNull { it.role == "user" }?.content.orEmpty()
+            ),
+            lastUpdatedAt = System.currentTimeMillis()
+        ).takeIf { it.conversationKey.isNotBlank() }
             ?.also { sessionStore.put(it) }
 
         return PreparedWebTurn(
@@ -160,4 +253,51 @@ class WebGateway(
         messages: List<ChatMessage>,
         grounding: WebGroundingResult
     ): List<ChatMessage> = groundingService.applyGrounding(messages, grounding)
+
+    suspend fun executeSearchTool(
+        conversationKey: String?,
+        query: String,
+        onStatusChanged: (String?) -> Unit = {}
+    ): WebGroundingResult? {
+        val toolMessages = listOf(ChatMessage(role = "user", content = query))
+        val previousSession = sessionStore.get(conversationKey)
+        val plannedTurn = planner.planResolved(
+            conversationKey = conversationKey,
+            messages = toolMessages,
+            sessionState = previousSession
+        )
+
+        val fallbackPlan = WebTurnPlan(
+            mode = WebTurnMode.TOOL_SEARCH,
+            queries = listOf(query),
+            statusText = "Searching online for requested info…",
+            intent = ConversationIntent.GENERAL_WEB
+        )
+        val effectivePlan = plannedTurn.plan.takeIf { it.queries.isNotEmpty() } ?: fallbackPlan
+        val grounded = groundingService.prepareMessagesIfNeeded(
+            messages = toolMessages,
+            plannedQueries = effectivePlan.queries,
+            statusText = effectivePlan.statusText ?: "Searching online for requested info…",
+            onStatusChanged = onStatusChanged,
+            intent = effectivePlan.intent
+        ).grounding
+
+        val nextSession = plannedTurn.sessionState
+            ?.takeIf { it.conversationKey.isNotBlank() }
+            ?.copy(
+                activeIntent = effectivePlan.intent,
+                activeSubjects = effectivePlan.queries,
+                freshnessRequired = true,
+                lastMode = WebTurnMode.TOOL_SEARCH,
+                lastGroundedQueries = effectivePlan.queries,
+                lastResolvedUserText = query,
+                lastUpdatedAt = System.currentTimeMillis()
+            )
+
+        if (nextSession != null) {
+            sessionStore.put(nextSession)
+        }
+
+        return grounded
+    }
 }

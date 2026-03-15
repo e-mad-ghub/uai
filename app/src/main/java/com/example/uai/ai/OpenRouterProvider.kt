@@ -18,6 +18,18 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
+internal fun classifyOpenRouterRequestBucket(messages: List<ChatMessage>): OpenRouterFreeRoutingBucket {
+    val userMessages = messages.filter { it.role == "user" }
+    val lastUserContent = userMessages.lastOrNull()?.content.orEmpty()
+    return when {
+        userMessages.any { it.images.isNotEmpty() } -> OpenRouterFreeRoutingBucket.VISION
+        userMessages.any { it.fileAttachment != null } ||
+            lastUserContent.contains("<attached_file ", ignoreCase = true) ->
+            OpenRouterFreeRoutingBucket.DOCUMENT
+        else -> OpenRouterFreeRoutingBucket.GENERAL
+    }
+}
+
 class OpenRouterProvider(
     client: OkHttpClient,
     private val openRouterCatalogRepository: OpenRouterCatalogRepository? = null,
@@ -206,15 +218,7 @@ class OpenRouterProvider(
     }
 
     private fun classifyRequestBucket(messages: List<ChatMessage>): OpenRouterFreeRoutingBucket {
-        val lastUserMessage = messages.lastOrNull { it.role == "user" }
-        val lastUserContent = lastUserMessage?.content.orEmpty()
-        return when {
-            lastUserMessage?.images?.isNotEmpty() == true -> OpenRouterFreeRoutingBucket.VISION
-            lastUserMessage?.fileAttachment != null ||
-                lastUserContent.contains("<attached_file ", ignoreCase = true) ->
-                OpenRouterFreeRoutingBucket.DOCUMENT
-            else -> OpenRouterFreeRoutingBucket.GENERAL
-        }
+        return classifyOpenRouterRequestBucket(messages)
     }
 
     companion object {

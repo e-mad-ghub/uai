@@ -175,6 +175,10 @@ fun ChatMessageList(
     overlayContent: (@Composable BoxScope.(isAtBottom: Boolean) -> Unit)? = null,
     replyActionForMessage: (MessageEntity) -> (() -> Unit)? = { null }
 ) {
+    val animatedLoadingStatusText = rememberLoadingStatusLabel(
+        isLoading = isLoading,
+        baseStatusText = loadingStatusText
+    )
     val showAssistantNames = remember(messages) {
         messages
             .asSequence()
@@ -221,7 +225,11 @@ fun ChatMessageList(
                     message = message,
                     showAgentName = message.role != "assistant" || showAssistantNames,
                     thumbnails = messageThumbnails[message.id] ?: emptyList(),
-                    streamingStatusText = if (message.id == activeStreamingMessageId) loadingStatusText else null,
+                    streamingStatusText = if (message.id == activeStreamingMessageId) {
+                        animatedLoadingStatusText
+                    } else {
+                        null
+                    },
                     onDoubleTap = onMessageDoubleTap,
                     onReply = replyActionForMessage(message)
                 )
@@ -237,9 +245,9 @@ fun ChatMessageList(
                             modifier = Modifier.size(24.dp),
                             strokeWidth = 2.dp
                         )
-                        if (!loadingStatusText.isNullOrBlank()) {
+                        if (!animatedLoadingStatusText.isNullOrBlank()) {
                             Text(
-                                text = loadingStatusText,
+                                text = animatedLoadingStatusText,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

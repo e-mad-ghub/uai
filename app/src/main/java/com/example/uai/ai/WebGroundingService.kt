@@ -99,6 +99,14 @@ private val stockTickerStopWords = setOf(
     "USD", "US", "NYSE", "NASDAQ", "OTC", "ETF", "CEO", "NEWS", "AI"
 )
 
+private fun logWebGroundingDebug(message: String) {
+    try {
+        Log.d(WEB_GROUNDING_TAG, message)
+    } catch (_: RuntimeException) {
+        // JVM unit tests do not mock android.util.Log by default.
+    }
+}
+
 internal fun stripQuotedReplyContext(raw: String): String {
     return raw
         .lineSequence()
@@ -559,7 +567,7 @@ class WebGroundingService(
         val cacheKey = "$maxResults::$query"
         searchCacheMutex.withLock {
             searchCache[cacheKey]?.let { cached ->
-                Log.d(WEB_GROUNDING_TAG, "cache hit query=\"$query\" results=${cached.size}")
+                logWebGroundingDebug("cache hit query=\"$query\" results=${cached.size}")
                 return cached
             }
         }
@@ -855,15 +863,16 @@ class WebGroundingService(
             .ifEmpty { return PreparedGroundedMessages(messages = messages, grounding = null) }
 
         onStatusChanged(statusText)
-        Log.d(WEB_GROUNDING_TAG, "derived queries=${queries.joinToString(" | ")}")
-        val timeFacts = if (intent == ConversationIntent.CURRENT_TIME) {
-            resolveCurrentTimeFacts(queries)
+        logWebGroundingDebug("derived queries=${queries.joinToString(" | ")}")
+        val timeQueries = queries.filter { it.startsWith("current time in ", ignoreCase = true) }
+        val timeFacts = if (intent == ConversationIntent.CURRENT_TIME || timeQueries.isNotEmpty()) {
+            resolveCurrentTimeFacts(timeQueries.ifEmpty { queries })
         } else {
             emptyList()
         }
 
         val maxResultsPerQuery = if (queries.size > 1) 3 else 5
-        val sources = if (intent == ConversationIntent.CURRENT_TIME) {
+        val sources = if (timeQueries.size == queries.size && timeQueries.isNotEmpty()) {
             emptyList()
         } else {
             coroutineScope {
@@ -871,7 +880,7 @@ class WebGroundingService(
                     async {
                         val querySources = searchWithCache(query, maxResultsPerQuery)
                             .map { source -> source.copy(sourceQuery = query) }
-                        Log.d(WEB_GROUNDING_TAG, "query=\"$query\" results=${querySources.size}")
+                        logWebGroundingDebug("query=\"$query\" results=${querySources.size}")
                         querySources
                     }
                 }.flatMap { it.await() }
@@ -885,12 +894,12 @@ class WebGroundingService(
             emptyList()
         }
         if (stockFacts.isNotEmpty()) {
-            Log.d(WEB_GROUNDING_TAG, "resolved stock facts=${stockFacts.size} queries=${queries.size}")
+            logWebGroundingDebug("resolved stock facts=${stockFacts.size} queries=${queries.size}")
         }
         val facts = timeFacts + stockFacts
 
         if (sources.isEmpty() && facts.isEmpty()) {
-            Log.d(WEB_GROUNDING_TAG, "no sources found for queries=${queries.joinToString(" | ")}")
+            logWebGroundingDebug("no sources found for queries=${queries.joinToString(" | ")}")
             return PreparedGroundedMessages(messages = messages, grounding = null)
         }
 

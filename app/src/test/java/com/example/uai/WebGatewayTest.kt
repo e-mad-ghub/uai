@@ -3,6 +3,7 @@ package com.example.uai
 import com.example.uai.ai.ChatMessage
 import com.example.uai.ai.ConversationIntent
 import com.example.uai.ai.ConversationWorkingState
+import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.WebTurnMode
 import com.example.uai.ai.WebTurnPlanner
 import org.junit.Assert.assertEquals
@@ -163,6 +164,23 @@ class WebGatewayTest {
         val plan = WebTurnPlanner().plan(
             messages = listOf(
                 ChatMessage(role = "user", content = "order these by name: Tesla, Nvidia, Apple")
+            )
+        )
+
+        assertEquals(WebTurnMode.NONE, plan.mode)
+        assertEquals(emptyList<String>(), plan.queries)
+        assertEquals(ConversationIntent.NONE, plan.intent)
+    }
+
+    @Test
+    fun plan_keepsImageAnalysisTurnOffTheNetwork() {
+        val plan = WebTurnPlanner().plan(
+            messages = listOf(
+                ChatMessage(
+                    role = "user",
+                    content = "What do you see in this image?",
+                    images = listOf(ImageAttachment("base64-image"))
+                )
             )
         )
 

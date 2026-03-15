@@ -67,6 +67,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     // PDF text extraction
     implementation(libs.pdfbox.android)
+    implementation(libs.jsoup)
     // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

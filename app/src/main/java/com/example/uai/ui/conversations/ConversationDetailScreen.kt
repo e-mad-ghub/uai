@@ -72,6 +72,7 @@ fun ConversationDetailScreen(
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val inputText by viewModel.inputText.collectAsStateWithLifecycle()
+    val onlineSearchStatus by viewModel.onlineSearchStatus.collectAsStateWithLifecycle()
     val activeAgent by viewModel.activeAgent.collectAsStateWithLifecycle()
     val agents by viewModel.agents.collectAsStateWithLifecycle()
     val bubbleEnabled by appContainer.agentRepository
@@ -361,6 +362,7 @@ fun ConversationDetailScreen(
                 ChatMessageList(
                     messages = messages,
                     isLoading = isLoading,
+                    loadingStatusText = onlineSearchStatus,
                     behavior = messageListBehavior,
                     modifier = Modifier.weight(1f),
                     onBackgroundDoubleTap = if (canTransferToMiniChat) ({ minimizeIntoMiniChat() }) else null,

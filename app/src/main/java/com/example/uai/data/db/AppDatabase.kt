@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -61,6 +61,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE messages ADD COLUMN attachedPageScanCount INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -74,7 +82,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_3_4,
                         MIGRATION_4_5,
                         MIGRATION_5_6,
-                        MIGRATION_6_7
+                        MIGRATION_6_7,
+                        MIGRATION_7_8
                     )
                     .build().also { INSTANCE = it }
             }

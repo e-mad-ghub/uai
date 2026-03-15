@@ -44,9 +44,8 @@ fun AppNavGraph(
                     conversationId = conversationId,
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
-                    httpClient = container.okHttpClient,
-                    openRouterCatalogRepository = container.openRouterCatalogRepository,
-                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
+                    assistantRuntime = container.assistantRuntime,
+                    webGateway = container.webGateway
                 )
             )
             ConversationDetailScreen(
@@ -66,9 +65,8 @@ fun AppNavGraph(
                     conversationId = conversationId,
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
-                    httpClient = container.okHttpClient,
-                    openRouterCatalogRepository = container.openRouterCatalogRepository,
-                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
+                    assistantRuntime = container.assistantRuntime,
+                    webGateway = container.webGateway
                 )
             )
             ConversationDetailScreen(
@@ -179,9 +177,8 @@ fun AppNavGraph(
                     conversationId = agoraId,
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
-                    httpClient = container.okHttpClient,
-                    openRouterCatalogRepository = container.openRouterCatalogRepository,
-                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
+                    assistantRuntime = container.assistantRuntime,
+                    webGateway = container.webGateway
                 )
             )
             AgoraDetailScreen(

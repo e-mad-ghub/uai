@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
@@ -14,6 +15,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -159,6 +162,7 @@ fun rememberChatMessageListBehavior(messages: List<MessageEntity>): ChatMessageL
 fun ChatMessageList(
     messages: List<MessageEntity>,
     isLoading: Boolean,
+    loadingStatusText: String? = null,
     behavior: ChatMessageListBehavior,
     modifier: Modifier = Modifier,
     messageThumbnails: Map<String, List<ImageBitmap>> = emptyMap(),
@@ -171,6 +175,10 @@ fun ChatMessageList(
     overlayContent: (@Composable BoxScope.(isAtBottom: Boolean) -> Unit)? = null,
     replyActionForMessage: (MessageEntity) -> (() -> Unit)? = { null }
 ) {
+    val animatedLoadingStatusText = rememberLoadingStatusLabel(
+        isLoading = isLoading,
+        baseStatusText = loadingStatusText
+    )
     val showAssistantNames = remember(messages) {
         messages
             .asSequence()
@@ -179,6 +187,9 @@ fun ChatMessageList(
             .distinct()
             .take(2)
             .count() > 1
+    }
+    val activeStreamingMessageId = remember(messages) {
+        messages.lastOrNull { it.role == "assistant" && it.isStreaming && it.content.isEmpty() }?.id
     }
 
     Box(modifier = modifier.fillMaxWidth()) {
@@ -214,6 +225,11 @@ fun ChatMessageList(
                     message = message,
                     showAgentName = message.role != "assistant" || showAssistantNames,
                     thumbnails = messageThumbnails[message.id] ?: emptyList(),
+                    streamingStatusText = if (message.id == activeStreamingMessageId) {
+                        animatedLoadingStatusText
+                    } else {
+                        null
+                    },
                     onDoubleTap = onMessageDoubleTap,
                     onReply = replyActionForMessage(message)
                 )
@@ -221,11 +237,21 @@ fun ChatMessageList(
 
             if (isLoading && messages.lastOrNull()?.isStreaming != true) {
                 item(contentType = "loading") {
-                    Row(Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(24.dp),
                             strokeWidth = 2.dp
                         )
+                        if (!animatedLoadingStatusText.isNullOrBlank()) {
+                            Text(
+                                text = animatedLoadingStatusText,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

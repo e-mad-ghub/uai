@@ -154,6 +154,7 @@ class OpenRouterModelsTest {
 
         assertEquals("google/gemma-3-27b-it:free", candidates.first())
         assertFalse(candidates.contains("meta-llama/llama-3.3-70b-instruct:free"))
+        assertFalse(candidates.contains(OPENROUTER_FREE_ROUTER_MODEL))
     }
 
     @Test
@@ -179,6 +180,61 @@ class OpenRouterModelsTest {
     }
 
     @Test
+    fun bestFreeVisionCandidatesDoNotSpillIntoGeneralTextModels() {
+        val candidates = openRouterBestFreeCandidates(
+            bucket = OpenRouterFreeRoutingBucket.VISION,
+            fetchedOpenRouterModels = listOf(
+                "openrouter/hunter-alpha",
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "google/gemma-3-12b-it:free",
+                "nvidia/nemotron-nano-12b-v2-vl:free",
+                OPENROUTER_FREE_ROUTER_MODEL
+            ),
+            freeModelIds = setOf(
+                "openrouter/hunter-alpha",
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "google/gemma-3-12b-it:free",
+                "nvidia/nemotron-nano-12b-v2-vl:free",
+                OPENROUTER_FREE_ROUTER_MODEL
+            )
+        )
+
+        assertTrue(candidates.contains("google/gemma-3-12b-it:free"))
+        assertTrue(candidates.contains("nvidia/nemotron-nano-12b-v2-vl:free"))
+        assertFalse(candidates.contains("openrouter/hunter-alpha"))
+        assertFalse(candidates.contains("meta-llama/llama-3.3-70b-instruct:free"))
+        assertFalse(candidates.contains(OPENROUTER_FREE_ROUTER_MODEL))
+    }
+
+    @Test
+    fun bestFreeVisionCandidatesIgnoreWeakCatalogOnlyVisionClaims() {
+        val candidates = openRouterBestFreeCandidates(
+            bucket = OpenRouterFreeRoutingBucket.VISION,
+            catalogEntries = listOf(
+                OpenRouterCatalogEntry(
+                    id = "openrouter/hunter-alpha",
+                    name = "Hunter Alpha",
+                    description = "General assistant model",
+                    promptPrice = 0.0,
+                    completionPrice = 0.0,
+                    supportsVision = true
+                ),
+                OpenRouterCatalogEntry(
+                    id = "openrouter/healer-alpha",
+                    name = "Healer Alpha",
+                    description = "Omni-modal reasoning model with vision support",
+                    promptPrice = 0.0,
+                    completionPrice = 0.0,
+                    supportsVision = true
+                )
+            )
+        )
+
+        assertTrue(candidates.contains("openrouter/healer-alpha"))
+        assertFalse(candidates.contains("openrouter/hunter-alpha"))
+    }
+
+    @Test
     fun visionSupportUsesCatalogMetadataForNewFreeModels() {
         assertTrue(
             openRouterFreeSupportsVision(
@@ -195,10 +251,20 @@ class OpenRouterModelsTest {
     }
 
     @Test
-    fun openRouterFreeAgentsCanHandleImagesThroughFallbackRouting() {
+    fun concreteTextOnlyOpenRouterFreeModelDoesNotClaimImageSupport() {
         val agent = AgentConfig(
             provider = AiProviderType.OPENROUTER,
             model = "meta-llama/llama-3.3-70b-instruct:free"
+        )
+
+        assertFalse(agent.canHandleImageRequests())
+    }
+
+    @Test
+    fun sideAgentBestFreeRouteStillClaimsImageSupport() {
+        val agent = AgentConfig(
+            provider = AiProviderType.OPENROUTER,
+            model = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
         )
 
         assertTrue(agent.canHandleImageRequests())

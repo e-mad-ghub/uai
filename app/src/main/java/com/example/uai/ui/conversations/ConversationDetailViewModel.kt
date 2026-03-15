@@ -3,12 +3,13 @@ package com.example.uai.ui.conversations
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
-import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.ai.StreamChunk
 import com.example.uai.ai.ThrottledStreamingMessageWriter
+import com.example.uai.ai.ToolAwareAssistantRuntime
+import com.example.uai.ai.WebGateway
+import com.example.uai.ai.sanitizeGroundedAssistantResponse
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.db.toChatMessage
@@ -16,23 +17,20 @@ import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
-import com.example.uai.data.repository.OpenRouterCatalogRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import java.util.UUID
 
 class ConversationDetailViewModel(
     val conversationId: String,
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
-    private val httpClient: OkHttpClient,
-    private val openRouterCatalogRepository: OpenRouterCatalogRepository,
-    private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore
+    private val assistantRuntime: ToolAwareAssistantRuntime,
+    private val webGateway: WebGateway
 ) : ViewModel() {
 
     private data class RepairResolution(
@@ -81,6 +79,9 @@ class ConversationDetailViewModel(
 
     private val _inputText = MutableStateFlow("")
     val inputText: StateFlow<String> = _inputText
+
+    private val _onlineSearchStatus = MutableStateFlow<String?>(null)
+    val onlineSearchStatus: StateFlow<String?> = _onlineSearchStatus
 
     private val _errorEvent = Channel<String>(Channel.BUFFERED)
     val errorEvent = _errorEvent.receiveAsFlow()
@@ -311,21 +312,30 @@ class ConversationDetailViewModel(
                     msg.toChatMessage()
                 }
             }
+            val groundedHistory = webGateway.prepareTurn(
+                conversationKey = conversationId,
+                messages = history,
+                planningConfig = agent
+            ) { status ->
+                _onlineSearchStatus.value = status
+            }.messages
 
             try {
-                AiProviderFactory.create(
-                    config = agent,
-                    client = httpClient,
-                    openRouterCatalogRepository = openRouterCatalogRepository,
-                    openRouterBestFreeRoutingStateStore = openRouterBestFreeRoutingStateStore
-                )
-                    .streamResponse(history, agent)
+                assistantRuntime
+                    .streamResponse(
+                        conversationKey = conversationId,
+                        messages = groundedHistory,
+                        config = agent,
+                        onStatusChanged = { status -> _onlineSearchStatus.value = status }
+                    )
                     .catch { e -> emit(StreamChunk.Error(e)) }
                     .collect { chunk ->
                         when (chunk) {
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
-                                streamingWriter.emitStreaming(accumulated)
+                                streamingWriter.emitStreaming(
+                                    sanitizeGroundedAssistantResponse(accumulated)
+                                )
                             }
                             is StreamChunk.ModelSelection -> {
                                 repo.updateMessageResponseModel(
@@ -355,9 +365,11 @@ class ConversationDetailViewModel(
                     if (accumulated.isBlank()) {
                         repo.deleteMessage(assistantId)
                     } else {
-                        streamingWriter.emitFinal(accumulated)
+                        val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                        streamingWriter.emitFinal(sanitized)
                     }
                     repo.touchConversation(conversationId)
+                    _onlineSearchStatus.value = null
                     _isLoading.value = false
                 }
             }
@@ -368,9 +380,8 @@ class ConversationDetailViewModel(
         private val conversationId: String,
         private val repo: ConversationRepository,
         private val agentRepo: AgentRepository,
-        private val httpClient: OkHttpClient,
-        private val openRouterCatalogRepository: OpenRouterCatalogRepository,
-        private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore
+        private val assistantRuntime: ToolAwareAssistantRuntime,
+        private val webGateway: WebGateway
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
@@ -378,9 +389,8 @@ class ConversationDetailViewModel(
                 conversationId,
                 repo,
                 agentRepo,
-                httpClient,
-                openRouterCatalogRepository,
-                openRouterBestFreeRoutingStateStore
+                assistantRuntime,
+                webGateway
             ) as T
     }
 }

@@ -56,11 +56,11 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.uai.MainActivity
 import com.example.uai.R
 import com.example.uai.UaiApplication
-import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
 import com.example.uai.ai.ThrottledStreamingMessageWriter
+import com.example.uai.ai.sanitizeGroundedAssistantResponse
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.db.toChatMessage
@@ -128,6 +128,7 @@ class FloatingBubbleService : Service() {
     private var isAppUiVisible = false
     private var miniChatMinimizeTipDismissed by mutableStateOf(false)
     private var miniChatScreenshotHintMessage by mutableStateOf<String?>(null)
+    private var onlineSearchStatusMessage by mutableStateOf<String?>(null)
 
     // Attachment state
     // Each Triple: (base64, ImageBitmap?, uriStr?)
@@ -823,7 +824,8 @@ class FloatingBubbleService : Service() {
                                 container.preferences.setMiniChatMinimizeTipDismissed(true)
                             }
                         },
-                        screenshotHintMessage = miniChatScreenshotHintMessage
+                        screenshotHintMessage = miniChatScreenshotHintMessage,
+                        loadingStatusText = onlineSearchStatusMessage
                     )
                 }
             }
@@ -1645,13 +1647,14 @@ class FloatingBubbleService : Service() {
                         msg.toChatMessage()
                     }
                 }
+                val groundedHistory = container.webGateway.prepareTurn(
+                    conversationKey = activeConversationId,
+                    messages = history,
+                    planningConfig = agent
+                ) { status ->
+                    onlineSearchStatusMessage = status
+                }.messages
 
-                val provider = AiProviderFactory.create(
-                    config = agent,
-                    client = container.okHttpClient,
-                    openRouterCatalogRepository = container.openRouterCatalogRepository,
-                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
-                )
                 streamingWriter = ThrottledStreamingMessageWriter { content, isStreaming ->
                     val idx = chatMessages.indexOfFirst { it.id == messageId }
                     if (idx != -1) {
@@ -1667,7 +1670,13 @@ class FloatingBubbleService : Service() {
                     )
                 }
 
-                provider.streamResponse(history, agent)
+                container.assistantRuntime
+                    .streamResponse(
+                        conversationKey = activeConversationId,
+                        messages = groundedHistory,
+                        config = agent,
+                        onStatusChanged = { status -> onlineSearchStatusMessage = status }
+                    )
                     .catch { e -> emit(StreamChunk.Error(e)) }
                     .collect { chunk ->
                         val id = assistantId ?: return@collect
@@ -1675,7 +1684,9 @@ class FloatingBubbleService : Service() {
                         when (chunk) {
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
-                                streamingWriter?.emitStreaming(accumulated)
+                                streamingWriter?.emitStreaming(
+                                    sanitizeGroundedAssistantResponse(accumulated)
+                                )
                             }
                             is StreamChunk.ModelSelection -> {
                                 if (idx != -1) {
@@ -1707,10 +1718,12 @@ class FloatingBubbleService : Service() {
                             if (idx != -1) chatMessages.removeAt(idx)
                             container.conversationRepository.deleteMessage(id)
                         } else {
-                            streamingWriter?.emitFinal(accumulated)
+                            val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                            streamingWriter?.emitFinal(sanitized)
                         }
                         convId?.let { container.conversationRepository.touchConversation(it) }
                     }
+                    onlineSearchStatusMessage = null
                     isLoading = false
                 }
             }

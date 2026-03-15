@@ -75,6 +75,7 @@ fun ChatPanel(
     showMiniChatMinimizeTip: Boolean = false,
     onDismissMiniChatMinimizeTip: (() -> Unit)? = null,
     screenshotHintMessage: String? = null,
+    loadingStatusText: String? = null,
     modifier: Modifier = Modifier
 ) {
     val configuration = LocalConfiguration.current
@@ -270,6 +271,7 @@ fun ChatPanel(
                     ChatMessageList(
                         messages = messages,
                         isLoading = isLoading,
+                        loadingStatusText = loadingStatusText,
                         behavior = messageListBehavior,
                         modifier = Modifier
                             .fillMaxWidth()

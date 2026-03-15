@@ -3,20 +3,20 @@ package com.example.uai.ui.agora
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.ChatMessage
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
-import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.ai.StreamChunk
 import com.example.uai.ai.ThrottledStreamingMessageWriter
+import com.example.uai.ai.ToolAwareAssistantRuntime
+import com.example.uai.ai.WebGateway
+import com.example.uai.ai.sanitizeGroundedAssistantResponse
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.db.toChatMessage
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
-import com.example.uai.data.repository.OpenRouterCatalogRepository
 import com.google.gson.Gson
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -25,16 +25,38 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import java.util.UUID
+
+internal fun extractAgentScopedGroundingText(
+    text: String,
+    agentName: String,
+    allAgentNames: List<String>
+): String {
+    val mentions = allAgentNames
+        .distinct()
+        .mapNotNull { name ->
+            Regex("(?i)@${Regex.escape(name)}").find(text)?.let { match ->
+                Triple(name, match.range.first, match.range.last + 1)
+            }
+        }
+        .sortedBy { it.second }
+
+    if (mentions.size < 2) return text
+
+    val target = mentions.firstOrNull { it.first.equals(agentName, ignoreCase = true) } ?: return text
+    val nextMentionStart = mentions.firstOrNull { it.second > target.second }?.second ?: text.length
+    val scoped = text.substring(target.third, nextMentionStart)
+        .trim(' ', '\n', '\t', ',', ';', ':')
+
+    return scoped.ifBlank { text }
+}
 
 class AgoraDetailViewModel(
     val conversationId: String,
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
-    private val httpClient: OkHttpClient,
-    private val openRouterCatalogRepository: OpenRouterCatalogRepository,
-    private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore
+    private val assistantRuntime: ToolAwareAssistantRuntime,
+    private val webGateway: WebGateway
 ) : ViewModel() {
 
     val conversation = repo.getConversation(conversationId)
@@ -61,6 +83,9 @@ class AgoraDetailViewModel(
 
     private val _inputText = MutableStateFlow("")
     val inputText: StateFlow<String> = _inputText
+
+    private val _onlineSearchStatus = MutableStateFlow<String?>(null)
+    val onlineSearchStatus: StateFlow<String?> = _onlineSearchStatus
 
     private val _errorEvent = Channel<String>(Channel.BUFFERED)
     val errorEvent = _errorEvent.receiveAsFlow()
@@ -266,6 +291,26 @@ class AgoraDetailViewModel(
                                 ?.let { add(it.toChatMessage()) }
                         }
                     }
+                    val scopedGroundingText = extractAgentScopedGroundingText(
+                        text = text,
+                        agentName = agent.name,
+                        allAgentNames = agents.map { it.name }
+                    )
+                    val groundingSeedHistory = history.mapIndexed { index, message ->
+                        if (index == history.lastIndex && message.role == "user") {
+                            message.copy(content = scopedGroundingText)
+                        } else {
+                            message
+                        }
+                    }
+                    val groundedHistory = webGateway.prepareTurn(
+                        conversationKey = conversationId,
+                        messages = groundingSeedHistory,
+                        planningConfig = agent,
+                        onStatusChanged = { status -> _onlineSearchStatus.value = status }
+                    ).grounding?.let { grounding ->
+                        webGateway.applyGrounding(history, grounding)
+                    } ?: history
 
                     val otherNames = agentOtherNames[agent.id] ?: emptyList()
                     val nameContext = buildString {
@@ -319,19 +364,21 @@ class AgoraDetailViewModel(
                         repo.updateMessageContent(assistantId, content, isStreaming)
                     }
                     try {
-                        AiProviderFactory.create(
-                            config = agoraAgent,
-                            client = httpClient,
-                            openRouterCatalogRepository = openRouterCatalogRepository,
-                            openRouterBestFreeRoutingStateStore = openRouterBestFreeRoutingStateStore
-                        )
-                            .streamResponse(history, agoraAgent)
+                        assistantRuntime
+                            .streamResponse(
+                                conversationKey = conversationId,
+                                messages = groundedHistory,
+                                config = agoraAgent,
+                                onStatusChanged = { status -> _onlineSearchStatus.value = status }
+                            )
                             .catch { e -> emit(StreamChunk.Error(e)) }
                             .collect { chunk ->
                                 when (chunk) {
                                     is StreamChunk.Token -> {
                                         accumulated = (accumulated + chunk.text).stripNamePrefix()
-                                        streamingWriter.emitStreaming(accumulated)
+                                        streamingWriter.emitStreaming(
+                                            sanitizeGroundedAssistantResponse(accumulated)
+                                        )
                                     }
                                     is StreamChunk.ModelSelection -> {
                                         repo.updateMessageResponseModel(
@@ -360,7 +407,11 @@ class AgoraDetailViewModel(
                     } finally {
                         withContext(NonCancellable) {
                             if (accumulated.isBlank()) repo.deleteMessage(assistantId)
-                            else streamingWriter.emitFinal(accumulated)
+                            else {
+                                val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                                streamingWriter.emitFinal(sanitized)
+                                accumulated = sanitized
+                            }
                         }
                     }
 
@@ -381,7 +432,10 @@ class AgoraDetailViewModel(
 
                 repo.touchConversation(conversationId)
             } finally {
-                withContext(NonCancellable) { _isLoading.value = false }
+                withContext(NonCancellable) {
+                    _onlineSearchStatus.value = null
+                    _isLoading.value = false
+                }
             }
         }
     }
@@ -390,9 +444,8 @@ class AgoraDetailViewModel(
         private val conversationId: String,
         private val repo: ConversationRepository,
         private val agentRepo: AgentRepository,
-        private val httpClient: OkHttpClient,
-        private val openRouterCatalogRepository: OpenRouterCatalogRepository,
-        private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore
+        private val assistantRuntime: ToolAwareAssistantRuntime,
+        private val webGateway: WebGateway
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
@@ -400,9 +453,8 @@ class AgoraDetailViewModel(
                 conversationId,
                 repo,
                 agentRepo,
-                httpClient,
-                openRouterCatalogRepository,
-                openRouterBestFreeRoutingStateStore
+                assistantRuntime,
+                webGateway
             ) as T
     }
 }

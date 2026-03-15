@@ -61,6 +61,7 @@ fun AgoraDetailScreen(
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val inputText by viewModel.inputText.collectAsStateWithLifecycle()
+    val onlineSearchStatus by viewModel.onlineSearchStatus.collectAsStateWithLifecycle()
     val participantNames by viewModel.participantNames.collectAsStateWithLifecycle()
     val allAvailableAgents by viewModel.allAvailableAgents.collectAsStateWithLifecycle()
 
@@ -300,6 +301,7 @@ fun AgoraDetailScreen(
                 ChatMessageList(
                     messages = messages,
                     isLoading = isLoading,
+                    loadingStatusText = onlineSearchStatus,
                     behavior = messageListBehavior,
                     modifier = Modifier.weight(1f),
                     replyActionForMessage = { msg ->

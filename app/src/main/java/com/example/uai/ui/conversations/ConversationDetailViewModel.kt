@@ -9,6 +9,8 @@ import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.ai.StreamChunk
 import com.example.uai.ai.ThrottledStreamingMessageWriter
+import com.example.uai.ai.WebGateway
+import com.example.uai.ai.sanitizeGroundedAssistantResponse
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.db.toChatMessage
@@ -32,7 +34,8 @@ class ConversationDetailViewModel(
     private val agentRepo: AgentRepository,
     private val httpClient: OkHttpClient,
     private val openRouterCatalogRepository: OpenRouterCatalogRepository,
-    private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore
+    private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore,
+    private val webGateway: WebGateway
 ) : ViewModel() {
 
     private data class RepairResolution(
@@ -81,6 +84,9 @@ class ConversationDetailViewModel(
 
     private val _inputText = MutableStateFlow("")
     val inputText: StateFlow<String> = _inputText
+
+    private val _onlineSearchStatus = MutableStateFlow<String?>(null)
+    val onlineSearchStatus: StateFlow<String?> = _onlineSearchStatus
 
     private val _errorEvent = Channel<String>(Channel.BUFFERED)
     val errorEvent = _errorEvent.receiveAsFlow()
@@ -311,6 +317,12 @@ class ConversationDetailViewModel(
                     msg.toChatMessage()
                 }
             }
+            val groundedHistory = webGateway.prepareTurn(
+                conversationKey = conversationId,
+                messages = history
+            ) { status ->
+                _onlineSearchStatus.value = status
+            }.messages
 
             try {
                 AiProviderFactory.create(
@@ -319,13 +331,15 @@ class ConversationDetailViewModel(
                     openRouterCatalogRepository = openRouterCatalogRepository,
                     openRouterBestFreeRoutingStateStore = openRouterBestFreeRoutingStateStore
                 )
-                    .streamResponse(history, agent)
+                    .streamResponse(groundedHistory, agent)
                     .catch { e -> emit(StreamChunk.Error(e)) }
                     .collect { chunk ->
                         when (chunk) {
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
-                                streamingWriter.emitStreaming(accumulated)
+                                streamingWriter.emitStreaming(
+                                    sanitizeGroundedAssistantResponse(accumulated)
+                                )
                             }
                             is StreamChunk.ModelSelection -> {
                                 repo.updateMessageResponseModel(
@@ -355,9 +369,11 @@ class ConversationDetailViewModel(
                     if (accumulated.isBlank()) {
                         repo.deleteMessage(assistantId)
                     } else {
-                        streamingWriter.emitFinal(accumulated)
+                        val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                        streamingWriter.emitFinal(sanitized)
                     }
                     repo.touchConversation(conversationId)
+                    _onlineSearchStatus.value = null
                     _isLoading.value = false
                 }
             }
@@ -370,7 +386,8 @@ class ConversationDetailViewModel(
         private val agentRepo: AgentRepository,
         private val httpClient: OkHttpClient,
         private val openRouterCatalogRepository: OpenRouterCatalogRepository,
-        private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore
+        private val openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore,
+        private val webGateway: WebGateway
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
@@ -380,7 +397,8 @@ class ConversationDetailViewModel(
                 agentRepo,
                 httpClient,
                 openRouterCatalogRepository,
-                openRouterBestFreeRoutingStateStore
+                openRouterBestFreeRoutingStateStore,
+                webGateway
             ) as T
     }
 }

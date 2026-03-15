@@ -4,6 +4,11 @@ import android.content.Context
 import com.example.uai.data.db.AppDatabase
 import com.example.uai.data.prefs.AppPreferences
 import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
+import com.example.uai.ai.BraveHtmlSearchProvider
+import com.example.uai.ai.DuckDuckGoHtmlSearchProvider
+import com.example.uai.ai.FallbackWebSearchProvider
+import com.example.uai.ai.WebGateway
+import com.example.uai.ai.WebGroundingService
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
 import com.example.uai.data.repository.OpenRouterCatalogRepository
@@ -35,6 +40,20 @@ class AppContainer(context: Context) {
 
     val providerModelCatalogRepository: ProviderModelCatalogRepository =
         ProviderModelCatalogRepository(preferences, okHttpClient)
+
+    val webGroundingService: WebGroundingService =
+        WebGroundingService(
+            FallbackWebSearchProvider(
+                listOf(
+                    BraveHtmlSearchProvider(okHttpClient),
+                    DuckDuckGoHtmlSearchProvider(okHttpClient)
+                )
+            ),
+            okHttpClient
+        )
+
+    val webGateway: WebGateway =
+        WebGateway(webGroundingService)
 
     val conversationRepository: ConversationRepository =
         ConversationRepository(db.conversationDao(), db.messageDao(), context.applicationContext)

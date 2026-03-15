@@ -46,7 +46,8 @@ fun AppNavGraph(
                     agentRepo = container.agentRepository,
                     httpClient = container.okHttpClient,
                     openRouterCatalogRepository = container.openRouterCatalogRepository,
-                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
+                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore,
+                    webGateway = container.webGateway
                 )
             )
             ConversationDetailScreen(
@@ -68,7 +69,8 @@ fun AppNavGraph(
                     agentRepo = container.agentRepository,
                     httpClient = container.okHttpClient,
                     openRouterCatalogRepository = container.openRouterCatalogRepository,
-                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
+                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore,
+                    webGateway = container.webGateway
                 )
             )
             ConversationDetailScreen(
@@ -181,7 +183,8 @@ fun AppNavGraph(
                     agentRepo = container.agentRepository,
                     httpClient = container.okHttpClient,
                     openRouterCatalogRepository = container.openRouterCatalogRepository,
-                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore
+                    openRouterBestFreeRoutingStateStore = container.openRouterBestFreeRoutingStateStore,
+                    webGateway = container.webGateway
                 )
             )
             AgoraDetailScreen(

@@ -27,6 +27,7 @@ data class MessageEntity(
     val imageUri: String? = null,
     val attachedFileName: String? = null,
     val attachedFileText: String? = null,
+    val attachedPageScanCount: Int = 0,
     val agentId: String? = null,
     val agentName: String? = null,   // set when the reply should keep its assistant identity in the transcript
     val responseModelId: String? = null,

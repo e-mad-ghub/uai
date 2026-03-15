@@ -59,6 +59,7 @@ fun MessageBubble(
     message: MessageEntity,
     showAgentName: Boolean = true,
     thumbnails: List<ImageBitmap> = emptyList(),
+    streamingStatusText: String? = null,
     onDoubleTap: (() -> Unit)? = null,
     onReply: (() -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -234,7 +235,10 @@ fun MessageBubble(
                             )
                         }
                         if (!isUser && message.isStreaming && message.content.isEmpty()) {
-                            TypingIndicator(color = textColor)
+                            TypingIndicator(
+                                color = textColor,
+                                label = streamingStatusText
+                            )
                         } else {
                             when {
                                 thumbnails.isNotEmpty() -> {
@@ -322,7 +326,10 @@ fun MessageBubble(
 }
 
 @Composable
-private fun TypingIndicator(color: Color) {
+private fun TypingIndicator(
+    color: Color,
+    label: String? = null
+) {
     val transition = rememberInfiniteTransition(label = "typing")
 
     val alpha1 by transition.animateFloat(
@@ -360,6 +367,14 @@ private fun TypingIndicator(color: Color) {
                     .size(8.dp)
                     .clip(CircleShape)
                     .background(color.copy(alpha = alpha))
+            )
+        }
+        if (!label.isNullOrBlank()) {
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = color.copy(alpha = 0.92f)
             )
         }
     }

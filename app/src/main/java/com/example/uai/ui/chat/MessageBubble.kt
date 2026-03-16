@@ -2,6 +2,8 @@ package com.example.uai.ui.chat
 
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Base64
+import com.google.gson.JsonParser
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -13,20 +15,23 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -52,6 +57,7 @@ import com.example.uai.data.db.MessageEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
 @Composable
@@ -99,10 +105,27 @@ fun MessageBubble(
         imageBitmap?.let { MessageImageBitmapCache.put(uriStr, it) }
     }
 
-    val clipboardManager = LocalClipboardManager.current
+    // Decode all images from imagesJson (multi-image messages)
+    val decodedImages = remember(message.imagesJson) { mutableStateListOf<ImageBitmap>() }
+    LaunchedEffect(message.imagesJson) {
+        decodedImages.clear()
+        val json = message.imagesJson?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        val bitmaps = withContext(Dispatchers.IO) {
+            try {
+                JsonParser.parseString(json).asJsonArray.mapNotNull { el ->
+                    val base64 = el.asJsonObject.get("base64")?.asString ?: return@mapNotNull null
+                    try {
+                        val bytes = Base64.decode(base64, Base64.NO_WRAP)
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                    } catch (_: Exception) { null }
+                }
+            } catch (_: Exception) { emptyList() }
+        }
+        decodedImages.addAll(bitmaps)
+    }
 
-    // Swipe-to-reply state (only active for assistant messages with onReply callback)
-    val swipable = !isUser && onReply != null && !message.isStreaming
+    // Swipe-to-reply state (enabled for any persisted message with a reply callback)
+    val swipable = onReply != null && !message.isStreaming
     val scope = rememberCoroutineScope()
     val dragOffset = remember { Animatable(0f) }
     var replyTriggered by remember { mutableStateOf(false) }
@@ -111,30 +134,18 @@ fun MessageBubble(
     val maxDragPx = with(density) { 96.dp.toPx() }
 
     // Icon appearance driven by drag progress (0..1)
-    val progress = (dragOffset.value / swipeThresholdPx).coerceIn(0f, 1f)
+    val progress = (dragOffset.value.absoluteValue / swipeThresholdPx).coerceIn(0f, 1f)
     val displayContent = remember(message.content, message.attachedFileName, message.attachedFileText) {
         parseAttachedFileDisplay(message)
     }
-    val copyableMessageText = remember(message.content, message.attachedFileName, message.attachedFileText) {
-        buildCopyableMessageText(message)
-    }
-    val canCopyMessage = !message.isStreaming && copyableMessageText.isNotBlank()
-    @OptIn(ExperimentalFoundationApi::class)
-    val interactionModifier = if (onDoubleTap != null || canCopyMessage) {
-        Modifier.combinedClickable(
-            onClick = {},
-            onLongClick = if (canCopyMessage) {
-                {
-                    clipboardManager.setText(AnnotatedString(copyableMessageText))
-                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                null
-            },
-            onDoubleClick = onDoubleTap
+    val clipboardManager = LocalClipboardManager.current
+    var showCopyMenu by remember { mutableStateOf(false) }
+    val textToCopy = displayContent.visibleText.takeIf { it.isNotBlank() }
+    val interactionModifier = Modifier.pointerInput(onDoubleTap, textToCopy) {
+        detectTapGestures(
+            onDoubleTap = { onDoubleTap?.invoke() },
+            onLongPress = { if (textToCopy != null) showCopyMenu = true }
         )
-    } else {
-        Modifier
     }
 
     Column(
@@ -173,9 +184,18 @@ fun MessageBubble(
                             },
                             onHorizontalDrag = { _, amount ->
                                 scope.launch {
-                                    val next = (dragOffset.value + amount).coerceIn(0f, maxDragPx)
+                                    val next = if (isUser) {
+                                        (dragOffset.value + amount).coerceIn(-maxDragPx, 0f)
+                                    } else {
+                                        (dragOffset.value + amount).coerceIn(0f, maxDragPx)
+                                    }
                                     dragOffset.snapTo(next)
-                                    if (next >= swipeThresholdPx && !replyTriggered) {
+                                    val crossedThreshold = if (isUser) {
+                                        next <= -swipeThresholdPx
+                                    } else {
+                                        next >= swipeThresholdPx
+                                    }
+                                    if (crossedThreshold && !replyTriggered) {
                                         replyTriggered = true
                                         onReply()
                                         dragOffset.animateTo(
@@ -199,15 +219,16 @@ fun MessageBubble(
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
-                        .align(Alignment.CenterStart)
+                        .align(if (isUser) Alignment.CenterEnd else Alignment.CenterStart)
                         .size(20.dp)
                         .alpha(progress)
                         .scale(0.5f + 0.5f * progress)
                 )
             }
 
-            // Bubble slides right with the drag
+            // Bubble slides right with the drag; Box also anchors the copy DropdownMenu
             @OptIn(ExperimentalFoundationApi::class)
+            Box(modifier = Modifier.offset { IntOffset(dragOffset.value.roundToInt(), 0) }) {
             Surface(
                 shape = RoundedCornerShape(
                     topStart = 18.dp,
@@ -218,7 +239,6 @@ fun MessageBubble(
                 color = bubbleColor,
                 modifier = Modifier
                     .widthIn(max = 280.dp)
-                    .offset { IntOffset(dragOffset.value.roundToInt(), 0) }
                     .then(interactionModifier)
             ) {
                 Box(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
@@ -240,11 +260,12 @@ fun MessageBubble(
                                 label = streamingStatusText
                             )
                         } else {
+                            val displayImages = thumbnails.ifEmpty { decodedImages }
                             when {
-                                thumbnails.isNotEmpty() -> {
-                                    if (thumbnails.size == 1) {
+                                displayImages.isNotEmpty() -> {
+                                    if (displayImages.size == 1) {
                                         Image(
-                                            bitmap = thumbnails[0],
+                                            bitmap = displayImages[0],
                                             contentDescription = null,
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -256,7 +277,7 @@ fun MessageBubble(
                                             modifier = Modifier.horizontalScroll(rememberScrollState()),
                                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                                         ) {
-                                            thumbnails.forEach { bmp ->
+                                            displayImages.forEach { bmp ->
                                                 Image(
                                                     bitmap = bmp,
                                                     contentDescription = null,
@@ -269,58 +290,83 @@ fun MessageBubble(
                                         }
                                     }
                                 }
-                                imageBitmap != null -> Image(
-                                    bitmap = imageBitmap!!,
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp)),
-                                    contentScale = ContentScale.FillWidth
-                                )
+                                imageBitmap != null -> imageBitmap?.let { bmp ->
+                                    Image(
+                                        bitmap = bmp,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp)),
+                                        contentScale = ContentScale.FillWidth
+                                    )
+                                }
                             }
-                            if (displayContent.fileNames.isNotEmpty()) {
-                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    displayContent.fileNames.forEach { fileName ->
-                                        Surface(
-                                            shape = RoundedCornerShape(8.dp),
-                                            color = if (isUser) {
-                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                            } else {
-                                                MaterialTheme.colorScheme.secondaryContainer
+                            if (displayContent.fileNames.isNotEmpty() || displayContent.visibleText.isNotEmpty()) {
+                                SelectionContainer {
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        if (displayContent.fileNames.isNotEmpty()) {
+                                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                displayContent.fileNames.forEach { fileName ->
+                                                    Surface(
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        color = if (isUser) {
+                                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                                        } else {
+                                                            MaterialTheme.colorScheme.secondaryContainer
+                                                        }
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Default.AttachFile,
+                                                                contentDescription = null,
+                                                                modifier = Modifier.size(16.dp),
+                                                                tint = textColor
+                                                            )
+                                                            Text(
+                                                                text = fileName,
+                                                                style = MaterialTheme.typography.labelMedium,
+                                                                color = textColor
+                                                            )
+                                                        }
+                                                    }
+                                                }
                                             }
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.AttachFile,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(16.dp),
-                                                    tint = textColor
-                                                )
-                                                Text(
-                                                    text = fileName,
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    color = textColor
-                                                )
-                                            }
+                                        }
+                                        if (displayContent.visibleText.isNotEmpty()) {
+                                            MarkdownMessageText(
+                                                text = displayContent.visibleText,
+                                                color = textColor,
+                                                baseStyle = MaterialTheme.typography.bodyMedium
+                                            )
                                         }
                                     }
                                 }
-                            }
-                            if (displayContent.visibleText.isNotEmpty()) {
-                                Text(
-                                    text = displayContent.visibleText,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = textColor
-                                )
                             }
                         }
                     }
                 }
             }
+            // Long-press copy menu — appears anchored to the bubble
+            if (textToCopy != null) {
+                DropdownMenu(
+                    expanded = showCopyMenu,
+                    onDismissRequest = { showCopyMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Copy") },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(textToCopy))
+                            showCopyMenu = false
+                        }
+                    )
+                }
+            }
+            } // Box (offset + DropdownMenu anchor)
         }
     }
 }

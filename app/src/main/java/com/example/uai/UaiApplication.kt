@@ -31,7 +31,7 @@ class UaiApplication : Application() {
         super.onCreate()
         PDFBoxResourceLoader.init(this)
         container = AppContainer(this)
-        runBlocking {
+        applicationScope.launch {
             container.preferences.initializeMiniChatDefaultIfNeeded()
         }
         applicationScope.launch {

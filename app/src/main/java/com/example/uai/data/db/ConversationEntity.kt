@@ -1,5 +1,6 @@
 package com.example.uai.data.db
 
+import android.util.Log
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -23,7 +24,16 @@ data class ConversationEntity(
 ) {
     fun parseAgoraAgentIds(): List<String> {
         if (agoraAgentIds.isBlank()) return emptyList()
-        val type = object : TypeToken<List<String>>() {}.type
-        return Gson().fromJson(agoraAgentIds, type)
+        return try {
+            val type = object : TypeToken<List<String>>() {}.type
+            gson.fromJson<List<String>>(agoraAgentIds, type) ?: emptyList()
+        } catch (e: Exception) {
+            Log.e("ConversationEntity", "Failed to parse agoraAgentIds: $agoraAgentIds", e)
+            emptyList()
+        }
+    }
+
+    companion object {
+        private val gson = Gson()
     }
 }

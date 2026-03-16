@@ -22,6 +22,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -34,8 +35,8 @@ internal fun extractAgentScopedGroundingText(
 ): String {
     val mentions = allAgentNames
         .distinct()
-        .mapNotNull { name ->
-            Regex("(?i)@${Regex.escape(name)}").find(text)?.let { match ->
+        .flatMap { name ->
+            Regex("(?i)@${Regex.escape(name)}").findAll(text).map { match ->
                 Triple(name, match.range.first, match.range.last + 1)
             }
         }
@@ -58,6 +59,8 @@ class AgoraDetailViewModel(
     private val assistantRuntime: ToolAwareAssistantRuntime,
     private val webGateway: WebGateway
 ) : ViewModel() {
+
+    private val gson = Gson()
 
     val conversation = repo.getConversation(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
@@ -101,13 +104,20 @@ class AgoraDetailViewModel(
 
     /** Update room name and/or agent list. Either can be blank/empty to leave unchanged. */
     fun updateRoom(name: String, agentIds: Set<String>) {
-        if (name.isBlank() || agentIds.isEmpty()) return
+        if (name.isBlank()) {
+            _errorEvent.trySend("Room name cannot be empty.")
+            return
+        }
+        if (agentIds.isEmpty()) {
+            _errorEvent.trySend("A council room must have at least one agent.")
+            return
+        }
         viewModelScope.launch {
             val conv = conversation.value ?: return@launch
             repo.upsertConversation(
                 conv.copy(
-                    title = if (name.isNotBlank()) name.trim() else conv.title,
-                    agoraAgentIds = Gson().toJson(agentIds.toList())
+                    title = name.trim(),
+                    agoraAgentIds = gson.toJson(agentIds.toList())
                 )
             )
         }
@@ -142,7 +152,7 @@ class AgoraDetailViewModel(
                 }
 
                 val targetedAgents: List<AgentConfig>? = when {
-                    replyToMessage != null -> {
+                    replyToMessage?.role == "assistant" -> {
                         val target = when {
                             !replyToMessage.agentId.isNullOrBlank() ->
                                 allAgents.find { it.id == replyToMessage.agentId }
@@ -201,12 +211,14 @@ class AgoraDetailViewModel(
                 val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
                 val lastUserIndex = dbHistory.indexOfLast { it.role == "user" }
                 val historyMessages = if (lastUserIndex >= 0) dbHistory.subList(0, lastUserIndex + 1) else emptyList()
-                val currentRoundOthers = mutableListOf<MessageEntity>()
                 val agentOtherNames = allAgents.associate { a ->
                     a.id to allAgents.filter { it.id != a.id }.map { it.name }
                 }
 
-                for (agent in agents) {
+                // Agents respond in parallel — current-round cross-agent context is not available
+                // within the same round; each agent sees only prior-round history from other agents.
+                coroutineScope {
+                for (agent in agents) { launch {
                     val assistantId = UUID.randomUUID().toString()
                     repo.insertMessage(
                         MessageEntity(
@@ -229,16 +241,7 @@ class AgoraDetailViewModel(
                     }
                     if (unsupportedMsg != null) {
                         repo.updateMessageContent(assistantId, unsupportedMsg, false)
-                        currentRoundOthers.add(
-                            MessageEntity(
-                                id = assistantId, conversationId = conversationId,
-                                role = "assistant", content = unsupportedMsg,
-                                createdAt = System.currentTimeMillis(),
-                                agentId = agent.id,
-                                agentName = agent.name
-                            )
-                        )
-                        continue
+                        return@launch
                     }
 
                     // Option A history: group into rounds so each agent's "assistant" slot
@@ -262,9 +265,8 @@ class AgoraDetailViewModel(
 
                         rounds.forEachIndexed { roundIdx, (userMsg, assistants) ->
                             val isLastRound = roundIdx == rounds.lastIndex
-                            // Other agents from historical rounds + already-responded agents this round
-                            val otherAll = assistants.filter { it.agentName != agent.name } +
-                                if (isLastRound) currentRoundOthers else emptyList()
+                            // Other agents from historical rounds (current-round agents run in parallel)
+                            val otherAll = assistants.filter { it.agentName != agent.name }
 
                             val contextSuffix = if (otherAll.isNotEmpty())
                                 "\n\n[Other participants in this round — read-only context, do not continue:]\n" +
@@ -327,7 +329,8 @@ class AgoraDetailViewModel(
                                 "If asked to play a game or task alongside others, only perform your own assigned action, then stop immediately. "
                             )
                         }
-                        if (replyToMessage != null) {
+                        // Only inject reply context when this specific agent was targeted
+                        if (replyToMessage != null && targetedAgents != null) {
                             append(
                                 "The user is replying directly to your previous message: " +
                                 "\"${replyToMessage.content.take(300)}\". " +
@@ -415,20 +418,7 @@ class AgoraDetailViewModel(
                         }
                     }
 
-                    if (accumulated.isNotBlank()) {
-                        currentRoundOthers.add(
-                            MessageEntity(
-                                id = assistantId,
-                                conversationId = conversationId,
-                                role = "assistant",
-                                content = accumulated,
-                                createdAt = System.currentTimeMillis(),
-                                agentId = agent.id,
-                                agentName = agent.name
-                            )
-                        )
-                    }
-                }
+                } } } // end launch, for, coroutineScope
 
                 repo.touchConversation(conversationId)
             } finally {

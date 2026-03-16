@@ -46,7 +46,20 @@ class ConversationContextStore {
         if (state.conversationKey.isBlank()) return
         mutex.withLock {
             sessions[state.conversationKey] = state
+            if (sessions.size > MAX_SESSIONS) {
+                val cutoff = System.currentTimeMillis() - IDLE_EVICTION_MS
+                sessions.entries.removeAll { it.value.lastUpdatedAt < cutoff }
+                while (sessions.size > MAX_SESSIONS) {
+                    sessions.entries.minByOrNull { it.value.lastUpdatedAt }?.key
+                        ?.let { sessions.remove(it) }
+                }
+            }
         }
+    }
+
+    companion object {
+        private const val MAX_SESSIONS = 50
+        private const val IDLE_EVICTION_MS = 30L * 60L * 1_000L
     }
 }
 

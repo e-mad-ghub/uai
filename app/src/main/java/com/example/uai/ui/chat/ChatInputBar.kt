@@ -54,6 +54,7 @@ fun ChatInputBar(
     onPickFile: () -> Unit,
     onTakeScreenshot: (() -> Unit)? = null,
     onClearAttachment: () -> Unit,
+    onRemoveImage: ((Int) -> Unit)? = null,
     onCancelReply: () -> Unit = {},
     onStop: () -> Unit,
     onSend: () -> Unit,
@@ -148,30 +149,51 @@ fun ChatInputBar(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        for (bmp in pendingImages) {
-                            if (bmp != null) {
-                                Image(
-                                    bitmap = bmp,
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .size(64.dp)
-                                        .clip(RoundedCornerShape(8.dp)),
-                                    contentScale = ContentScale.Crop
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .size(64.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.secondaryContainer),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Image,
+                        for ((index, bmp) in pendingImages.withIndex()) {
+                            Box(modifier = Modifier.size(64.dp)) {
+                                if (bmp != null) {
+                                    Image(
+                                        bitmap = bmp,
                                         contentDescription = null,
-                                        modifier = Modifier.size(28.dp),
-                                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(RoundedCornerShape(8.dp)),
+                                        contentScale = ContentScale.Crop
                                     )
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.secondaryContainer),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Image,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(28.dp),
+                                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                    }
+                                }
+                                if (onRemoveImage != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(2.dp)
+                                            .size(18.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                                            .clickable(enabled = !inputLocked) { onRemoveImage(index) },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Remove image",
+                                            modifier = Modifier.size(12.dp),
+                                            tint = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
                                 }
                             }
                         }

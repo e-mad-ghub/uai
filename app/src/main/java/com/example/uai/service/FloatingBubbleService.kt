@@ -82,11 +82,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -1586,8 +1588,8 @@ class FloatingBubbleService : Service() {
                     prefersDraftConversation = false
                     switchConversation(conv.id, force = true)
                 }
-                convId = currentConversationId!!
-                val activeConversationId = convId!!
+                convId = currentConversationId ?: return@launch
+                val activeConversationId = convId
                 val persistedImageUri = imageList.firstOrNull()?.third
                     ?: imageList.firstOrNull()?.first?.let {
                         withContext(Dispatchers.IO) { persistImageAttachment(applicationContext, it) }
@@ -1609,8 +1611,8 @@ class FloatingBubbleService : Service() {
                 val thumbs = imageList.mapNotNull { it.second }
                 if (thumbs.isNotEmpty()) messageThumbnails[userMsg.id] = thumbs
 
-                assistantId = UUID.randomUUID().toString()
-                val messageId = assistantId!!
+                val messageId = UUID.randomUUID().toString()
+                assistantId = messageId
                 val assistantMsg = MessageEntity(
                     id = messageId,
                     conversationId = activeConversationId,
@@ -1680,7 +1682,7 @@ class FloatingBubbleService : Service() {
                         config = agent,
                         onStatusChanged = { status -> onlineSearchStatusMessage = status }
                     )
-                    .catch { e -> emit(StreamChunk.Error(e)) }
+                    .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
                     .collect { chunk ->
                         val id = assistantId ?: return@collect
                         val idx = chatMessages.indexOfFirst { it.id == id }

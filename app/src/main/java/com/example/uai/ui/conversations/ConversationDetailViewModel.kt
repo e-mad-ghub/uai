@@ -21,7 +21,9 @@ import com.example.uai.data.repository.ConversationRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -319,7 +321,7 @@ class ConversationDetailViewModel(
                         config = agent,
                         onStatusChanged = { status -> _onlineSearchStatus.value = status }
                     )
-                    .catch { e -> emit(StreamChunk.Error(e)) }
+                    .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
                     .collect { chunk ->
                         when (chunk) {
                             is StreamChunk.Token -> {

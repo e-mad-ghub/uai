@@ -290,7 +290,7 @@ fun AgoraDetailScreen(
                         eyebrow = stringResource(R.string.feature_room),
                         title = "Ask anything",
                         body = if (participantNames.isEmpty()) {
-                            "No assistants are active in this council room yet. Open room settings to add participants."
+                            "No assistants are active in this Agora room yet. Open room settings to add participants."
                         } else {
                             "All assistants reply by default. Type @Name or tap a chip when you want to direct the next turn."
                         },

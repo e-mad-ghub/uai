@@ -109,7 +109,7 @@ class AgoraDetailViewModel(
             return
         }
         if (agentIds.isEmpty()) {
-            _errorEvent.trySend("A council room must have at least one agent.")
+            _errorEvent.trySend("An Agora room must have at least one agent.")
             return
         }
         viewModelScope.launch {
@@ -146,7 +146,7 @@ class AgoraDetailViewModel(
                 // orphan messages when no participants are available to respond.
                 if (allAgents.isEmpty()) {
                     _errorEvent.trySend(
-                        "No agents in this council room. Tap the settings icon to add agents."
+                        "No agents in this Agora room. Tap the settings icon to add agents."
                     )
                     return@launch
                 }

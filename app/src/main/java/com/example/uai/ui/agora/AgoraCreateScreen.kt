@@ -41,7 +41,7 @@ fun AgoraCreateScreen(
                 title = {
                     ProductTopBarTitle(
                         title = stringResource(R.string.new_room),
-                        subtitle = stringResource(R.string.screen_new_council_subtitle)
+                        subtitle = stringResource(R.string.screen_new_agora_subtitle)
                     )
                 },
                 navigationIcon = {

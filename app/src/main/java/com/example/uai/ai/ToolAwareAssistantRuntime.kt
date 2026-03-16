@@ -119,12 +119,6 @@ private fun buildToolFailureMessage(toolRequest: AssistantToolRequest): ChatMess
     )
 }
 
-private data class CollectedProviderResponse(
-    val text: String,
-    val modelSelections: List<StreamChunk.ModelSelection>,
-    val error: Throwable? = null
-)
-
 class ToolAwareAssistantRuntime(
     private val providerFactory: (AgentConfig) -> AiProvider,
     private val searchToolExecutor: SearchToolExecutor,
@@ -158,11 +152,48 @@ class ToolAwareAssistantRuntime(
         repeat(maxToolRounds + 1) { round ->
             onStatusChanged("Generating the best answer…")
             val provider = providerFactory(toolAwareConfig)
-            val collected = collectProviderResponse(provider, workingMessages, toolAwareConfig)
 
-            collected.modelSelections.forEach { emit(it) }
+            // Collect tokens with early streaming: buffer only until we can tell whether
+            // the response starts with a <tool_request> block or is a real answer.
+            // Once we know it's a real answer, emit tokens as they arrive so the user
+            // sees text immediately rather than waiting for the full response.
+            val accumulated = StringBuilder()
+            val modelSelections = mutableListOf<StreamChunk.ModelSelection>()
+            var error: Throwable? = null
+            var streaming = false  // true once we've committed to emitting tokens live
 
-            val toolRequest = parseAssistantToolRequest(collected.text)
+            provider.streamResponse(workingMessages, toolAwareConfig).collect { chunk ->
+                when (chunk) {
+                    is StreamChunk.Token -> {
+                        accumulated.append(chunk.text)
+                        if (!streaming) {
+                            val trimmed = accumulated.toString().trimStart()
+                            when {
+                                trimmed.contains(TOOL_REQUEST_TAG) -> {
+                                    // It's a tool request — keep buffering, don't emit anything.
+                                }
+                                trimmed.length > TOOL_REQUEST_TAG.length + 2 -> {
+                                    // Enough chars arrived without a tool-request prefix:
+                                    // this is a real answer. Flush the buffer and go live.
+                                    streaming = true
+                                    emit(StreamChunk.Token(accumulated.toString()))
+                                }
+                            }
+                        } else {
+                            // Already streaming — emit each delta as it arrives.
+                            emit(StreamChunk.Token(chunk.text))
+                        }
+                    }
+                    is StreamChunk.ModelSelection -> modelSelections += chunk
+                    is StreamChunk.Error -> error = chunk.cause
+                    is StreamChunk.Done -> Unit
+                }
+            }
+
+            modelSelections.forEach { emit(it) }
+
+            val fullText = accumulated.toString().trim()
+            val toolRequest = parseAssistantToolRequest(fullText)
             if (toolRequest != null && round < maxToolRounds) {
                 onStatusChanged("Looking up one more detail online…")
                 val toolResult = if (toolRequest.tool == SEARCH_TOOL_NAME) {
@@ -190,43 +221,17 @@ class ToolAwareAssistantRuntime(
                 return@repeat
             }
 
-            val sanitized = sanitizeGroundedAssistantResponse(collected.text)
-            if (sanitized.isNotBlank()) {
-                emit(StreamChunk.Token(sanitized))
+            // If we never started streaming (tool-request buffer that wasn't a tool call,
+            // or response was very short), emit the full text now as a single token.
+            if (!streaming) {
+                val sanitized = sanitizeGroundedAssistantResponse(fullText)
+                if (sanitized.isNotBlank()) emit(StreamChunk.Token(sanitized))
             }
-            if (collected.error != null) {
-                emit(StreamChunk.Error(collected.error))
-            } else {
-                emit(StreamChunk.Done)
-            }
+            if (error != null) emit(StreamChunk.Error(error!!))
+            else emit(StreamChunk.Done)
             return@flow
         }
 
         emit(StreamChunk.Error(IllegalStateException("ScreenAgent tool loop exceeded the allowed number of rounds.")))
     }.flowOn(Dispatchers.IO)
-
-    private suspend fun collectProviderResponse(
-        provider: AiProvider,
-        messages: List<ChatMessage>,
-        config: AgentConfig
-    ): CollectedProviderResponse {
-        val text = StringBuilder()
-        val modelSelections = mutableListOf<StreamChunk.ModelSelection>()
-        var error: Throwable? = null
-
-        provider.streamResponse(messages, config).collect { chunk ->
-            when (chunk) {
-                is StreamChunk.Token -> text.append(chunk.text)
-                is StreamChunk.ModelSelection -> modelSelections += chunk
-                is StreamChunk.Error -> error = chunk.cause
-                is StreamChunk.Done -> Unit
-            }
-        }
-
-        return CollectedProviderResponse(
-            text = text.toString().trim(),
-            modelSelections = modelSelections,
-            error = error
-        )
-    }
 }

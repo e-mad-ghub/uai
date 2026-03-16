@@ -3,6 +3,7 @@ package com.example.uai.ui.agora
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.uai.ai.AssistantStreamingSession
 import com.example.uai.ai.ChatMessage
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
@@ -23,7 +24,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -65,8 +68,26 @@ class AgoraDetailViewModel(
     val conversation = repo.getConversation(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    val messages = repo.getMessages(conversationId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    // Flat map of messageId → session State, updated directly by each agent's session collector.
+    // This avoids the fragile flatMapLatest+combine(List<Flow>) pattern that caused Agora
+    // to show only one reply when multiple agents responded in parallel.
+    private val _sessionStates = MutableStateFlow<Map<String, AssistantStreamingSession.State>>(emptyMap())
+    // Keyed by assistantId; used only for stopResponse() to call markStopped() on each session.
+    private val activeSessions = mutableMapOf<String, AssistantStreamingSession>()
+
+    val messages: StateFlow<List<MessageEntity>> = combine(
+        repo.getMessages(conversationId),
+        _sessionStates
+    ) { dbMessages, sessionStates ->
+        if (sessionStates.isEmpty()) return@combine dbMessages
+        dbMessages.mapNotNull { msg ->
+            val state = sessionStates[msg.id] ?: return@mapNotNull msg
+            when {
+                state.hidden -> null
+                else -> msg.copy(content = state.content, isStreaming = state.isStreaming)
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** All agents configured in the app — used by the room-edit bottom sheet. */
     val allAvailableAgents: StateFlow<List<AgentConfig>> = agentRepo.agentsFlow
@@ -100,6 +121,21 @@ class AgoraDetailViewModel(
     fun stopResponse() {
         streamingJob?.cancel()
         streamingJob = null
+        _isLoading.value = false
+        _onlineSearchStatus.value = null
+        activeSessions.values.forEach { it.markStopped() }
+        // The state collector coroutines are children of the per-agent coroutines and are
+        // cancelled along with streamingJob, so markStopped()'s isStreaming=false update may
+        // never reach _sessionStates. Clear the streaming flag directly so typing indicators
+        // disappear immediately rather than waiting for the async finally blocks to finish.
+        _sessionStates.update { states ->
+            states.mapValues { (_, state) ->
+                // Also hide entries with no content — avoids a ~2s empty bubble flash
+                // while the NonCancellable finally blocks run the DB cleanup.
+                if (state.content.isBlank()) state.copy(isStreaming = false, hidden = true)
+                else state.copy(isStreaming = false)
+            }
+        }
     }
 
     /** Update room name and/or agent list. Either can be blank/empty to leave unchanged. */
@@ -136,6 +172,9 @@ class AgoraDetailViewModel(
         streamingJob = viewModelScope.launch {
             _isLoading.value = true
             _inputText.value = ""
+            // Clear stale overlay entries left from the previous round (entries are intentionally
+            // kept alive until here so the final isStreaming=false state bridges any Room lag).
+            _sessionStates.value = emptyMap()
 
             try {
                 val allCurrentAgents = agentRepo.agentsFlow.first()
@@ -244,129 +283,147 @@ class AgoraDetailViewModel(
                         return@launch
                     }
 
-                    // Option A history: group into rounds so each agent's "assistant" slot
-                    // contains only its own words. Other agents' turns are appended to the
-                    // preceding user message as "[Name said]: …" context. This eliminates
-                    // the cross-agent role confusion caused by merged assistant buffers.
-                    val history = buildList<ChatMessage> {
-                        val rounds = mutableListOf<Pair<MessageEntity, List<MessageEntity>>>()
-                        var pendingUser: MessageEntity? = null
-                        val pendingAssistants = mutableListOf<MessageEntity>()
-                        for (msg in historyMessages) {
-                            if (msg.role == "user") {
-                                pendingUser?.let { rounds.add(it to pendingAssistants.toList()) }
-                                pendingAssistants.clear()
-                                pendingUser = msg
-                            } else {
-                                pendingAssistants.add(msg)
-                            }
-                        }
-                        pendingUser?.let { rounds.add(it to pendingAssistants.toList()) }
-
-                        rounds.forEachIndexed { roundIdx, (userMsg, assistants) ->
-                            val isLastRound = roundIdx == rounds.lastIndex
-                            // Other agents from historical rounds (current-round agents run in parallel)
-                            val otherAll = assistants.filter { it.agentName != agent.name }
-
-                            val contextSuffix = if (otherAll.isNotEmpty())
-                                "\n\n[Other participants in this round — read-only context, do not continue:]\n" +
-                                otherAll.joinToString("\n") { "${it.agentName}: ${it.content}" } +
-                                "\n[End of other participants' context]"
-                            else ""
-
-                            val userText = userMsg.content + contextSuffix
-                            when {
-                                isLastRound && imageBase64 != null ->
-                                    add(
-                                        userMsg.toChatMessage(
-                                            contentOverride = userText,
-                                            images = listOf(ImageAttachment(imageBase64))
-                                        )
-                                    )
-                                else ->
-                                    add(userMsg.toChatMessage(contentOverride = userText))
-                            }
-
-                            // This agent's own past response (absent on the last round — generating now)
-                            assistants.find { it.agentId == agent.id }
-                                ?: assistants.find { it.agentName == agent.name }
-                                ?.let { add(it.toChatMessage()) }
+                    // Create the session BEFORE any network calls (history build + web search).
+                    // This ensures _sessionStates is populated immediately so stopResponse()
+                    // can call markStopped(), and the finally block always cleans up the DB
+                    // placeholder even if the coroutine is cancelled during prepareTurn().
+                    val session = AssistantStreamingSession(assistantId)
+                    session.start(this)
+                    activeSessions[assistantId] = session
+                    // Collect this session's state changes into the shared flat map so the UI
+                    // sees all agents' states simultaneously without flatMapLatest restarts.
+                    // The Job reference is cancelled in the finally block — StateFlow.collect
+                    // never terminates on its own, so without an explicit cancel the per-agent
+                    // coroutine would hang waiting for this child and coroutineScope{} would
+                    // never return, keeping _isLoading=true indefinitely.
+                    val stateCollectorJob = launch {
+                        session.state.collect { state ->
+                            _sessionStates.update { it + (assistantId to state) }
                         }
                     }
-                    val scopedGroundingText = extractAgentScopedGroundingText(
-                        text = text,
-                        agentName = agent.name,
-                        allAgentNames = agents.map { it.name }
-                    )
-                    val groundingSeedHistory = history.mapIndexed { index, message ->
-                        if (index == history.lastIndex && message.role == "user") {
-                            message.copy(content = scopedGroundingText)
-                        } else {
-                            message
-                        }
-                    }
-                    val groundedHistory = webGateway.prepareTurn(
-                        conversationKey = conversationId,
-                        messages = groundingSeedHistory,
-                        planningConfig = agent,
-                        onStatusChanged = { status -> _onlineSearchStatus.value = status }
-                    ).grounding?.let { grounding ->
-                        webGateway.applyGrounding(history, grounding)
-                    } ?: history
-
-                    val otherNames = agentOtherNames[agent.id] ?: emptyList()
-                    val nameContext = buildString {
-                        append("You are participating in a group discussion. ")
-                        append("Your name is \"${agent.name}\". ")
-                        if (otherNames.isNotEmpty()) {
-                            append("The other participants are: ${otherNames.joinToString(", ")}. ")
-                            append(
-                                "IMPORTANT: You may only speak as yourself. " +
-                                "Never write what ${otherNames.joinToString(" or ")} would say. " +
-                                "Do not simulate, quote, roleplay, or predict any other participant. " +
-                                "Do NOT describe, announce, or narrate what another participant will do — " +
-                                "for example, do not write phrases like 'the Professor will now...' or '${otherNames.first()} will add...'. " +
-                                "If asked to play a game or task alongside others, only perform your own assigned action, then stop immediately. "
-                            )
-                        }
-                        // Only inject reply context when this specific agent was targeted
-                        if (replyToMessage != null && targetedAgents != null) {
-                            append(
-                                "The user is replying directly to your previous message: " +
-                                "\"${replyToMessage.content.take(300)}\". " +
-                                "Focus your response as a follow-up to that message. "
-                            )
-                        }
-                        append(
-                            "You have been selected to respond. " +
-                            "Write your reply directly — no name tag, no prefix, no label of any kind. " +
-                            "CRITICAL: The conversation history contains context blocks like '[Name said]: ...' showing what other participants said. " +
-                            "Do NOT reproduce, continue, or append these blocks. They are read-only context. " +
-                            "Your reply ends when you finish your own thought. Stop there. "
-                        )
-                    }
-                    val agoraAgent = agent.copy(
-                        systemPrompt = "$nameContext\n\n${agent.systemPrompt}".trim()
-                    )
-
-                    fun String.stripNamePrefix(): String {
-                        // Strip any [Name]: or [Name said]: prefix at the start
-                        var s = replace(Regex("^\\[.+?(?:\\s+said)?\\]:\\s*"), "")
-                        // Truncate at any other participant's marker mid-response
-                        for (name in otherNames) {
-                            for (marker in listOf("[${name}]:", "[${name} said]:")) {
-                                val idx = s.indexOf(marker)
-                                if (idx >= 0) s = s.substring(0, idx).trimEnd()
-                            }
-                        }
-                        return s
-                    }
-
                     var accumulated = ""
                     val streamingWriter = ThrottledStreamingMessageWriter { content, isStreaming ->
                         repo.updateMessageContent(assistantId, content, isStreaming)
                     }
                     try {
+                        // Option A history: group into rounds so each agent's "assistant" slot
+                        // contains only its own words. Other agents' turns are appended to the
+                        // preceding user message as "[Name said]: …" context. This eliminates
+                        // the cross-agent role confusion caused by merged assistant buffers.
+                        val history = buildList<ChatMessage> {
+                            val rounds = mutableListOf<Pair<MessageEntity, List<MessageEntity>>>()
+                            var pendingUser: MessageEntity? = null
+                            val pendingAssistants = mutableListOf<MessageEntity>()
+                            for (msg in historyMessages) {
+                                if (msg.role == "user") {
+                                    pendingUser?.let { rounds.add(it to pendingAssistants.toList()) }
+                                    pendingAssistants.clear()
+                                    pendingUser = msg
+                                } else {
+                                    pendingAssistants.add(msg)
+                                }
+                            }
+                            pendingUser?.let { rounds.add(it to pendingAssistants.toList()) }
+
+                            rounds.forEachIndexed { roundIdx, (userMsg, assistants) ->
+                                val isLastRound = roundIdx == rounds.lastIndex
+                                // Other agents from historical rounds (current-round agents run in parallel)
+                                val otherAll = assistants.filter { it.agentName != agent.name }
+
+                                val contextSuffix = if (otherAll.isNotEmpty())
+                                    "\n\n[Other participants in this round — read-only context, do not continue:]\n" +
+                                    otherAll.joinToString("\n") { "${it.agentName}: ${it.content}" } +
+                                    "\n[End of other participants' context]"
+                                else ""
+
+                                val userText = userMsg.content + contextSuffix
+                                when {
+                                    isLastRound && imageBase64 != null ->
+                                        add(
+                                            userMsg.toChatMessage(
+                                                contentOverride = userText,
+                                                images = listOf(ImageAttachment(imageBase64))
+                                            )
+                                        )
+                                    else ->
+                                        add(userMsg.toChatMessage(contentOverride = userText))
+                                }
+
+                                // This agent's own past response (absent on the last round — generating now)
+                                assistants.find { it.agentId == agent.id }
+                                    ?: assistants.find { it.agentName == agent.name }
+                                    ?.let { add(it.toChatMessage()) }
+                            }
+                        }
+                        val scopedGroundingText = extractAgentScopedGroundingText(
+                            text = text,
+                            agentName = agent.name,
+                            allAgentNames = agents.map { it.name }
+                        )
+                        val groundingSeedHistory = history.mapIndexed { index, message ->
+                            if (index == history.lastIndex && message.role == "user") {
+                                message.copy(content = scopedGroundingText)
+                            } else {
+                                message
+                            }
+                        }
+                        val groundedHistory = webGateway.prepareTurn(
+                            conversationKey = conversationId,
+                            messages = groundingSeedHistory,
+                            planningConfig = agent,
+                            onStatusChanged = { status -> _onlineSearchStatus.value = status }
+                        ).grounding?.let { grounding ->
+                            webGateway.applyGrounding(history, grounding)
+                        } ?: history
+
+                        val otherNames = agentOtherNames[agent.id] ?: emptyList()
+                        val nameContext = buildString {
+                            append("You are participating in a group discussion. ")
+                            append("Your name is \"${agent.name}\". ")
+                            if (otherNames.isNotEmpty()) {
+                                append("The other participants are: ${otherNames.joinToString(", ")}. ")
+                                append(
+                                    "IMPORTANT: You may only speak as yourself. " +
+                                    "Never write what ${otherNames.joinToString(" or ")} would say. " +
+                                    "Do not simulate, quote, roleplay, or predict any other participant. " +
+                                    "Do NOT describe, announce, or narrate what another participant will do — " +
+                                    "for example, do not write phrases like 'the Professor will now...' or '${otherNames.first()} will add...'. " +
+                                    "If asked to play a game or task alongside others, only perform your own assigned action, then stop immediately. "
+                                )
+                            }
+                            // Only inject reply context when this specific agent was targeted
+                            if (replyToMessage != null && targetedAgents != null) {
+                                append(
+                                    "The user is replying directly to your previous message: " +
+                                    "\"${replyToMessage.content.take(300)}\". " +
+                                    "Focus your response as a follow-up to that message. "
+                                )
+                            }
+                            append(
+                                "You have been selected to respond. " +
+                                "Write your reply directly — no name tag, no prefix, no label of any kind. " +
+                                "CRITICAL: The conversation history contains context blocks like '[Name said]: ...' showing what other participants said. " +
+                                "Do NOT reproduce, continue, or append these blocks. They are read-only context. " +
+                                "Your reply ends when you finish your own thought. Stop there. "
+                            )
+                        }
+                        val agoraAgent = agent.copy(
+                            systemPrompt = "$nameContext\n\n${agent.systemPrompt}".trim()
+                        )
+
+                        fun String.stripNamePrefix(): String {
+                            // Strip any [Name]: or [Name said]: prefix at the start
+                            var s = replace(Regex("^\\[.+?(?:\\s+said)?\\]:\\s*"), "")
+                            // Truncate at any other participant's marker mid-response
+                            for (name in otherNames) {
+                                for (marker in listOf("[${name}]:", "[${name} said]:")) {
+                                    val idx = s.indexOf(marker)
+                                    if (idx >= 0) s = s.substring(0, idx).trimEnd()
+                                }
+                            }
+                            return s
+                        }
+
                         assistantRuntime
                             .streamResponse(
                                 conversationKey = conversationId,
@@ -374,14 +431,14 @@ class AgoraDetailViewModel(
                                 config = agoraAgent,
                                 onStatusChanged = { status -> _onlineSearchStatus.value = status }
                             )
-                            .catch { e -> emit(StreamChunk.Error(e)) }
+                            .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
                             .collect { chunk ->
                                 when (chunk) {
                                     is StreamChunk.Token -> {
                                         accumulated = (accumulated + chunk.text).stripNamePrefix()
-                                        streamingWriter.emitStreaming(
-                                            sanitizeGroundedAssistantResponse(accumulated)
-                                        )
+                                        val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                                        session.onToken(sanitized)
+                                        streamingWriter.emitStreaming(sanitized)
                                     }
                                     is StreamChunk.ModelSelection -> {
                                         repo.updateMessageResponseModel(
@@ -409,12 +466,34 @@ class AgoraDetailViewModel(
                         )
                     } finally {
                         withContext(NonCancellable) {
-                            if (accumulated.isBlank()) repo.deleteMessage(assistantId)
-                            else {
+                            // Cancel the state collector first so it stops feeding _sessionStates.
+                            stateCollectorJob.cancel()
+                            if (accumulated.isBlank()) {
+                                // Suppress the placeholder immediately via hidden=true before Room
+                                // propagates the deletion — avoids a flash of isStreaming=true.
+                                _sessionStates.update { states ->
+                                    val cur = states[assistantId]
+                                    if (cur != null) states + (assistantId to cur.copy(isStreaming = false, hidden = true))
+                                    else states
+                                }
+                                session.markDeleted()
+                                repo.deleteMessage(assistantId)
+                            } else {
                                 val sanitized = sanitizeGroundedAssistantResponse(accumulated)
                                 streamingWriter.emitFinal(sanitized)
-                                accumulated = sanitized
+                                session.finalize(sanitized)
+                                // Lock the overlay entry to isStreaming=false before Room catches up.
+                                // Do NOT remove the entry here — MutableStateFlow conflates rapid
+                                // updates, so set-then-remove may be seen as just "remove", causing
+                                // the stale DB message (still isStreaming=true) to flash back.
+                                // Stale entries are cleared at the start of the next sendMessage().
+                                _sessionStates.update { states ->
+                                    val cur = states[assistantId]
+                                    if (cur != null) states + (assistantId to cur.copy(content = sanitized, isStreaming = false))
+                                    else states
+                                }
                             }
+                            activeSessions.remove(assistantId)
                         }
                     }
 

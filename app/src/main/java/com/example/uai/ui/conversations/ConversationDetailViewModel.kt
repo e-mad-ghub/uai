@@ -3,6 +3,7 @@ package com.example.uai.ui.conversations
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.uai.ai.AssistantStreamingSession
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
@@ -44,8 +45,24 @@ class ConversationDetailViewModel(
     val conversation = repo.getConversation(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    val messages = repo.getMessages(conversationId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val _activeSession = MutableStateFlow<AssistantStreamingSession?>(null)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val sessionStateFlow: Flow<AssistantStreamingSession.State?> =
+        _activeSession.flatMapLatest { it?.state ?: flowOf(null) }
+
+    val messages: StateFlow<List<MessageEntity>> = combine(
+        repo.getMessages(conversationId),
+        sessionStateFlow
+    ) { dbMessages, state ->
+        if (state == null) return@combine dbMessages
+        dbMessages.mapNotNull { msg ->
+            when {
+                msg.id != state.messageId -> msg
+                state.hidden -> null
+                else -> msg.copy(content = state.content, isStreaming = state.isStreaming)
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val agents = agentRepo.agentsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -142,6 +159,9 @@ class ConversationDetailViewModel(
     fun stopResponse() {
         streamingJob?.cancel()
         streamingJob = null
+        _isLoading.value = false
+        _onlineSearchStatus.value = null
+        _activeSession.value?.markStopped()
     }
 
     private suspend fun repairConversationAssignmentIfNeeded(
@@ -283,37 +303,33 @@ class ConversationDetailViewModel(
                     agentName = agent.name
                 )
             )
+            val session = AssistantStreamingSession(assistantId)
+            session.start(this)
+            _activeSession.value = session
             var accumulated = ""
             val streamingWriter = ThrottledStreamingMessageWriter { content, isStreaming ->
                 repo.updateMessageContent(assistantId, content, isStreaming)
             }
 
-            // If the agent doesn't support the attachment type, say so in the chat
-            if (images.isNotEmpty() && !agent.canHandleImageRequests()) {
-                val notice =
-                    "I don't support image analysis with \"${agent.model}\". Please switch to a vision-capable model in agent settings."
-                accumulated = notice
-                repo.updateMessageContent(
-                    assistantId,
-                    notice,
-                    false
-                )
-                repo.touchConversation(conversationId)
-                return@launch
-            }
-
-            // Build history; the latest user message already has imagesJson stored in DB.
-            val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
-            val history = dbHistory.map { msg -> msg.toChatMessage() }
-            val groundedHistory = webGateway.prepareTurn(
-                conversationKey = conversationId,
-                messages = history,
-                planningConfig = agent
-            ) { status ->
-                _onlineSearchStatus.value = status
-            }.messages
-
             try {
+                // If the agent doesn't support the attachment type, say so in the chat
+                if (images.isNotEmpty() && !agent.canHandleImageRequests()) {
+                    accumulated =
+                        "I don't support image analysis with \"${agent.model}\". Please switch to a vision-capable model in agent settings."
+                    return@launch
+                }
+
+                // Build history; the latest user message already has imagesJson stored in DB.
+                val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
+                val history = dbHistory.map { msg -> msg.toChatMessage() }
+                val groundedHistory = webGateway.prepareTurn(
+                    conversationKey = conversationId,
+                    messages = history,
+                    planningConfig = agent
+                ) { status ->
+                    _onlineSearchStatus.value = status
+                }.messages
+
                 assistantRuntime
                     .streamResponse(
                         conversationKey = conversationId,
@@ -326,9 +342,9 @@ class ConversationDetailViewModel(
                         when (chunk) {
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
-                                streamingWriter.emitStreaming(
-                                    sanitizeGroundedAssistantResponse(accumulated)
-                                )
+                                val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                                session.onToken(sanitized)
+                                streamingWriter.emitStreaming(sanitized)
                             }
                             is StreamChunk.ModelSelection -> {
                                 repo.updateMessageResponseModel(
@@ -356,14 +372,26 @@ class ConversationDetailViewModel(
                 // NonCancellable lets us call suspend functions even when cancelled.
                 withContext(NonCancellable) {
                     if (accumulated.isBlank()) {
+                        session.markDeleted()
                         repo.deleteMessage(assistantId)
                     } else {
                         val sanitized = sanitizeGroundedAssistantResponse(accumulated)
                         streamingWriter.emitFinal(sanitized)
+                        session.finalize(sanitized)
                     }
                     repo.touchConversation(conversationId)
-                    _onlineSearchStatus.value = null
-                    _isLoading.value = false
+                    // Guard: stopResponse() sets _isLoading=false immediately, which lets
+                    // a new sendMessage() start before this finally block runs. Only clear
+                    // loading state if this session is still the active one — otherwise
+                    // we'd wipe out the new message's streaming overlay.
+                    // Note: _activeSession is intentionally NOT nulled out here. Keeping the
+                    // session alive (hidden=true or isStreaming=false) bridges the Room
+                    // propagation lag so the empty bubble doesn't flash back. The next
+                    // sendMessage() overwrites _activeSession with the new session.
+                    if (_activeSession.value === session) {
+                        _onlineSearchStatus.value = null
+                        _isLoading.value = false
+                    }
                 }
             }
         }

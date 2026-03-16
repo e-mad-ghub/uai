@@ -56,6 +56,7 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.uai.MainActivity
 import com.example.uai.R
 import com.example.uai.UaiApplication
+import com.example.uai.ai.AssistantStreamingSession
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
@@ -131,6 +132,7 @@ class FloatingBubbleService : Service() {
     private var miniChatMinimizeTipDismissed by mutableStateOf(false)
     private var miniChatScreenshotHintMessage by mutableStateOf<String?>(null)
     private var onlineSearchStatusMessage by mutableStateOf<String?>(null)
+    private var currentSession by mutableStateOf<AssistantStreamingSession?>(null)
 
     // Attachment state
     // Each Triple: (base64, ImageBitmap?, uriStr?)
@@ -773,8 +775,26 @@ class FloatingBubbleService : Service() {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 UaiTheme(colorTheme = colorTheme) {
+                    val sessionState by produceState<AssistantStreamingSession.State?>(null, currentSession) {
+                        val session = currentSession
+                        if (session == null) { value = null; return@produceState }
+                        session.state.collect { value = it }
+                    }
+                    val displayMessages by remember {
+                        derivedStateOf {
+                            val state = sessionState
+                            if (state == null) chatMessages.toList()
+                            else chatMessages.mapNotNull { msg ->
+                                when {
+                                    msg.id != state.messageId -> msg
+                                    state.hidden -> null
+                                    else -> msg.copy(content = state.content, isStreaming = state.isStreaming)
+                                }
+                            }
+                        }
+                    }
                     ChatPanel(
-                        messages = chatMessages,
+                        messages = displayMessages,
                         inputText = inputText,
                         isLoading = isLoading,
                         agentName = selectedAgentForCurrentContext()?.name ?: "Select assistant",
@@ -1533,6 +1553,8 @@ class FloatingBubbleService : Service() {
         streamingJob?.cancel()
         streamingJob = null
         isLoading = false
+        onlineSearchStatusMessage = null
+        currentSession?.markStopped()
     }
 
     private fun sendMessage(text: String) {
@@ -1562,6 +1584,7 @@ class FloatingBubbleService : Service() {
             var assistantId: String? = null
             var accumulated = ""
             var streamingWriter: ThrottledStreamingMessageWriter? = null
+            var session: AssistantStreamingSession? = null
 
             try {
                 if (currentConversationId == null) {
@@ -1625,6 +1648,9 @@ class FloatingBubbleService : Service() {
                 )
                 container.conversationRepository.insertMessage(assistantMsg)
                 chatMessages.add(assistantMsg)
+                session = AssistantStreamingSession(messageId)
+                session!!.start(serviceScope)
+                currentSession = session
 
                 // If agent doesn't support vision, insert a capability notice instead of calling API
                 if (imageList.isNotEmpty() && !agent.canHandleImageRequests()) {
@@ -1661,13 +1687,6 @@ class FloatingBubbleService : Service() {
                 }.messages
 
                 streamingWriter = ThrottledStreamingMessageWriter { content, isStreaming ->
-                    val idx = chatMessages.indexOfFirst { it.id == messageId }
-                    if (idx != -1) {
-                        chatMessages[idx] = chatMessages[idx].copy(
-                            content = content,
-                            isStreaming = isStreaming
-                        )
-                    }
                     container.conversationRepository.updateMessageContent(
                         messageId,
                         content,
@@ -1689,9 +1708,9 @@ class FloatingBubbleService : Service() {
                         when (chunk) {
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
-                                streamingWriter?.emitStreaming(
-                                    sanitizeGroundedAssistantResponse(accumulated)
-                                )
+                                val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                                session?.onToken(sanitized)
+                                streamingWriter?.emitStreaming(sanitized)
                             }
                             is StreamChunk.ModelSelection -> {
                                 if (idx != -1) {
@@ -1720,14 +1739,18 @@ class FloatingBubbleService : Service() {
                     if (id != null) {
                         val idx = chatMessages.indexOfFirst { it.id == id }
                         if (accumulated.isBlank()) {
+                            session?.markDeleted()
                             if (idx != -1) chatMessages.removeAt(idx)
                             container.conversationRepository.deleteMessage(id)
                         } else {
                             val sanitized = sanitizeGroundedAssistantResponse(accumulated)
                             streamingWriter?.emitFinal(sanitized)
+                            session?.finalize(sanitized)
+                            if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = sanitized, isStreaming = false)
                         }
                         convId?.let { container.conversationRepository.touchConversation(it) }
                     }
+                    currentSession = null
                     onlineSearchStatusMessage = null
                     isLoading = false
                 }

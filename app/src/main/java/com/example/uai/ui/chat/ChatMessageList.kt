@@ -188,9 +188,6 @@ fun ChatMessageList(
             .take(2)
             .count() > 1
     }
-    val activeStreamingMessageId = remember(messages) {
-        messages.lastOrNull { it.role == "assistant" && it.isStreaming && it.content.isEmpty() }?.id
-    }
 
     Box(modifier = modifier.fillMaxWidth()) {
         LazyColumn(
@@ -225,7 +222,7 @@ fun ChatMessageList(
                     message = message,
                     showAgentName = message.role != "assistant" || showAssistantNames,
                     thumbnails = messageThumbnails[message.id] ?: emptyList(),
-                    streamingStatusText = if (message.id == activeStreamingMessageId) {
+                    streamingStatusText = if (message.role == "assistant" && message.isStreaming && message.content.isEmpty()) {
                         animatedLoadingStatusText
                     } else {
                         null

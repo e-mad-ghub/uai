@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,8 +49,10 @@ import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.CustomProviderPreset
 import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.data.model.hasInternetAccess
 import com.example.uai.data.model.isOpenRouterFreeModel
 import com.example.uai.data.model.normalizeOpenAiCompatibleBaseUrl
+import com.example.uai.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
 import com.example.uai.ui.components.ProductPill
 import com.example.uai.ui.components.ProductScreenIntro
 import com.example.uai.ui.components.ProductTopBarTitle
@@ -424,6 +427,11 @@ fun AgentEditScreen(
                                         supportingText = stringResource(R.string.assistants_custom_model_hint)
                                     )
                                 }
+                                InternetAccessToggle(
+                                    isScreenAgentOptimized = agent.model == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
+                                    enabled = agent.hasInternetAccess,
+                                    onToggle = { viewModel.update { copy(agentSideInternetAccess = it) } }
+                                )
                                 OutlinedTextField(
                                     value = agent.systemPrompt,
                                     onValueChange = { viewModel.update { copy(systemPrompt = it) } },
@@ -960,5 +968,37 @@ private fun CapabilityBadge(label: String) {
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSecondaryContainer
         )
+    }
+}
+
+@Composable
+private fun InternetAccessToggle(
+    isScreenAgentOptimized: Boolean,
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text("AgentSide Internet Access", style = MaterialTheme.typography.labelLarge)
+            Text(
+                text = if (isScreenAgentOptimized) {
+                    "Live web search before each reply. On by default for ScreenAgent Optimized."
+                } else {
+                    "Enables live web search. Works best with capable instruction-following models."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(checked = enabled, onCheckedChange = onToggle)
     }
 }

@@ -3,6 +3,7 @@ package com.example.uai.ui.conversations
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.uai.ai.AiProvider
 import com.example.uai.ai.AssistantStreamingSession
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
@@ -17,10 +18,12 @@ import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.db.toChatMessage
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.data.model.hasInternetAccess
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.*
@@ -34,7 +37,8 @@ class ConversationDetailViewModel(
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
     private val assistantRuntime: ToolAwareAssistantRuntime,
-    private val webGateway: WebGateway
+    private val webGateway: WebGateway,
+    private val providerFactory: (AgentConfig) -> AiProvider
 ) : ViewModel() {
 
     private data class RepairResolution(
@@ -322,51 +326,90 @@ class ConversationDetailViewModel(
                 // Build history; the latest user message already has imagesJson stored in DB.
                 val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
                 val history = dbHistory.map { msg -> msg.toChatMessage() }
-                val groundedHistory = webGateway.prepareTurn(
-                    conversationKey = conversationId,
-                    messages = history,
-                    planningConfig = agent
-                ) { status ->
-                    _onlineSearchStatus.value = status
-                }.messages
 
-                assistantRuntime
-                    .streamResponse(
-                        conversationKey = conversationId,
-                        messages = groundedHistory,
-                        config = agent,
-                        onStatusChanged = { status -> _onlineSearchStatus.value = status }
-                    )
-                    .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
-                    .collect { chunk ->
-                        when (chunk) {
-                            is StreamChunk.Token -> {
-                                accumulated += chunk.text
-                                val sanitized = sanitizeGroundedAssistantResponse(accumulated)
-                                session.onToken(sanitized)
-                                streamingWriter.emitStreaming(sanitized)
-                            }
-                            is StreamChunk.ModelSelection -> {
-                                repo.updateMessageResponseModel(
-                                    assistantId,
-                                    chunk.modelId,
-                                    chunk.viaFallback
-                                )
-                            }
-                            is StreamChunk.Done -> Unit
-                            is StreamChunk.Error -> {
-                                val errMsg = chunk.cause.message ?: "Unknown error"
-                                accumulated = if (accumulated.isBlank()) {
-                                    "[Error: $errMsg]"
-                                } else {
-                                    "$accumulated\n[Error: $errMsg]"
-                                }
-                                _errorEvent.trySend(
-                                    "Request failed: $errMsg\n\nThe model \"${agent.model}\" may not support this request. Try switching to a different model."
-                                )
-                            }
+                // Shared chunk processor used by both paths below.
+                suspend fun processChunk(chunk: StreamChunk) {
+                    when (chunk) {
+                        is StreamChunk.Token -> {
+                            accumulated += chunk.text
+                            val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                            session.onToken(sanitized)
+                            streamingWriter.emitStreaming(sanitized)
+                        }
+                        is StreamChunk.ModelSelection ->
+                            repo.updateMessageResponseModel(assistantId, chunk.modelId, chunk.viaFallback)
+                        is StreamChunk.Done -> Unit
+                        is StreamChunk.Error -> {
+                            val errMsg = chunk.cause.message ?: "Unknown error"
+                            accumulated = if (accumulated.isBlank()) "[Error: $errMsg]"
+                                         else "$accumulated\n[Error: $errMsg]"
+                            _errorEvent.trySend(
+                                "Request failed: $errMsg\n\nThe model \"${agent.model}\" may not support this request. Try switching to a different model."
+                            )
                         }
                     }
+                }
+
+                if (agent.hasInternetAccess) {
+                    // AgentSide Internet Access ON:
+                    // Run web-search planning and the speculative main AI call concurrently.
+                    // The speculative call uses the ungrounded history and buffers every chunk it
+                    // receives. Nothing is shown to the user until planning signals its decision:
+                    //   • No search needed → flush the pre-filled buffer, then continue live streaming.
+                    //   • Search performed → cancel the speculative call and restart with grounded history.
+                    val planningDeferred = async {
+                        try {
+                            webGateway.prepareTurn(
+                                conversationKey = conversationId,
+                                messages = history,
+                                planningConfig = agent
+                            ) { status -> _onlineSearchStatus.value = status }
+                        } catch (_: Exception) { null }
+                    }
+
+                    val speculativeBuffer = Channel<StreamChunk>(Channel.UNLIMITED)
+                    val speculativeJob = launch {
+                        try {
+                            assistantRuntime
+                                .streamResponse(
+                                    conversationKey = conversationId,
+                                    messages = history,
+                                    config = agent,
+                                    onStatusChanged = { status -> _onlineSearchStatus.value = status }
+                                )
+                                .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
+                                .collect { speculativeBuffer.send(it) }
+                        } finally {
+                            speculativeBuffer.close()
+                        }
+                    }
+
+                    val preparedTurn = planningDeferred.await()
+
+                    if (preparedTurn?.grounding != null) {
+                        speculativeJob.cancel()
+                        assistantRuntime
+                            .streamResponse(
+                                conversationKey = conversationId,
+                                messages = preparedTurn.messages,
+                                config = agent,
+                                onStatusChanged = { status -> _onlineSearchStatus.value = status }
+                            )
+                            .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
+                            .collect { chunk -> processChunk(chunk) }
+                    } else {
+                        for (chunk in speculativeBuffer) {
+                            processChunk(chunk)
+                        }
+                    }
+                } else {
+                    // AgentSide Internet Access OFF: call the raw provider directly,
+                    // no planning overhead, no tool-aware system prompt additions.
+                    providerFactory(agent)
+                        .streamResponse(history, agent)
+                        .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
+                        .collect { chunk -> processChunk(chunk) }
+                }
             } finally {
                 // Runs on both normal completion AND cancellation (user pressed stop).
                 // NonCancellable lets us call suspend functions even when cancelled.
@@ -402,7 +445,8 @@ class ConversationDetailViewModel(
         private val repo: ConversationRepository,
         private val agentRepo: AgentRepository,
         private val assistantRuntime: ToolAwareAssistantRuntime,
-        private val webGateway: WebGateway
+        private val webGateway: WebGateway,
+        private val providerFactory: (AgentConfig) -> AiProvider
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
@@ -411,7 +455,8 @@ class ConversationDetailViewModel(
                 repo,
                 agentRepo,
                 assistantRuntime,
-                webGateway
+                webGateway,
+                providerFactory
             ) as T
     }
 }

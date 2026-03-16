@@ -56,7 +56,7 @@ class AppContainer(context: Context) {
             okHttpClient
         )
 
-    private val aiProviderFactory: (com.example.uai.data.model.AgentConfig) -> com.example.uai.ai.AiProvider = { config ->
+    val providerFactory: (com.example.uai.data.model.AgentConfig) -> com.example.uai.ai.AiProvider = { config ->
         AiProviderFactory.create(
             config = config,
             client = okHttpClient,
@@ -66,7 +66,7 @@ class AppContainer(context: Context) {
     }
 
     val searchPlanningService: SearchPlanningService =
-        SearchPlanningService(aiProviderFactory)
+        SearchPlanningService(providerFactory)
 
     val webGateway: WebGateway =
         WebGateway(
@@ -76,7 +76,7 @@ class AppContainer(context: Context) {
 
     val assistantRuntime: ToolAwareAssistantRuntime =
         ToolAwareAssistantRuntime(
-            providerFactory = aiProviderFactory,
+            providerFactory = providerFactory,
             searchToolExecutor = WebGatewaySearchToolExecutor(webGateway)
         )
 

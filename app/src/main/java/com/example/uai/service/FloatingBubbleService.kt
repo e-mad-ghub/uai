@@ -66,6 +66,7 @@ import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.db.toChatMessage
 import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.data.model.hasInternetAccess
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AppColorTheme
 import com.example.uai.ui.MediaPickerActivity
@@ -1678,13 +1679,17 @@ class FloatingBubbleService : Service() {
                         msg.toChatMessage()
                     }
                 }
-                val groundedHistory = container.webGateway.prepareTurn(
-                    conversationKey = activeConversationId,
-                    messages = history,
-                    planningConfig = agent
-                ) { status ->
-                    onlineSearchStatusMessage = status
-                }.messages
+                val effectiveHistory = if (agent.hasInternetAccess) {
+                    container.webGateway.prepareTurn(
+                        conversationKey = activeConversationId,
+                        messages = history,
+                        planningConfig = agent
+                    ) { status ->
+                        onlineSearchStatusMessage = status
+                    }.messages
+                } else {
+                    history
+                }
 
                 streamingWriter = ThrottledStreamingMessageWriter { content, isStreaming ->
                     container.conversationRepository.updateMessageContent(
@@ -1694,13 +1699,17 @@ class FloatingBubbleService : Service() {
                     )
                 }
 
-                container.assistantRuntime
-                    .streamResponse(
+                val responseStream = if (agent.hasInternetAccess) {
+                    container.assistantRuntime.streamResponse(
                         conversationKey = activeConversationId,
-                        messages = groundedHistory,
+                        messages = effectiveHistory,
                         config = agent,
                         onStatusChanged = { status -> onlineSearchStatusMessage = status }
                     )
+                } else {
+                    container.providerFactory(agent).streamResponse(effectiveHistory, agent)
+                }
+                responseStream
                     .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
                     .collect { chunk ->
                         val id = assistantId ?: return@collect

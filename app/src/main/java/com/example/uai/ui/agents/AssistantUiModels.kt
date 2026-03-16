@@ -6,9 +6,9 @@ import com.example.uai.data.model.OPENROUTER_FREE_ROUTER_MODEL
 import com.example.uai.data.model.OpenRouterCatalogEntry
 import com.example.uai.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
 import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.data.model.hasInternetAccess
 import com.example.uai.data.model.isOpenRouterFreeModel
 import com.example.uai.data.model.preferredOpenRouterReasoningFreeModel
-import com.example.uai.data.model.preferredOpenRouterVisionFreeModel
 
 private fun pickScoredProviderModel(
     fetchedModels: List<String>,
@@ -270,16 +270,11 @@ fun recommendedModelChoices(
                 fetchedOpenRouterModels = fetchedProviderModels,
                 freeModelIds = freeModelIds
             )
-            val visionFreeModel = preferredOpenRouterVisionFreeModel(
-                catalogEntries = openRouterCatalogEntries,
-                fetchedOpenRouterModels = fetchedProviderModels,
-                freeModelIds = freeModelIds
-            )
             val knownChoices = listOf(
                 RecommendedModelChoice(
                     id = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
-                    label = "Best free",
-                    description = "ScreenAgent chooses the best available free model for each chat, file, or vision request, and reroutes automatically when needed.",
+                    label = "ScreenAgent Optimized",
+                    description = "Best available free model per request, with built-in internet access, adaptive vision, and file routing.",
                     isRecommended = true,
                     isFree = true,
                     supportsVision = true,
@@ -298,14 +293,6 @@ fun recommendedModelChoices(
                     label = "Reasoning free",
                     description = "Best for step-by-step thinking when you want a free model.",
                     isFree = true,
-                    supportsDocuments = true
-                ),
-                RecommendedModelChoice(
-                    id = visionFreeModel,
-                    label = "Vision free",
-                    description = "Prioritizes free vision models first for screenshots and photos.",
-                    isFree = true,
-                    supportsVision = AgentConfig(provider = provider, model = visionFreeModel).canHandleImageRequests(),
                     supportsDocuments = true
                 ),
                 RecommendedModelChoice(
@@ -396,4 +383,5 @@ fun assistantCapabilities(agent: AgentConfig): List<String> = buildList {
     if (agent.provider == AiProviderType.OPENROUTER && isOpenRouterFreeModel(agent.model)) add("Free")
     if (agent.provider == AiProviderType.OPENROUTER && agent.model == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL) add("Adaptive")
     if (agent.provider == AiProviderType.OPENROUTER && agent.model == OPENROUTER_FREE_ROUTER_MODEL) add("Auto route")
+    if (agent.hasInternetAccess) add("Internet")
 }

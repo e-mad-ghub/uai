@@ -46,7 +46,8 @@ fun AppNavGraph(
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
                     assistantRuntime = container.assistantRuntime,
-                    webGateway = container.webGateway
+                    webGateway = container.webGateway,
+                    providerFactory = container.providerFactory
                 )
             )
             ConversationDetailScreen(
@@ -67,7 +68,8 @@ fun AppNavGraph(
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
                     assistantRuntime = container.assistantRuntime,
-                    webGateway = container.webGateway
+                    webGateway = container.webGateway,
+                    providerFactory = container.providerFactory
                 )
             )
             ConversationDetailScreen(

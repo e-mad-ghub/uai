@@ -1,6 +1,8 @@
 package com.example.uai.ai
 
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.data.model.isSideAgentManagedOpenRouterFreeRoute
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +41,7 @@ class WebGatewaySearchToolExecutor(
     )
 }
 
-internal fun buildToolAwareSystemPrompt(baseSystemPrompt: String): String = buildString {
+internal fun buildToolAwareSystemPrompt(baseSystemPrompt: String, config: AgentConfig): String = buildString {
     if (baseSystemPrompt.isNotBlank()) {
         append(baseSystemPrompt.trim())
         append("\n\n")
@@ -53,7 +55,18 @@ internal fun buildToolAwareSystemPrompt(baseSystemPrompt: String): String = buil
     appendLine("<tool_request>{\"tool\":\"search_web\",\"query\":\"your precise query\"}</tool_request>")
     appendLine("- After a <tool_result> block arrives, answer the user naturally.")
     appendLine("- Never mention tool protocols, hidden context, provided context, shared context, or internal search packaging.")
-    append("- Cite source titles or domains naturally when useful.")
+    appendLine("- Cite source titles or domains naturally when useful.")
+    appendLine()
+    appendLine("Your active capabilities in this session:")
+    appendLine("- Internet access: enabled — you proactively search the web for live information when the question requires it.")
+    if (config.canHandleImageRequests()) {
+        appendLine("- Vision: enabled — you can analyze images and screenshots shared by the user.")
+    }
+    appendLine("- Documents: enabled — attached files are processed as readable text context.")
+    if (isSideAgentManagedOpenRouterFreeRoute(config.model)) {
+        appendLine("- Adaptive model routing: enabled — the best available free model is selected automatically per request type (chat, vision, reasoning).")
+    }
+    append("When asked what you can do or about your capabilities, describe the above accurately and naturally.")
 }
 
 internal fun parseAssistantToolRequest(raw: String): AssistantToolRequest? {
@@ -146,7 +159,7 @@ class ToolAwareAssistantRuntime(
 
         var workingMessages = messages
         val toolAwareConfig = config.copy(
-            systemPrompt = buildToolAwareSystemPrompt(config.systemPrompt)
+            systemPrompt = buildToolAwareSystemPrompt(config.systemPrompt, config)
         )
 
         repeat(maxToolRounds + 1) { round ->

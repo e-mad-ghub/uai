@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
@@ -290,7 +291,7 @@ fun AgoraDetailScreen(
                         eyebrow = stringResource(R.string.feature_room),
                         title = "Ask anything",
                         body = if (participantNames.isEmpty()) {
-                            "No assistants are active in this council room yet. Open room settings to add participants."
+                            "No assistants are active in this Agora room yet. Open room settings to add participants."
                         } else {
                             "All assistants reply by default. Type @Name or tap a chip when you want to direct the next turn."
                         },
@@ -298,12 +299,19 @@ fun AgoraDetailScreen(
                     )
                 }
             } else {
+                val context = LocalContext.current
                 ChatMessageList(
                     messages = messages,
                     isLoading = isLoading,
                     loadingStatusText = onlineSearchStatus,
                     behavior = messageListBehavior,
                     modifier = Modifier.weight(1f),
+                    onMessageDoubleTap = {
+                        Toast.makeText(context, "Minimize is not available for Agora rooms", Toast.LENGTH_SHORT).show()
+                    },
+                    onBackgroundDoubleTap = {
+                        Toast.makeText(context, "Minimize is not available for Agora rooms", Toast.LENGTH_SHORT).show()
+                    },
                     replyActionForMessage = { msg ->
                         if (!msg.isStreaming) {
                             { replyToMessage = msg }

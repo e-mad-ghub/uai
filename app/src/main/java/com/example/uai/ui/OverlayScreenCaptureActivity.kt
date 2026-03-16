@@ -13,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.graphics.ImageBitmap
 import com.example.uai.ui.chat.performScreenCapture
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 
 sealed interface OverlayScreenCaptureOutcome {
     data class Success(val base64: String, val bitmap: ImageBitmap) : OverlayScreenCaptureOutcome
@@ -56,7 +57,7 @@ class OverlayScreenCaptureActivity : ComponentActivity() {
         overridePendingTransition(0, 0)
 
         val requestId = intent.getStringExtra(EXTRA_REQUEST_ID)
-        if (requestId == null || requestId != currentRequestId) {
+        if (requestId == null || requestId != pendingRequest.get()?.requestId) {
             finishSilently()
             return
         }
@@ -104,8 +105,9 @@ class OverlayScreenCaptureActivity : ComponentActivity() {
         deliveredResult = true
 
         val requestId = intent.getStringExtra(EXTRA_REQUEST_ID)
-        val isCurrentRequest = requestId != null && requestId == currentRequestId
-        val callback = if (isCurrentRequest) onResult else null
+        // Atomically claim the pending request only if it still matches this activity's requestId.
+        val pending = pendingRequest.get()
+        val callback = pending?.takeIf { it.requestId == requestId }?.onResult
         clearPendingRequest()
         callback?.invoke(outcome)
         finishSilently()
@@ -120,16 +122,17 @@ class OverlayScreenCaptureActivity : ComponentActivity() {
         private const val EXTRA_REQUEST_ID = "requestId"
         private const val CAPTURE_DELAY_MS = 250L
 
-        @Volatile
-        private var currentRequestId: String? = null
+        private data class PendingRequest(
+            val requestId: String,
+            val onResult: (OverlayScreenCaptureOutcome) -> Unit
+        )
 
-        @Volatile
-        private var onResult: ((OverlayScreenCaptureOutcome) -> Unit)? = null
+        private val pendingRequest = AtomicReference<PendingRequest?>()
 
         fun start(context: Context, onResult: (OverlayScreenCaptureOutcome) -> Unit) {
             val requestId = UUID.randomUUID().toString()
-            currentRequestId = requestId
-            this.onResult = onResult
+            // Write both fields atomically — no window where requestId and callback can mismatch.
+            pendingRequest.set(PendingRequest(requestId, onResult))
 
             val intent = Intent(context, OverlayScreenCaptureActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION
@@ -139,8 +142,7 @@ class OverlayScreenCaptureActivity : ComponentActivity() {
         }
 
         fun clearPendingRequest() {
-            currentRequestId = null
-            onResult = null
+            pendingRequest.set(null)
         }
     }
 }

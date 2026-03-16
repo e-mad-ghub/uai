@@ -82,12 +82,14 @@ class MainActivity : ComponentActivity() {
                         pendingOpenConversationId = null
                     }
                 }
-                LaunchedEffect(pendingOpenAgoraId) {
-                    pendingOpenAgoraId?.let { agoraId ->
-                        navController.navigate(Routes.agoraDetail(agoraId)) {
-                            launchSingleTop = true
+                if (FeatureFlags.AGORA_ENABLED) {
+                    LaunchedEffect(pendingOpenAgoraId) {
+                        pendingOpenAgoraId?.let { agoraId ->
+                            navController.navigate(Routes.agoraDetail(agoraId)) {
+                                launchSingleTop = true
+                            }
+                            pendingOpenAgoraId = null
                         }
-                        pendingOpenAgoraId = null
                     }
                 }
 
@@ -150,21 +152,23 @@ class MainActivity : ComponentActivity() {
                                 Text("New Chat")
                             }
 
-                            Spacer(Modifier.height(6.dp))
+                            if (FeatureFlags.AGORA_ENABLED) {
+                                Spacer(Modifier.height(6.dp))
 
-                            // New Room button
-                            OutlinedButton(
-                                onClick = {
-                                    closeDrawer()
-                                    navController.navigate(Routes.AGORA_CREATE) { launchSingleTop = true }
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp)
-                            ) {
-                                Icon(Icons.Default.Groups, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text(stringResource(R.string.new_room))
+                                // New Room button
+                                OutlinedButton(
+                                    onClick = {
+                                        closeDrawer()
+                                        navController.navigate(Routes.AGORA_CREATE) { launchSingleTop = true }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp)
+                                ) {
+                                    Icon(Icons.Default.Groups, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(stringResource(R.string.new_room))
+                                }
                             }
 
                             Spacer(Modifier.height(8.dp))
@@ -179,7 +183,10 @@ class MainActivity : ComponentActivity() {
                                     modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp)
                                 )
                                 LazyColumn(modifier = Modifier.weight(1f)) {
-                                    items(conversations, key = { it.id }) { conv ->
+                                    items(
+                                        conversations.filter { FeatureFlags.AGORA_ENABLED || !it.isAgora },
+                                        key = { it.id }
+                                    ) { conv ->
                                         DrawerConversationItem(
                                             conv = conv,
                                             isSelected = currentOpenId == conv.id,

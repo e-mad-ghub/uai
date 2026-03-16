@@ -175,7 +175,8 @@ fun ChatMessageList(
     overlayContent: (@Composable BoxScope.(isAtBottom: Boolean) -> Unit)? = null,
     replyActionForMessage: (MessageEntity) -> (() -> Unit)? = { null }
 ) {
-    val animatedLoadingStatusText = rememberLoadingStatusLabel(
+    // Used only for the bottom spinner row (single instance, shared status is fine there).
+    val bottomSpinnerStatusText = rememberLoadingStatusLabel(
         isLoading = isLoading,
         baseStatusText = loadingStatusText
     )
@@ -187,9 +188,6 @@ fun ChatMessageList(
             .distinct()
             .take(2)
             .count() > 1
-    }
-    val activeStreamingMessageId = remember(messages) {
-        messages.lastOrNull { it.role == "assistant" && it.isStreaming && it.content.isEmpty() }?.id
     }
 
     Box(modifier = modifier.fillMaxWidth()) {
@@ -221,15 +219,17 @@ fun ChatMessageList(
                 key = { it.id },
                 contentType = { it.role }
             ) { message ->
+                // Each streaming bubble gets its own rememberLoadingStatusLabel call so that
+                // multiple simultaneous agents (Agora) cycle through independently shuffled phrases.
+                val bubbleStreamingStatus = rememberLoadingStatusLabel(
+                    isLoading = message.role == "assistant" && message.isStreaming && message.content.isEmpty(),
+                    baseStatusText = loadingStatusText
+                )
                 MessageBubble(
                     message = message,
                     showAgentName = message.role != "assistant" || showAssistantNames,
                     thumbnails = messageThumbnails[message.id] ?: emptyList(),
-                    streamingStatusText = if (message.id == activeStreamingMessageId) {
-                        animatedLoadingStatusText
-                    } else {
-                        null
-                    },
+                    streamingStatusText = bubbleStreamingStatus,
                     onDoubleTap = onMessageDoubleTap,
                     onReply = replyActionForMessage(message)
                 )
@@ -245,9 +245,9 @@ fun ChatMessageList(
                             modifier = Modifier.size(24.dp),
                             strokeWidth = 2.dp
                         )
-                        if (!animatedLoadingStatusText.isNullOrBlank()) {
+                        if (!bottomSpinnerStatusText.isNullOrBlank()) {
                             Text(
-                                text = animatedLoadingStatusText,
+                                text = bottomSpinnerStatusText,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

@@ -13,24 +13,28 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import java.io.ByteArrayOutputStream
 
+// Maximum pixel length of the longest side sent to AI vision APIs.
+// 2048px covers all AI provider limits, fits all Android screen sizes without
+// meaningful quality loss, and keeps JPEG payloads under ~1.5 MB.
+private const val MAX_BITMAP_SIDE_PX = 2048
+
 /**
  * Converts a captured bitmap into the attachment payload used by chat messages.
  * The input bitmap is treated as owned by this function and may be recycled.
+ * Scales down so the longest side is at most [MAX_BITMAP_SIDE_PX] using float-ratio
+ * arithmetic (integer division would silently skip scaling for 4K screens).
  */
 fun encodeBitmapForAttachment(bitmap: Bitmap): Pair<String, ImageBitmap> {
-    val widthPx = bitmap.width
-    val heightPx = bitmap.height
-    val scale = maxOf(1, maxOf(widthPx, heightPx) / 1024)
-    val scaled = if (scale > 1) {
+    val maxSide = maxOf(bitmap.width, bitmap.height)
+    val scaled = if (maxSide > MAX_BITMAP_SIDE_PX) {
+        val ratio = MAX_BITMAP_SIDE_PX.toFloat() / maxSide
         Bitmap.createScaledBitmap(
             bitmap,
-            maxOf(1, widthPx / scale),
-            maxOf(1, heightPx / scale),
+            maxOf(1, (bitmap.width * ratio).toInt()),
+            maxOf(1, (bitmap.height * ratio).toInt()),
             true
         ).also {
-            if (it !== bitmap) {
-                bitmap.recycle()
-            }
+            if (it !== bitmap) bitmap.recycle()
         }
     } else {
         bitmap

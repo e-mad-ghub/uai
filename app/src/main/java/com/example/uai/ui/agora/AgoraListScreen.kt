@@ -51,7 +51,7 @@ fun AgoraListScreen(
                 title = {
                     ProductTopBarTitle(
                         title = stringResource(R.string.feature_rooms),
-                        subtitle = stringResource(R.string.screen_council_subtitle)
+                        subtitle = stringResource(R.string.screen_agora_subtitle)
                     )
                 },
                 navigationIcon = {

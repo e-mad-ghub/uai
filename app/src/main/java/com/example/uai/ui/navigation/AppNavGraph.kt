@@ -9,6 +9,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.example.uai.AppContainer
+import com.example.uai.FeatureFlags
 import com.example.uai.ui.agora.AgoraCreateScreen
 import com.example.uai.ui.agora.AgoraCreateViewModel
 import com.example.uai.ui.agora.AgoraDetailScreen
@@ -135,56 +136,58 @@ fun AppNavGraph(
             )
         }
 
-        composable(Routes.AGORA_LIST) {
-            val vm: AgoraListViewModel = viewModel(
-                factory = AgoraListViewModel.Factory(container.conversationRepository)
-            )
-            AgoraListScreen(
-                viewModel = vm,
-                onOpenRoom = { id -> navController.navigate(Routes.agoraDetail(id)) },
-                onCreateRoom = { navController.navigate(Routes.AGORA_CREATE) },
-                onBack = { navController.popBackStack() }
-            )
-        }
-
-        composable(Routes.AGORA_CREATE) {
-            val vm: AgoraCreateViewModel = viewModel(
-                factory = AgoraCreateViewModel.Factory(
-                    container.conversationRepository,
-                    container.agentRepository
+        if (FeatureFlags.AGORA_ENABLED) {
+            composable(Routes.AGORA_LIST) {
+                val vm: AgoraListViewModel = viewModel(
+                    factory = AgoraListViewModel.Factory(container.conversationRepository)
                 )
-            )
-            AgoraCreateScreen(
-                viewModel = vm,
-                onCreated = { id ->
-                    navController.navigate(Routes.agoraDetail(id)) {
-                        // Always pop the create screen itself so back from the room
-                        // never returns here regardless of how the user reached it.
-                        popUpTo(Routes.AGORA_CREATE) { inclusive = true }
-                    }
-                },
-                onBack = { navController.popBackStack() }
-            )
-        }
-
-        composable(
-            Routes.AGORA_DETAIL,
-            arguments = listOf(navArgument("agoraId") { type = NavType.StringType })
-        ) { backStack ->
-            val agoraId = backStack.arguments!!.getString("agoraId")!!
-            val vm: AgoraDetailViewModel = viewModel(
-                factory = AgoraDetailViewModel.Factory(
-                    conversationId = agoraId,
-                    repo = container.conversationRepository,
-                    agentRepo = container.agentRepository,
-                    assistantRuntime = container.assistantRuntime,
-                    webGateway = container.webGateway
+                AgoraListScreen(
+                    viewModel = vm,
+                    onOpenRoom = { id -> navController.navigate(Routes.agoraDetail(id)) },
+                    onCreateRoom = { navController.navigate(Routes.AGORA_CREATE) },
+                    onBack = { navController.popBackStack() }
                 )
-            )
-            AgoraDetailScreen(
-                viewModel = vm,
-                onBack = { navController.popBackStack() }
-            )
+            }
+
+            composable(Routes.AGORA_CREATE) {
+                val vm: AgoraCreateViewModel = viewModel(
+                    factory = AgoraCreateViewModel.Factory(
+                        container.conversationRepository,
+                        container.agentRepository
+                    )
+                )
+                AgoraCreateScreen(
+                    viewModel = vm,
+                    onCreated = { id ->
+                        navController.navigate(Routes.agoraDetail(id)) {
+                            // Always pop the create screen itself so back from the room
+                            // never returns here regardless of how the user reached it.
+                            popUpTo(Routes.AGORA_CREATE) { inclusive = true }
+                        }
+                    },
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(
+                Routes.AGORA_DETAIL,
+                arguments = listOf(navArgument("agoraId") { type = NavType.StringType })
+            ) { backStack ->
+                val agoraId = backStack.arguments!!.getString("agoraId")!!
+                val vm: AgoraDetailViewModel = viewModel(
+                    factory = AgoraDetailViewModel.Factory(
+                        conversationId = agoraId,
+                        repo = container.conversationRepository,
+                        agentRepo = container.agentRepository,
+                        assistantRuntime = container.assistantRuntime,
+                        webGateway = container.webGateway
+                    )
+                )
+                AgoraDetailScreen(
+                    viewModel = vm,
+                    onBack = { navController.popBackStack() }
+                )
+            }
         }
     }
 }

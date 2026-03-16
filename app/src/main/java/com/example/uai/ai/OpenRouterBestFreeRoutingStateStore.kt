@@ -42,6 +42,17 @@ class OpenRouterBestFreeRoutingStateStore(
             modelId = modelId,
             lastUsedAt = nowMillis()
         )
+        // Evict oldest entries when the map grows too large
+        if (entries.size > MAX_ENTRIES) {
+            entries.entries
+                .sortedBy { it.value.lastUsedAt }
+                .take(entries.size - MAX_ENTRIES)
+                .forEach { entries.remove(it.key, it.value) }
+        }
+    }
+
+    companion object {
+        private const val MAX_ENTRIES = 100
     }
 
     fun clear(

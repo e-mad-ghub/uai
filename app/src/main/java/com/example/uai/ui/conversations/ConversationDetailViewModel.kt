@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
+import com.google.gson.Gson
 import com.example.uai.ai.ThrottledStreamingMessageWriter
 import com.example.uai.ai.ToolAwareAssistantRuntime
 import com.example.uai.ai.WebGateway
@@ -204,13 +205,13 @@ class ConversationDetailViewModel(
 
     fun sendMessage(
         text: String,
-        imageBase64: String? = null,
+        images: List<ImageAttachment> = emptyList(),
         imageUri: String? = null,
         titleHint: String? = null,
         attachedFile: FileAttachmentContext? = null
     ) {
         val agent = activeAgent.value ?: return
-        if ((text.isBlank() && imageBase64 == null && attachedFile == null) || _isLoading.value) return
+        if ((text.isBlank() && images.isEmpty() && attachedFile == null) || _isLoading.value) return
 
         streamingJob = viewModelScope.launch {
             _isLoading.value = true
@@ -226,7 +227,7 @@ class ConversationDetailViewModel(
                     ?: text.trim().ifBlank {
                         when {
                             attachedFile != null -> attachedFile.displayName
-                            imageBase64 != null -> "Image"
+                            images.isNotEmpty() -> "Image"
                             else -> "Chat"
                         }
                     }.take(60)
@@ -262,7 +263,8 @@ class ConversationDetailViewModel(
                     createdAt = System.currentTimeMillis(),
                     imageUri = imageUri,
                     attachedFileName = attachedFile?.displayName,
-                    attachedFileText = attachedFile?.extractedText
+                    attachedFileText = attachedFile?.extractedText,
+                    imagesJson = if (images.isNotEmpty()) Gson().toJson(images) else null
                 )
             )
 
@@ -285,7 +287,7 @@ class ConversationDetailViewModel(
             }
 
             // If the agent doesn't support the attachment type, say so in the chat
-            if (imageBase64 != null && !agent.canHandleImageRequests()) {
+            if (images.isNotEmpty() && !agent.canHandleImageRequests()) {
                 val notice =
                     "I don't support image analysis with \"${agent.model}\". Please switch to a vision-capable model in agent settings."
                 accumulated = notice
@@ -298,20 +300,9 @@ class ConversationDetailViewModel(
                 return@launch
             }
 
-            // Attach image input to the latest user message for the API call.
+            // Build history; the latest user message already has imagesJson stored in DB.
             val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
-            val history = dbHistory.mapIndexed { index, msg ->
-                if (index == dbHistory.lastIndex && msg.role == "user") {
-                    when {
-                        imageBase64 != null -> msg.toChatMessage(
-                            images = listOf(ImageAttachment(imageBase64))
-                        )
-                        else -> msg.toChatMessage()
-                    }
-                } else {
-                    msg.toChatMessage()
-                }
-            }
+            val history = dbHistory.map { msg -> msg.toChatMessage() }
             val groundedHistory = webGateway.prepareTurn(
                 conversationKey = conversationId,
                 messages = history,

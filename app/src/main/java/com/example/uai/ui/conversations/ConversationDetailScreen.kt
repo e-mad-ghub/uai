@@ -36,6 +36,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
 import com.example.uai.UaiApplication
 import com.example.uai.ai.FileAttachmentContext
+import com.example.uai.ai.ImageAttachment
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.service.FloatingBubbleService
@@ -109,10 +110,8 @@ fun ConversationDetailScreen(
         }
     }
 
-    // Image attachment
-    var pendingImageUri by remember { mutableStateOf<Uri?>(null) }
-    var pendingImageBase64 by remember { mutableStateOf<String?>(null) }
-    var pendingImageBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    // Image attachments — list of (base64, bitmap) pairs; multiple images supported
+    val pendingImageList = remember { mutableStateListOf<Pair<String, ImageBitmap?>>() }
     var attachmentPreparationLabel by remember { mutableStateOf<String?>(null) }
 
     // File attachment (text or PDF)
@@ -121,45 +120,39 @@ fun ConversationDetailScreen(
     val isPreparingAttachment = attachmentPreparationLabel != null
 
     fun clearAttachments() {
-        pendingImageUri = null
-        pendingImageBase64 = null
-        pendingImageBitmap = null
+        pendingImageList.clear()
         pendingFileName = null
         pendingFileText = null
     }
 
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
         pendingFileName = null; pendingFileText = null
-        pendingImageUri = uri
-        pendingImageBase64 = null
-        pendingImageBitmap = null
-        if (uri != null) {
-            attachmentPreparationLabel = "Preparing image…"
-            scope.launch {
-                val (base64, bmp) = withContext(Dispatchers.IO) { encodeImageForApi(context, uri) }
-                pendingImageBase64 = base64
-                pendingImageBitmap = bmp
-                if (base64 == null || bmp == null) {
-                    pendingImageUri = null
-                    snackbarHostState.showSnackbar("Could not prepare that image.")
-                }
-                attachmentPreparationLabel = null
+        attachmentPreparationLabel = "Preparing image…"
+        scope.launch {
+            val results = withContext(Dispatchers.IO) {
+                uris.map { uri -> encodeImageForApi(context, uri) }
             }
+            var failed = 0
+            results.forEach { (base64, bmp) ->
+                if (base64 != null) pendingImageList.add(base64 to bmp)
+                else failed++
+            }
+            if (failed > 0) snackbarHostState.showSnackbar("$failed image(s) could not be prepared.")
+            attachmentPreparationLabel = null
         }
     }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
         if (bitmap != null) {
             pendingFileName = null; pendingFileText = null
-            pendingImageUri = null
             attachmentPreparationLabel = "Preparing photo…"
             scope.launch(Dispatchers.IO) {
                 val out = ByteArrayOutputStream()
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
                 val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    pendingImageBase64 = base64
-                    pendingImageBitmap = bitmap.asImageBitmap()
+                withContext(Dispatchers.Main) {
+                    pendingImageList.add(base64 to bitmap.asImageBitmap())
                     attachmentPreparationLabel = null
                 }
             }
@@ -177,7 +170,7 @@ fun ConversationDetailScreen(
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        pendingImageUri = null; pendingImageBase64 = null; pendingImageBitmap = null
+        pendingImageList.clear()
         scope.launch {
             attachmentPreparationLabel = "Importing file…"
             when (val result = importFileAttachment(context, uri)) {
@@ -196,7 +189,7 @@ fun ConversationDetailScreen(
         }
     }
 
-    val hasAttachment = pendingImageBitmap != null || pendingFileName != null
+    val hasAttachment = pendingImageList.isNotEmpty() || pendingFileName != null
     val canTransferToMiniChat = bubbleEnabled &&
         Settings.canDrawOverlays(context)
     val showMiniChatEntryTip = bubbleEnabled && !miniChatEntryTipDismissed
@@ -230,8 +223,7 @@ fun ConversationDetailScreen(
 
     fun doSend() {
         if (isPreparingAttachment) return
-        val image = pendingImageBase64
-        val existingImageUri = pendingImageUri?.toString()
+        val imageSnapshot = pendingImageList.toList()
         val attachedFile = pendingFileText?.let {
             FileAttachmentContext(
                 displayName = pendingFileName ?: "file",
@@ -241,13 +233,14 @@ fun ConversationDetailScreen(
         val replyContext = replyToMessage?.let { buildQuotedReplyContext(it) }.orEmpty()
         val fullText = replyContext + inputText
         val titleHint = inputText.trim().ifBlank { pendingFileName.orEmpty() }
-        val persistedImageUri = image?.let { persistImageAttachment(context, it) }
+        val persistedImageUri = imageSnapshot.firstOrNull()?.first?.let { persistImageAttachment(context, it) }
+        val imageAttachments = imageSnapshot.map { ImageAttachment(it.first) }
         clearAttachments()
         replyToMessage = null
         viewModel.sendMessage(
             text = fullText,
-            imageBase64 = image,
-            imageUri = persistedImageUri ?: existingImageUri,
+            images = imageAttachments,
+            imageUri = persistedImageUri,
             titleHint = titleHint,
             attachedFile = attachedFile
         )
@@ -368,7 +361,7 @@ fun ConversationDetailScreen(
                     onBackgroundDoubleTap = if (canTransferToMiniChat) ({ minimizeIntoMiniChat() }) else null,
                     onMessageDoubleTap = if (canTransferToMiniChat) ({ minimizeIntoMiniChat() }) else null,
                     replyActionForMessage = { msg ->
-                        if (msg.role != "user" && !msg.isStreaming) ({ replyToMessage = msg }) else null
+                        if (!msg.isStreaming) ({ replyToMessage = msg }) else null
                     }
                 )
             }
@@ -409,14 +402,19 @@ fun ConversationDetailScreen(
                     hasAttachment = hasAttachment,
                     isPreparingAttachment = isPreparingAttachment,
                     preparingAttachmentLabel = attachmentPreparationLabel ?: "Preparing attachment…",
-                    pendingImages = if (pendingImageBitmap != null) listOf(pendingImageBitmap) else emptyList(),
+                    pendingImages = pendingImageList.map { it.second },
                     pendingFileName = pendingFileName,
                     replyToMessage = replyToMessage,
-                    replyLabel = replyToMessage?.agentName ?: activeAgent?.name ?: "Assistant",
+                    replyLabel = when {
+                        replyToMessage?.role == "user" -> "You"
+                        !replyToMessage?.agentName.isNullOrBlank() -> replyToMessage?.agentName.orEmpty()
+                        else -> activeAgent?.name ?: "Assistant"
+                    },
                     onPickCamera = requestCameraPermission,
                     onPickGallery = { imagePicker.launch("image/*") },
                     onPickFile = { filePicker.launch("*/*") },
                     onClearAttachment = { clearAttachments() },
+                    onRemoveImage = { idx -> if (idx in pendingImageList.indices) pendingImageList.removeAt(idx) },
                     onCancelReply = { replyToMessage = null },
                     onStop = { viewModel.stopResponse() },
                     onSend = { doSend() },
@@ -432,7 +430,7 @@ fun ConversationDetailScreen(
                         placeholder = {
                             Text(
                                 when {
-                                    pendingImageBitmap != null -> "Ask about this image…"
+                                    pendingImageList.isNotEmpty() -> "Ask about this image…"
                                     pendingFileName != null -> "Ask about this file…"
                                     else -> "Message…"
                                 },

@@ -5,6 +5,7 @@ import com.example.uai.data.model.AppColorTheme
 import com.example.uai.data.prefs.AppPreferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 
 class AgentRepository(private val prefs: AppPreferences) {
 
@@ -18,13 +19,10 @@ class AgentRepository(private val prefs: AppPreferences) {
     }
 
     suspend fun saveAgent(agent: AgentConfig) {
-        val current = mutableListOf<AgentConfig>()
-        // Read synchronously not available; caller must pass current list or use Flow
-        // This is called from ViewModel which has the current list
-        prefs.saveAgentList(current.apply {
-            val idx = indexOfFirst { it.id == agent.id }
-            if (idx >= 0) set(idx, agent) else add(agent)
-        })
+        val current = prefs.agentListFlow.first().toMutableList()
+        val idx = current.indexOfFirst { it.id == agent.id }
+        if (idx >= 0) current[idx] = agent else current.add(agent)
+        prefs.saveAgentList(current)
     }
 
     suspend fun saveAgentList(agents: List<AgentConfig>) =

@@ -818,6 +818,9 @@ class FloatingBubbleService : Service() {
                         onPickFile = ::launchFilePicker,
                         onTakeScreenshot = ::launchScreenshotCapture,
                         onClearAttachment = ::clearAttachment,
+                        onRemoveImage = { idx ->
+                            if (idx in pendingImages.indices) pendingImages.removeAt(idx)
+                        },
                         showMiniChatMinimizeTip = !miniChatMinimizeTipDismissed,
                         onDismissMiniChatMinimizeTip = {
                             serviceScope.launch {

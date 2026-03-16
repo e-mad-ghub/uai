@@ -9,7 +9,10 @@ import com.example.uai.data.model.openRouterFreeFallbackModels
 import com.example.uai.data.model.openRouterBestFreeCandidates
 import com.example.uai.data.model.shouldRetryOpenRouterFreeFallback
 import com.google.gson.Gson
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -20,9 +23,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 internal fun classifyOpenRouterRequestBucket(messages: List<ChatMessage>): OpenRouterFreeRoutingBucket {
     val userMessages = messages.filter { it.role == "user" }
-    val lastUserContent = userMessages.lastOrNull()?.content.orEmpty()
+    val lastUserMessage = userMessages.lastOrNull()
+    val lastUserContent = lastUserMessage?.content.orEmpty()
     return when {
-        userMessages.any { it.images.isNotEmpty() } -> OpenRouterFreeRoutingBucket.VISION
+        // Only check the current turn for images so prior image turns don't force VISION routing
+        lastUserMessage?.images?.isNotEmpty() == true -> OpenRouterFreeRoutingBucket.VISION
         userMessages.any { it.fileAttachment != null } ||
             lastUserContent.contains("<attached_file ", ignoreCase = true) ->
             OpenRouterFreeRoutingBucket.DOCUMENT
@@ -143,10 +148,11 @@ class OpenRouterProvider(
         emit(StreamChunk.Error(Exception(lastFailure?.message ?: summary)))
     }.flowOn(Dispatchers.IO)
 
-    private fun probeCandidate(
+    private suspend fun probeCandidate(
         messages: List<ChatMessage>,
         config: AgentConfig
     ): Exception? {
+        currentCoroutineContext().ensureActive()
         val request = Request.Builder()
             .url("https://openrouter.ai/api/v1/chat/completions")
             .header("Authorization", "Bearer ${config.apiKey}")
@@ -154,12 +160,15 @@ class OpenRouterProvider(
             .post(buildBody(messages, config, stream = false, maxTokens = 1).toRequestBody(json))
             .build()
 
-        routedClient.newCall(request).execute().use { response ->
-            return if (response.isSuccessful) {
-                null
-            } else {
-                Exception(httpErrorMessage(response.code))
+        val call = routedClient.newCall(request)
+        return try {
+            call.execute().use { response ->
+                if (response.isSuccessful) null
+                else Exception(httpErrorMessage(response.code))
             }
+        } catch (e: CancellationException) {
+            call.cancel()
+            throw e
         }
     }
 

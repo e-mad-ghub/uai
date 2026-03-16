@@ -12,11 +12,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BubbleChart
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Screenshot
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -76,7 +78,6 @@ fun SettingsScreen(
     }
     var pendingEnableMiniChat by rememberSaveable { mutableStateOf(false) }
     var showOverlayPermissionCallout by rememberSaveable { mutableStateOf(false) }
-    var showMiniChatTipsSheet by rememberSaveable { mutableStateOf(false) }
     val isMiniChatConfigured = bubbleEnabled
     val isMiniChatActive = bubbleEnabled && hasOverlayPermission
     val showOverlayPermissionCard = !hasOverlayPermission &&
@@ -136,16 +137,6 @@ fun SettingsScreen(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
-    if (showMiniChatTipsSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showMiniChatTipsSheet = false }
-        ) {
-            MiniChatTipsSheet(
-                onDismiss = { showMiniChatTipsSheet = false }
-            )
-        }
     }
 
     Scaffold(
@@ -230,70 +221,92 @@ fun SettingsScreen(
             }
 
             ElevatedCard {
-                ListItem(
-                    leadingContent = { Icon(Icons.Default.BubbleChart, contentDescription = null) },
-                    headlineContent = { Text(stringResource(R.string.feature_mini_chat)) },
-                    supportingContent = {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                ProductPill(
-                                    label = miniChatStatusLabel,
-                                    emphasized = isMiniChatConfigured
+                Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    ListItem(
+                        leadingContent = { Icon(Icons.Default.BubbleChart, contentDescription = null) },
+                        headlineContent = { Text(stringResource(R.string.feature_mini_chat)) },
+                        supportingContent = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ProductPill(
+                                        label = miniChatStatusLabel,
+                                        emphasized = isMiniChatConfigured
+                                    )
+                                }
+                                Text(
+                                    stringResource(
+                                        if (isMiniChatConfigured && !hasOverlayPermission) {
+                                            R.string.mini_chat_enabled_waiting_for_permission
+                                        } else {
+                                            R.string.mini_chat_description
+                                        }
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall
                                 )
                             }
-                            Text(
-                                stringResource(
-                                    if (isMiniChatConfigured && !hasOverlayPermission) {
-                                        R.string.mini_chat_enabled_waiting_for_permission
-                                    } else {
-                                        R.string.mini_chat_description
-                                    }
-                                ),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    },
-                    trailingContent = {
-                        Switch(
-                            checked = bubbleEnabled,
-                            onCheckedChange = { enabled ->
-                                viewModel.setBubbleEnabled(enabled)
-                                if (enabled) {
-                                    if (!hasOverlayPermission) {
-                                        pendingEnableMiniChat = true
-                                        showOverlayPermissionCallout = true
-                                        openOverlaySettings()
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = bubbleEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.setBubbleEnabled(enabled)
+                                    if (enabled) {
+                                        if (!hasOverlayPermission) {
+                                            pendingEnableMiniChat = true
+                                            showOverlayPermissionCallout = true
+                                            openOverlaySettings()
+                                        } else {
+                                            pendingEnableMiniChat = false
+                                            showOverlayPermissionCallout = false
+                                            FloatingBubbleService.startService(context)
+                                        }
                                     } else {
                                         pendingEnableMiniChat = false
                                         showOverlayPermissionCallout = false
-                                        FloatingBubbleService.startService(context)
+                                        FloatingBubbleService.stopService(context)
                                     }
-                                } else {
-                                    pendingEnableMiniChat = false
-                                    showOverlayPermissionCallout = false
-                                    FloatingBubbleService.stopService(context)
+                                },
+                                modifier = Modifier.semantics {
+                                    contentDescription = context.getString(R.string.feature_mini_chat)
+                                    stateDescription = miniChatStateDescription
                                 }
-                            },
-                            modifier = Modifier.semantics {
-                                contentDescription = context.getString(R.string.feature_mini_chat)
-                                stateDescription = miniChatStateDescription
+                            )
+                        }
+                    )
+
+                    if (showMiniChatScreenshotsCard) {
+                        HorizontalDivider()
+                        MiniChatHelperItem(
+                            icon = { Icon(Icons.Default.Screenshot, contentDescription = null) },
+                            title = stringResource(R.string.mini_chat_screenshots_title),
+                            status = stringResource(
+                                if (isScreenshotAccessibilityEnabled) {
+                                    R.string.mini_chat_screenshots_status_enabled
+                                } else {
+                                    R.string.mini_chat_screenshots_status_needs_setup
+                                }
+                            ),
+                            body = stringResource(
+                                if (isScreenshotAccessibilityEnabled) {
+                                    R.string.mini_chat_screenshots_enabled_body
+                                } else {
+                                    R.string.mini_chat_screenshots_disabled_body
+                                }
+                            ),
+                            emphasized = isScreenshotAccessibilityEnabled,
+                            actionLabel = stringResource(
+                                if (isScreenshotAccessibilityEnabled) {
+                                    R.string.action_manage_screenshot_helper
+                                } else {
+                                    R.string.action_set_up_screenshots
+                                }
+                            ),
+                            onAction = {
+                                MiniChatScreenshotAccessibilityService.openSettings(context)
                             }
                         )
                     }
-                )
-            }
-
-            MiniChatTipsRow(
-                onClick = { showMiniChatTipsSheet = true }
-            )
-
-            if (showMiniChatScreenshotsCard) {
-                MiniChatScreenshotsCard(
-                    isEnabled = isScreenshotAccessibilityEnabled,
-                    onOpenAccessibilitySettings = {
-                        MiniChatScreenshotAccessibilityService.openSettings(context)
-                    }
-                )
+                }
             }
             HorizontalDivider()
 
@@ -355,140 +368,71 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun MiniChatTipsRow(onClick: () -> Unit) {
-    OutlinedCard(onClick = onClick) {
-        ListItem(
-            headlineContent = {
-                Text(stringResource(R.string.mini_chat_tips_row_title))
-            },
-            supportingContent = {
-                Text(
-                    stringResource(R.string.mini_chat_tips_row_body),
-                    style = MaterialTheme.typography.bodySmall
-                )
-            },
-            trailingContent = {
-                Text(
-                    stringResource(R.string.action_view),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-        )
-    }
-}
-
-@Composable
-private fun MiniChatTipsSheet(onDismiss: () -> Unit) {
-    Column(
+private fun MiniChatHelperItem(
+    icon: @Composable () -> Unit,
+    title: String,
+    status: String,
+    body: String,
+    emphasized: Boolean,
+    actionLabel: String,
+    onAction: () -> Unit
+) {
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 8.dp)
-            .padding(bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .padding(start = 56.dp, end = 16.dp, top = 10.dp, bottom = 14.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.64f)
     ) {
-        Text(
-            stringResource(R.string.mini_chat_tips_title),
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            stringResource(R.string.mini_chat_tips_body),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        MiniChatTipRow(
-            title = stringResource(R.string.mini_chat_tip_enter_title),
-            body = stringResource(R.string.mini_chat_tip_enter_body)
-        )
-        MiniChatTipRow(
-            title = stringResource(R.string.mini_chat_tip_minimize_title),
-            body = stringResource(R.string.mini_chat_tip_minimize_body)
-        )
-        MiniChatTipRow(
-            title = stringResource(R.string.mini_chat_tip_rooms_title),
-            body = stringResource(R.string.mini_chat_tip_rooms_body)
-        )
-        TextButton(
-            onClick = onDismiss,
-            modifier = Modifier.align(Alignment.End)
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(stringResource(R.string.action_got_it))
-        }
-    }
-}
-
-@Composable
-private fun MiniChatTipRow(title: String, body: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Text(
-            text = body,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
-private fun MiniChatScreenshotsCard(
-    isEnabled: Boolean,
-    onOpenAccessibilitySettings: () -> Unit
-) {
-    ElevatedCard {
-        ListItem(
-            leadingContent = {
-                Icon(
-                    Icons.Default.Security,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            },
-            headlineContent = {
-                Text(stringResource(R.string.mini_chat_screenshots_title))
-            },
-            supportingContent = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ProductPill(
-                        label = stringResource(
-                            if (isEnabled) {
-                                R.string.mini_chat_screenshots_status_enabled
-                            } else {
-                                R.string.mini_chat_screenshots_status_needs_setup
-                            }
-                        ),
-                        emphasized = isEnabled
-                    )
-                    Text(
-                        stringResource(
-                            if (isEnabled) {
-                                R.string.mini_chat_screenshots_enabled_body
-                            } else {
-                                R.string.mini_chat_screenshots_disabled_body
-                            }
-                        ),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            },
-            trailingContent = {
-                TextButton(onClick = onOpenAccessibilitySettings) {
-                    Text(
-                        stringResource(
-                            if (isEnabled) {
-                                R.string.action_manage_screenshot_helper
-                            } else {
-                                R.string.action_set_up_screenshots
-                            }
-                        )
-                    )
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                CompositionLocalProvider(
+                    LocalContentColor provides MaterialTheme.colorScheme.onPrimaryContainer
+                ) {
+                    icon()
                 }
             }
-        )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    ProductPill(
+                        label = status,
+                        emphasized = emphasized
+                    )
+                }
+                Text(
+                    text = body,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(
+                    onClick = onAction,
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text(actionLabel)
+                }
+            }
+        }
     }
 }
 

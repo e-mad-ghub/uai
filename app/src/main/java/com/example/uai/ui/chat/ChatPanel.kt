@@ -9,6 +9,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -16,8 +17,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,12 +30,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -72,6 +81,7 @@ fun ChatPanel(
     onPickFile: () -> Unit,
     onTakeScreenshot: () -> Unit,
     onClearAttachment: () -> Unit,
+    onRemoveImage: ((Int) -> Unit)? = null,
     showMiniChatMinimizeTip: Boolean = false,
     onDismissMiniChatMinimizeTip: (() -> Unit)? = null,
     screenshotHintMessage: String? = null,
@@ -104,6 +114,12 @@ fun ChatPanel(
         color = MaterialTheme.colorScheme.surface,
         shadowElevation = 8.dp
     ) {
+        // Custom TextToolbar: TYPE_APPLICATION_OVERLAY windows can't use system ActionMode,
+        // so we provide our own toolbar rendered as a DropdownMenu inside the Compose tree.
+        val textToolbar = remember { OverlayTextToolbar() }
+        CompositionLocalProvider(LocalTextToolbar provides textToolbar) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+
         // Custom layout: header fixed at top, input fixed at bottom,
         // messages fills whatever remains — no overflow or squishing with keyboard.
         Layout(
@@ -340,7 +356,7 @@ fun ChatPanel(
                             }
                         },
                         replyActionForMessage = { message ->
-                            if (!message.isStreaming && message.role == "assistant") {
+                            if (!message.isStreaming) {
                                 { replyToMessage = message }
                             } else {
                                 null
@@ -358,12 +374,17 @@ fun ChatPanel(
                         pendingImages = pendingImages.map { it.second },
                         pendingFileName = pendingFileName,
                         replyToMessage = replyToMessage,
-                        replyLabel = replyToMessage?.agentName ?: agentName,
+                        replyLabel = when {
+                            replyToMessage?.role == "user" -> "You"
+                            !replyToMessage?.agentName.isNullOrBlank() -> replyToMessage?.agentName.orEmpty()
+                            else -> agentName
+                        },
                         onPickCamera = onPickCamera,
                         onPickGallery = onPickGallery,
                         onPickFile = onPickFile,
                         onTakeScreenshot = onTakeScreenshot,
                         onClearAttachment = onClearAttachment,
+                        onRemoveImage = onRemoveImage,
                         onCancelReply = { replyToMessage = null },
                         onStop = onStop,
                         onSend = {
@@ -380,10 +401,21 @@ fun ChatPanel(
                             pendingFileName != null -> "Ask about this file…"
                             else -> "Message…"
                         }
+                        val inputClipboard = LocalClipboardManager.current
+                        var showInputCopyMenu by remember { mutableStateOf(false) }
+                        Box(modifier = Modifier.weight(1f)) {
                         TextField(
                             value = inputText,
                             onValueChange = onInputChange,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .pointerInput(inputText) {
+                                    detectTapGestures(
+                                        onLongPress = {
+                                            if (inputText.isNotBlank()) showInputCopyMenu = true
+                                        }
+                                    )
+                                },
                             placeholder = {
                                 Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             },
@@ -407,6 +439,20 @@ fun ChatPanel(
                             maxLines = 5,
                             enabled = !isLoading
                         )
+                        DropdownMenu(
+                            expanded = showInputCopyMenu,
+                            onDismissRequest = { showInputCopyMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Copy") },
+                                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                                onClick = {
+                                    inputClipboard.setText(AnnotatedString(inputText))
+                                    showInputCopyMenu = false
+                                }
+                            )
+                        }
+                        } // Box
                     }
                 }
             },
@@ -435,6 +481,45 @@ fun ChatPanel(
                 footerP.placeRelative(0, headerP.height + messagesP.height)
             }
         }
+
+        // Text-selection toolbar rendered as a DropdownMenu.
+        // Anchored to the top of the panel (offset to sit just below the header).
+        DropdownMenu(
+            expanded = textToolbar.showMenu,
+            onDismissRequest = { textToolbar.hide() }
+        ) {
+            textToolbar.copyAction?.let { copy ->
+                DropdownMenuItem(
+                    text = { Text("Copy") },
+                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                    onClick = { copy(); textToolbar.hide() }
+                )
+            }
+            textToolbar.cutAction?.let { cut ->
+                DropdownMenuItem(
+                    text = { Text("Cut") },
+                    leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
+                    onClick = { cut(); textToolbar.hide() }
+                )
+            }
+            textToolbar.pasteAction?.let { paste ->
+                DropdownMenuItem(
+                    text = { Text("Paste") },
+                    leadingIcon = { Icon(Icons.Default.ContentPaste, contentDescription = null) },
+                    onClick = { paste(); textToolbar.hide() }
+                )
+            }
+            textToolbar.selectAllAction?.let { selectAll ->
+                DropdownMenuItem(
+                    text = { Text("Select all") },
+                    leadingIcon = { Icon(Icons.Default.SelectAll, contentDescription = null) },
+                    onClick = { selectAll(); textToolbar.hide() }
+                )
+            }
+        }
+
+        } // Box
+        } // CompositionLocalProvider
     }
 }
 

@@ -305,7 +305,7 @@ fun AgoraDetailScreen(
                     behavior = messageListBehavior,
                     modifier = Modifier.weight(1f),
                     replyActionForMessage = { msg ->
-                        if (msg.role == "assistant" && !msg.isStreaming && msg.agentName != null) {
+                        if (!msg.isStreaming) {
                             { replyToMessage = msg }
                         } else {
                             null
@@ -327,7 +327,13 @@ fun AgoraDetailScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                "Replying to ${replyToMessage!!.agentName}",
+                                "Replying to ${
+                                    if (replyToMessage!!.role == "user") {
+                                        "You"
+                                    } else {
+                                        replyToMessage!!.agentName ?: "Assistant"
+                                    }
+                                }",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary
                             )

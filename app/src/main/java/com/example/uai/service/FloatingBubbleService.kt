@@ -1736,9 +1736,9 @@ class FloatingBubbleService : Service() {
                             }
                             is StreamChunk.Done -> Unit
                             is StreamChunk.Error -> {
-                                val errContent = if (accumulated.isBlank()) "[Error: ${chunk.cause.message}]"
-                                                 else "$accumulated\n[Error: ${chunk.cause.message}]"
-                                accumulated = errContent  // must be non-blank so finally doesn't delete the message
+                                // Keep accumulated non-blank so finally() doesn't delete the message bubble.
+                                // Do not surface raw HTTP errors into the message text.
+                                if (accumulated.isBlank()) accumulated = " "
                             }
                         }
                     }

@@ -144,7 +144,10 @@ class ConversationDetailViewModel(
 
     fun setActiveAgent(agent: AgentConfig) {
         viewModelScope.launch {
+            // Use StateFlow value if already loaded; fall back to a one-shot DB read
+            // to avoid the brief window where conversation.value is null for an existing chat.
             val existingConversation = conversation.value
+                ?: repo.getConversationOnce(conversationId)
             if (existingConversation != null) {
                 if (existingConversation.agentId != agent.id || existingConversation.agentName != agent.name) {
                     repo.upsertConversation(
@@ -341,8 +344,6 @@ class ConversationDetailViewModel(
                         is StreamChunk.Done -> Unit
                         is StreamChunk.Error -> {
                             val errMsg = chunk.cause.message ?: "Unknown error"
-                            accumulated = if (accumulated.isBlank()) "[Error: $errMsg]"
-                                         else "$accumulated\n[Error: $errMsg]"
                             _errorEvent.trySend(
                                 "Request failed: $errMsg\n\nThe model \"${agent.model}\" may not support this request. Try switching to a different model."
                             )

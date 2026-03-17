@@ -66,7 +66,7 @@ class ToolAwareAssistantRuntimeTest {
         val searchQueries = mutableListOf<String>()
         val runtime = ToolAwareAssistantRuntime(
             providerFactory = { providers.removeFirst() },
-            searchToolExecutor = SearchToolExecutor { _, query, _ ->
+            searchToolExecutor = SearchToolExecutor { _, query, _, _ ->
                 searchQueries += query
                 WebGroundingResult(
                     query = query,
@@ -122,7 +122,7 @@ class ToolAwareAssistantRuntimeTest {
                     }
                 }
             },
-            searchToolExecutor = SearchToolExecutor { _, _, _ ->
+            searchToolExecutor = SearchToolExecutor { _, _, _, _ ->
                 searchCalled = true
                 fail("search tool should not run for plain image analysis")
                 null
@@ -174,7 +174,7 @@ class ToolAwareAssistantRuntimeTest {
                     }
                 }
             },
-            searchToolExecutor = SearchToolExecutor { _, _, _ ->
+            searchToolExecutor = SearchToolExecutor { _, _, _, _ ->
                 WebGroundingResult(
                     query = "latest news about the product in the screenshot",
                     sources = listOf(

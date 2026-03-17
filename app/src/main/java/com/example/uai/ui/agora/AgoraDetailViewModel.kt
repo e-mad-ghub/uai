@@ -450,7 +450,6 @@ class AgoraDetailViewModel(
                                     is StreamChunk.Done -> {}
                                     is StreamChunk.Error -> {
                                         val errMsg = chunk.cause.message ?: "Unknown error"
-                                        accumulated = "$accumulated\n[Error: $errMsg]"
                                         _errorEvent.trySend(
                                             "\"${agent.name}\" failed: $errMsg\n\nThis agent's model may not support this request."
                                         )
@@ -460,7 +459,6 @@ class AgoraDetailViewModel(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        accumulated = "[Error: ${e.message}]"
                         _errorEvent.trySend(
                             "\"${agent.name}\" failed: ${e.message}\n\nThis agent's model may not support this request."
                         )

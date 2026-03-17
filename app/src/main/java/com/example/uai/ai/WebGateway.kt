@@ -1,5 +1,6 @@
 package com.example.uai.ai
 
+import android.util.Log
 import com.example.uai.data.model.AgentConfig
 
 enum class WebTurnMode {
@@ -65,6 +66,8 @@ class WebTurnPlanner(
                 }
             }
             ConversationIntent.CURRENT_TIME -> "Checking the current time…"
+            ConversationIntent.NEWS -> "Fetching the latest news…"
+            ConversationIntent.TECH_SEARCH -> "Searching tech sources…"
             else -> when (mode) {
                 WebTurnMode.NONE -> null
                 WebTurnMode.AUTO_GROUND -> "Looking online for fresh results…"
@@ -99,6 +102,10 @@ class WebTurnPlanner(
             sessionState = sessionState
         ).plan
     }
+}
+
+private fun logGateway(message: String) {
+    try { Log.d("UAI_WEB", message) } catch (_: RuntimeException) {}
 }
 
 class WebGateway(
@@ -139,6 +146,8 @@ class WebGateway(
                 }
             }
             ConversationIntent.CURRENT_TIME -> "Checking the current time…"
+            ConversationIntent.NEWS -> "Fetching the latest news…"
+            ConversationIntent.TECH_SEARCH -> "Searching tech sources…"
             else -> when (mode) {
                 WebTurnMode.NONE -> null
                 WebTurnMode.AUTO_GROUND -> "Looking online for fresh results…"
@@ -171,6 +180,7 @@ class WebGateway(
             messages = messages,
             sessionState = previousSession
         )
+        logGateway("heuristic mode=${heuristicTurn.plan.mode} queries=${heuristicTurn.plan.queries.joinToString("|")}")
         val plannedSearches = if (planningConfig != null) {
             searchPlanningService?.planSearches(
                 messages = messages,
@@ -181,14 +191,17 @@ class WebGateway(
         } else {
             null
         }
+        logGateway("AI planning needsSearch=${plannedSearches?.needsSearch} queries=${plannedSearches?.queries?.joinToString("|").orEmpty()}")
         val plan = when {
             plannedSearches?.needsSearch == true && plannedSearches.queries.isNotEmpty() ->
                 buildPlanFromQueries(plannedSearches.queries)
             else -> heuristicTurn.plan
         }
+        logGateway("final plan mode=${plan.mode} queries=${plan.queries.joinToString("|")}")
         val resolvedState = heuristicTurn.sessionState
 
         if (plan.mode == WebTurnMode.NONE) {
+            logGateway("skipping web search — no search needed for this turn")
             val inertState = resolvedState?.copy(
                 lastUpdatedAt = System.currentTimeMillis()
             )
@@ -241,6 +254,7 @@ class WebGateway(
         ).takeIf { it.conversationKey.isNotBlank() }
             ?.also { sessionStore.put(it) }
 
+        logGateway("grounding=${if (prepared.grounding != null) "found sources=${prepared.grounding.sources.size} facts=${prepared.grounding.facts.size}" else "null — no sources returned"}")
         return PreparedWebTurn(
             messages = prepared.messages,
             grounding = prepared.grounding,
@@ -254,9 +268,18 @@ class WebGateway(
         grounding: WebGroundingResult
     ): List<ChatMessage> = groundingService.applyGrounding(messages, grounding)
 
+    private fun typeToIntent(type: String?): ConversationIntent? = when (type) {
+        "news" -> ConversationIntent.NEWS
+        "stock" -> ConversationIntent.STOCK_PRICE
+        "tech" -> ConversationIntent.TECH_SEARCH
+        "general" -> ConversationIntent.GENERAL_WEB
+        else -> null
+    }
+
     suspend fun executeSearchTool(
         conversationKey: String?,
         query: String,
+        type: String? = null,
         onStatusChanged: (String?) -> Unit = {}
     ): WebGroundingResult? {
         val toolMessages = listOf(ChatMessage(role = "user", content = query))
@@ -267,13 +290,28 @@ class WebGateway(
             sessionState = previousSession
         )
 
+        // Model-declared type overrides heuristic intent
+        val declaredIntent = typeToIntent(type)
+        val statusText = when (declaredIntent) {
+            ConversationIntent.NEWS -> "Fetching latest news…"
+            ConversationIntent.STOCK_PRICE -> "Looking up the latest market price…"
+            ConversationIntent.TECH_SEARCH -> "Searching tech sources…"
+            else -> "Searching online for requested info…"
+        }
+
         val fallbackPlan = WebTurnPlan(
             mode = WebTurnMode.TOOL_SEARCH,
             queries = listOf(query),
-            statusText = "Searching online for requested info…",
-            intent = ConversationIntent.GENERAL_WEB
+            statusText = statusText,
+            intent = declaredIntent ?: ConversationIntent.GENERAL_WEB
         )
-        val effectivePlan = plannedTurn.plan.takeIf { it.queries.isNotEmpty() } ?: fallbackPlan
+        val basePlan = plannedTurn.plan.takeIf { it.queries.isNotEmpty() } ?: fallbackPlan
+        // Apply declared intent if model specified a type
+        val effectivePlan = if (declaredIntent != null) {
+            basePlan.copy(intent = declaredIntent, statusText = statusText)
+        } else {
+            basePlan
+        }
         val grounded = groundingService.prepareMessagesIfNeeded(
             messages = toolMessages,
             plannedQueries = effectivePlan.queries,

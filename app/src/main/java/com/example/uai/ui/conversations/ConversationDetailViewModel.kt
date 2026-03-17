@@ -12,6 +12,7 @@ import com.google.gson.Gson
 import com.example.uai.ai.ThrottledStreamingMessageWriter
 import com.example.uai.ai.ToolAwareAssistantRuntime
 import com.example.uai.ai.WebGateway
+import com.example.uai.ai.compressHistory
 import com.example.uai.ai.sanitizeGroundedAssistantResponse
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
@@ -328,14 +329,14 @@ class ConversationDetailViewModel(
 
                 // Build history; the latest user message already has imagesJson stored in DB.
                 val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
-                val history = dbHistory.map { msg -> msg.toChatMessage() }
+                val history = compressHistory(dbHistory.map { msg -> msg.toChatMessage() })
 
                 // Shared chunk processor used by both paths below.
                 suspend fun processChunk(chunk: StreamChunk) {
                     when (chunk) {
                         is StreamChunk.Token -> {
                             accumulated += chunk.text
-                            val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                            val sanitized = if (agent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
                             session.onToken(sanitized)
                             streamingWriter.emitStreaming(sanitized)
                         }
@@ -352,7 +353,7 @@ class ConversationDetailViewModel(
                 }
 
                 if (agent.hasInternetAccess) {
-                    // AgentSide Internet Access ON:
+                    // Internet Service ON:
                     // Run web-search planning and the speculative main AI call concurrently.
                     // The speculative call uses the ungrounded history and buffers every chunk it
                     // receives. Nothing is shown to the user until planning signals its decision:
@@ -404,7 +405,7 @@ class ConversationDetailViewModel(
                         }
                     }
                 } else {
-                    // AgentSide Internet Access OFF: call the raw provider directly,
+                    // Internet Service OFF: call the raw provider directly,
                     // no planning overhead, no tool-aware system prompt additions.
                     providerFactory(agent)
                         .streamResponse(history, agent)
@@ -419,7 +420,7 @@ class ConversationDetailViewModel(
                         session.markDeleted()
                         repo.deleteMessage(assistantId)
                     } else {
-                        val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                        val sanitized = if (agent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
                         streamingWriter.emitFinal(sanitized)
                         session.finalize(sanitized)
                     }

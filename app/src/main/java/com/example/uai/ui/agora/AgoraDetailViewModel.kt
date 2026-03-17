@@ -3,6 +3,7 @@ package com.example.uai.ui.agora
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.uai.ai.AiProvider
 import com.example.uai.ai.AssistantStreamingSession
 import com.example.uai.ai.ChatMessage
 import com.example.uai.ai.FileAttachmentContext
@@ -11,11 +12,13 @@ import com.example.uai.ai.StreamChunk
 import com.example.uai.ai.ThrottledStreamingMessageWriter
 import com.example.uai.ai.ToolAwareAssistantRuntime
 import com.example.uai.ai.WebGateway
+import com.example.uai.ai.compressHistory
 import com.example.uai.ai.sanitizeGroundedAssistantResponse
 import com.example.uai.data.db.MessageEntity
 import com.example.uai.data.db.toChatMessage
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.data.model.isSideAgentManagedOpenRouterFreeRoute
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
 import com.google.gson.Gson
@@ -60,7 +63,8 @@ class AgoraDetailViewModel(
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
     private val assistantRuntime: ToolAwareAssistantRuntime,
-    private val webGateway: WebGateway
+    private val webGateway: WebGateway,
+    private val providerFactory: (AgentConfig) -> AiProvider
 ) : ViewModel() {
 
     private val gson = Gson()
@@ -354,7 +358,7 @@ class AgoraDetailViewModel(
                                     ?: assistants.find { it.agentName == agent.name }
                                     ?.let { add(it.toChatMessage()) }
                             }
-                        }
+                        }.let { compressHistory(it) }
                         val scopedGroundingText = extractAgentScopedGroundingText(
                             text = text,
                             agentName = agent.name,
@@ -367,14 +371,18 @@ class AgoraDetailViewModel(
                                 message
                             }
                         }
-                        val groundedHistory = webGateway.prepareTurn(
-                            conversationKey = conversationId,
-                            messages = groundingSeedHistory,
-                            planningConfig = agent,
-                            onStatusChanged = { status -> _onlineSearchStatus.value = status }
-                        ).grounding?.let { grounding ->
-                            webGateway.applyGrounding(history, grounding)
-                        } ?: history
+                        val groundedHistory = if (isSideAgentManagedOpenRouterFreeRoute(agent.model)) {
+                            webGateway.prepareTurn(
+                                conversationKey = conversationId,
+                                messages = groundingSeedHistory,
+                                planningConfig = agent,
+                                onStatusChanged = { status -> _onlineSearchStatus.value = status }
+                            ).grounding?.let { grounding ->
+                                webGateway.applyGrounding(history, grounding)
+                            } ?: history
+                        } else {
+                            history
+                        }
 
                         val otherNames = agentOtherNames[agent.id] ?: emptyList()
                         val nameContext = buildString {
@@ -424,19 +432,23 @@ class AgoraDetailViewModel(
                             return s
                         }
 
-                        assistantRuntime
-                            .streamResponse(
+                        val responseFlow = if (isSideAgentManagedOpenRouterFreeRoute(agent.model)) {
+                            assistantRuntime.streamResponse(
                                 conversationKey = conversationId,
                                 messages = groundedHistory,
                                 config = agoraAgent,
                                 onStatusChanged = { status -> _onlineSearchStatus.value = status }
                             )
+                        } else {
+                            providerFactory(agoraAgent).streamResponse(groundedHistory, agoraAgent)
+                        }
+                        responseFlow
                             .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
                             .collect { chunk ->
                                 when (chunk) {
                                     is StreamChunk.Token -> {
                                         accumulated = (accumulated + chunk.text).stripNamePrefix()
-                                        val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                                        val sanitized = if (isSideAgentManagedOpenRouterFreeRoute(agent.model)) sanitizeGroundedAssistantResponse(accumulated) else accumulated
                                         session.onToken(sanitized)
                                         streamingWriter.emitStreaming(sanitized)
                                     }
@@ -477,7 +489,7 @@ class AgoraDetailViewModel(
                                 session.markDeleted()
                                 repo.deleteMessage(assistantId)
                             } else {
-                                val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                                val sanitized = if (isSideAgentManagedOpenRouterFreeRoute(agent.model)) sanitizeGroundedAssistantResponse(accumulated) else accumulated
                                 streamingWriter.emitFinal(sanitized)
                                 session.finalize(sanitized)
                                 // Lock the overlay entry to isStreaming=false before Room catches up.
@@ -512,7 +524,8 @@ class AgoraDetailViewModel(
         private val repo: ConversationRepository,
         private val agentRepo: AgentRepository,
         private val assistantRuntime: ToolAwareAssistantRuntime,
-        private val webGateway: WebGateway
+        private val webGateway: WebGateway,
+        private val providerFactory: (AgentConfig) -> AiProvider
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
@@ -521,7 +534,8 @@ class AgoraDetailViewModel(
                 repo,
                 agentRepo,
                 assistantRuntime,
-                webGateway
+                webGateway,
+                providerFactory
             ) as T
     }
 }

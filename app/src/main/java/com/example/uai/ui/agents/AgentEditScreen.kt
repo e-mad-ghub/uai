@@ -49,9 +49,9 @@ import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.CustomProviderPreset
 import com.example.uai.data.model.canHandleImageRequests
-import com.example.uai.data.model.hasInternetAccess
 import com.example.uai.data.model.isOpenRouterFreeModel
 import com.example.uai.data.model.normalizeOpenAiCompatibleBaseUrl
+import com.example.uai.ai.NativeWebSearchConfig
 import com.example.uai.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
 import com.example.uai.ui.components.ProductPill
 import com.example.uai.ui.components.ProductScreenIntro
@@ -427,11 +427,24 @@ fun AgentEditScreen(
                                         supportingText = stringResource(R.string.assistants_custom_model_hint)
                                     )
                                 }
-                                InternetAccessToggle(
-                                    isScreenAgentOptimized = agent.model == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
-                                    enabled = agent.hasInternetAccess,
-                                    onToggle = { viewModel.update { copy(agentSideInternetAccess = it) } }
-                                )
+                                if (agent.model == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL) {
+                                    InternetAccessToggle(
+                                        isScreenAgentOptimized = true,
+                                        enabled = agent.agentSideInternetAccess ?: true,
+                                        onToggle = { viewModel.update { copy(agentSideInternetAccess = it) } }
+                                    )
+                                }
+                                if (agent.provider == AiProviderType.ANTHROPIC || agent.provider == AiProviderType.OPENAI) {
+                                    NativeWebSearchToggle(
+                                        provider = agent.provider,
+                                        enabled = agent.nativeWebSearchEnabled,
+                                        toolType = agent.nativeWebSearchToolType
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?: NativeWebSearchConfig.defaultToolTypeFor(agent.provider),
+                                        onToggle = { viewModel.update { copy(nativeWebSearchEnabled = it) } },
+                                        onToolTypeChange = { viewModel.update { copy(nativeWebSearchToolType = it) } }
+                                    )
+                                }
                                 OutlinedTextField(
                                     value = agent.systemPrompt,
                                     onValueChange = { viewModel.update { copy(systemPrompt = it) } },
@@ -988,10 +1001,10 @@ private fun InternetAccessToggle(
                 .padding(end = 12.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            Text("AgentSide Internet Access", style = MaterialTheme.typography.labelLarge)
+            Text("Internet Service", style = MaterialTheme.typography.labelLarge)
             Text(
                 text = if (isScreenAgentOptimized) {
-                    "Live web search before each reply. On by default for ScreenAgent Optimized."
+                    "Live web search before each reply. On by default for ScreenAgent Free. This is a custom service available only for the ScreenAgent Free configuration."
                 } else {
                     "Enables live web search. Works best with capable instruction-following models."
                 },
@@ -1000,5 +1013,74 @@ private fun InternetAccessToggle(
             )
         }
         Switch(checked = enabled, onCheckedChange = onToggle)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NativeWebSearchToggle(
+    provider: AiProviderType,
+    enabled: Boolean,
+    toolType: String,
+    onToggle: (Boolean) -> Unit,
+    onToolTypeChange: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text("Internet Service", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    text = when (provider) {
+                        AiProviderType.ANTHROPIC ->
+                            "Native web search via Anthropic's built-in search tool. Handled server-side — no extra requests needed."
+                        AiProviderType.OPENAI ->
+                            "Native web search via OpenAI Responses API. Uses a different endpoint from standard chat."
+                        else -> ""
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = enabled, onCheckedChange = onToggle)
+        }
+        AnimatedVisibility(visible = enabled) {
+            val presets = NativeWebSearchConfig.presetsFor(provider)
+            var expanded by remember { mutableStateOf(false) }
+            ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+                OutlinedTextField(
+                    value = toolType,
+                    onValueChange = onToolTypeChange,
+                    label = { Text("Search tool type") },
+                    supportingText = {
+                        Text("Tool type sent to the provider. Edit manually if the provider releases an updated version.")
+                    },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                    modifier = Modifier
+                        .menuAnchor(MenuAnchorType.PrimaryEditable)
+                        .fillMaxWidth(),
+                    singleLine = true
+                )
+                ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    presets.forEach { preset ->
+                        DropdownMenuItem(
+                            text = { Text(preset) },
+                            onClick = {
+                                onToolTypeChange(preset)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
     }
 }

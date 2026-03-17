@@ -22,8 +22,13 @@ class OpenAiProvider(
     private val gson = Gson()
     private val json = "application/json".toMediaType()
 
-    override fun streamResponse(messages: List<ChatMessage>, config: AgentConfig): Flow<StreamChunk> = flow {
-        val body = buildBody(messages, config)
+    override fun streamResponse(messages: List<ChatMessage>, config: AgentConfig): Flow<StreamChunk> =
+        if (config.nativeWebSearchEnabled) streamResponsesApi(messages, config)
+        else streamChatCompletions(messages, config)
+
+    // Standard Chat Completions path (/v1/chat/completions)
+    private fun streamChatCompletions(messages: List<ChatMessage>, config: AgentConfig): Flow<StreamChunk> = flow {
+        val body = buildChatCompletionsBody(messages, config)
         val request = Request.Builder()
             .url("$baseUrl/chat/completions")
             .header("Authorization", "Bearer ${config.apiKey}")
@@ -45,7 +50,7 @@ class OpenAiProvider(
                 while (!source.exhausted()) {
                     currentCoroutineContext().ensureActive()
                     val line = source.readUtf8Line() ?: break
-                    parseLineToChunk(line)?.let { emit(it) }
+                    parseChatCompletionsLine(line)?.let { emit(it) }
                     if (line == "data: [DONE]") break
                 }
                 emit(StreamChunk.Done)
@@ -58,7 +63,46 @@ class OpenAiProvider(
         }
     }.flowOn(Dispatchers.IO)
 
-    private fun buildBody(messages: List<ChatMessage>, config: AgentConfig): String {
+    // Responses API path (/v1/responses) — used for native web search
+    private fun streamResponsesApi(messages: List<ChatMessage>, config: AgentConfig): Flow<StreamChunk> = flow {
+        val body = buildResponsesApiBody(messages, config)
+        val request = Request.Builder()
+            .url("https://api.openai.com/v1/responses")
+            .header("Authorization", "Bearer ${config.apiKey}")
+            .header("Content-Type", "application/json")
+            .post(body.toRequestBody(json))
+            .build()
+
+        val call = client.newCall(request)
+        try {
+            call.execute().use { response ->
+                if (!response.isSuccessful) {
+                    emit(StreamChunk.Error(Exception(httpErrorMessage(response.code))))
+                    return@use
+                }
+                val source = response.body?.source() ?: run {
+                    emit(StreamChunk.Error(Exception("Empty response body")))
+                    return@use
+                }
+                while (!source.exhausted()) {
+                    currentCoroutineContext().ensureActive()
+                    val line = source.readUtf8Line() ?: break
+                    parseResponsesApiLine(line)?.let { chunk ->
+                        emit(chunk)
+                        if (chunk == StreamChunk.Done) return@use
+                    }
+                }
+                emit(StreamChunk.Done)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            call.cancel()
+            throw e
+        } catch (e: Exception) {
+            emit(StreamChunk.Error(e))
+        }
+    }.flowOn(Dispatchers.IO)
+
+    private fun buildChatCompletionsBody(messages: List<ChatMessage>, config: AgentConfig): String {
         val msgs = buildList {
             if (config.systemPrompt.isNotBlank()) {
                 add(mapOf("role" to "system", "content" to config.systemPrompt))
@@ -95,7 +139,28 @@ class OpenAiProvider(
         )
     }
 
-    private fun parseLineToChunk(line: String): StreamChunk? {
+    private fun buildResponsesApiBody(messages: List<ChatMessage>, config: AgentConfig): String {
+        val toolType = config.nativeWebSearchToolType
+            ?.takeIf { it.isNotBlank() }
+            ?: NativeWebSearchConfig.OPENAI_DEFAULT_TOOL_TYPE
+
+        val input = messages.map { msg ->
+            mapOf("role" to msg.role, "content" to msg.contentWithFileContext())
+        }
+        return gson.toJson(
+            buildMap {
+                put("model", config.model)
+                put("input", input)
+                put("stream", true)
+                put("tools", listOf(mapOf("type" to toolType)))
+                if (config.systemPrompt.isNotBlank()) {
+                    put("instructions", config.systemPrompt)
+                }
+            }
+        )
+    }
+
+    private fun parseChatCompletionsLine(line: String): StreamChunk? {
         if (!line.startsWith("data: ")) return null
         val data = line.removePrefix("data: ").trim()
         if (data == "[DONE]") return StreamChunk.Done
@@ -107,6 +172,30 @@ class OpenAiProvider(
                 ?.getAsJsonObject("delta")
                 ?.get("content")?.asString
             if (!content.isNullOrEmpty()) StreamChunk.Token(content) else null
+        } catch (_: Exception) { null }
+    }
+
+    private fun parseResponsesApiLine(line: String): StreamChunk? {
+        if (!line.startsWith("data: ")) return null
+        val data = line.removePrefix("data: ").trim()
+        if (data.isBlank()) return null
+        return try {
+            val obj = gson.fromJson(data, JsonObject::class.java) ?: return null
+            when (obj.get("type")?.asString) {
+                "response.output_text.delta" -> {
+                    val delta = obj.get("delta")?.asString
+                    if (!delta.isNullOrEmpty()) StreamChunk.Token(delta) else null
+                }
+                "response.completed" -> StreamChunk.Done
+                "response.failed" -> {
+                    val error = obj.getAsJsonObject("response")
+                        ?.getAsJsonObject("error")
+                        ?.get("message")?.asString
+                        ?: "Response failed"
+                    StreamChunk.Error(Exception(error))
+                }
+                else -> null
+            }
         } catch (_: Exception) { null }
     }
 }

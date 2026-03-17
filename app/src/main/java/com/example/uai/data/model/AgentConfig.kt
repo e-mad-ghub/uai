@@ -19,8 +19,12 @@ data class AgentConfig(
     val customBaseUrl: String = "",
     val systemPrompt: String = "You are a helpful assistant.",
     val temperature: Float = 0.7f,
-    /** Null = use model default (ScreenAgent Optimized → on, all others → off). */
-    val agentSideInternetAccess: Boolean? = null
+    /** Null = use model default (ScreenAgent Free → on, all others → off). */
+    val agentSideInternetAccess: Boolean? = null,
+    /** Anthropic / OpenAI native web search — off by default, opt-in per agent. */
+    val nativeWebSearchEnabled: Boolean = false,
+    /** Tool type sent to the provider. Null = use NativeWebSearchConfig default for the provider. */
+    val nativeWebSearchToolType: String? = null
 ) {
     /** True when the selected model is known to accept image input. */
     val supportsVision: Boolean get() = when (provider) {

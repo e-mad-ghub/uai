@@ -26,6 +26,8 @@ import com.example.uai.ai.fetchAndCacheSearXInstances
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import com.example.uai.data.model.AiProviderType
+import com.example.uai.data.model.MONEY_SAVER_MODEL
 import com.example.uai.data.repository.AgentRepository
 import com.example.uai.data.repository.ConversationRepository
 import com.example.uai.data.repository.OpenRouterCatalogRepository
@@ -111,4 +113,49 @@ class AppContainer(context: Context) {
         ConversationRepository(db.conversationDao(), db.messageDao(), context.applicationContext)
 
     val agentRepository: AgentRepository = AgentRepository(preferences)
+
+    /**
+     * Resolves the [MONEY_SAVER_MODEL] sentinel to the cheapest model available in the cached
+     * catalog for the agent's provider. Falls back to the cheapest hardcoded default if the
+     * catalog is empty or the provider is not OpenAI/Anthropic.
+     */
+    suspend fun resolveAgentConfig(agent: com.example.uai.data.model.AgentConfig): com.example.uai.data.model.AgentConfig {
+        if (agent.model != MONEY_SAVER_MODEL) return agent
+        val resolvedModel = when (agent.provider) {
+            AiProviderType.OPENAI -> {
+                val models = providerModelCatalogRepository.getCatalog(AiProviderType.OPENAI).models.map { it.id }
+                pickCheapestOpenAiModel(models)
+            }
+            AiProviderType.ANTHROPIC -> {
+                val models = providerModelCatalogRepository.getCatalog(AiProviderType.ANTHROPIC).models.map { it.id }
+                pickCheapestAnthropicModel(models)
+            }
+            else -> return agent
+        }
+        return agent.copy(model = resolvedModel)
+    }
+
+    private fun pickCheapestAnthropicModel(catalog: List<String>): String =
+        catalog.minByOrNull { id ->
+            val n = id.lowercase()
+            when {
+                n.contains("haiku") -> 0
+                n.contains("sonnet") -> 1
+                n.contains("opus") -> 2
+                else -> 3
+            }
+        } ?: "claude-haiku-4-5-20251001"
+
+    private fun pickCheapestOpenAiModel(catalog: List<String>): String =
+        catalog.minByOrNull { id ->
+            val n = id.lowercase()
+            when {
+                n.contains("nano") -> 0
+                n.contains("mini") -> 1
+                n.contains("4o") -> 2
+                n.contains("4.1") -> 3
+                n.contains("gpt-5") -> 4
+                else -> 5
+            }
+        } ?: "gpt-4o-mini"
 }

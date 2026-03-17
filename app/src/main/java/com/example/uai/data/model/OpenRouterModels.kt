@@ -2,6 +2,7 @@ package com.example.uai.data.model
 
 const val OPENROUTER_FREE_ROUTER_MODEL = "openrouter/free"
 const val SIDEAGENT_OPENROUTER_BEST_FREE_MODEL = "sideagent/openrouter-best-free"
+const val MONEY_SAVER_MODEL = "uai:money-saver"
 
 enum class OpenRouterFreeRoutingBucket {
     GENERAL,

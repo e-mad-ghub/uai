@@ -27,7 +27,9 @@ data class AgentConfig(
     val nativeWebSearchToolType: String? = null
 ) {
     /** True when the selected model is known to accept image input. */
-    val supportsVision: Boolean get() = when (provider) {
+    val supportsVision: Boolean get() = when {
+        model == MONEY_SAVER_MODEL -> true // resolved model will be determined at runtime
+        else -> when (provider) {
         AiProviderType.OPENAI -> {
             val m = model.lowercase()
             m.contains("gpt-5") ||
@@ -49,6 +51,7 @@ data class AgentConfig(
         }
         AiProviderType.CUSTOM -> looksLikeVisionCapableOpenAiCompatibleModel(model)
     }
+    }
 
     /** Files are normalized into text context before they reach the provider. */
     val supportsDocuments: Boolean get() = true
@@ -56,6 +59,7 @@ data class AgentConfig(
     companion object {
         val defaultModels = mapOf(
             AiProviderType.OPENAI to listOf(
+                MONEY_SAVER_MODEL,
                 "gpt-5",
                 "gpt-5-mini",
                 "gpt-5-nano",
@@ -64,6 +68,7 @@ data class AgentConfig(
                 "gpt-4o"
             ),
             AiProviderType.ANTHROPIC to listOf(
+                MONEY_SAVER_MODEL,
                 "claude-sonnet-4-6",
                 "claude-haiku-4-5-20251001",
                 "claude-opus-4-6"

@@ -1700,6 +1700,7 @@ class FloatingBubbleService : Service() {
                     )
                 }
 
+                val agent = container.resolveAgentConfig(agent)
                 val responseStream = if (agent.hasInternetAccess) {
                     container.assistantRuntime.streamResponse(
                         conversationKey = activeConversationId,

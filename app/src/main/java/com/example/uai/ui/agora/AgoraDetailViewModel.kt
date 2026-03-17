@@ -64,7 +64,8 @@ class AgoraDetailViewModel(
     private val agentRepo: AgentRepository,
     private val assistantRuntime: ToolAwareAssistantRuntime,
     private val webGateway: WebGateway,
-    private val providerFactory: (AgentConfig) -> AiProvider
+    private val providerFactory: (AgentConfig) -> AiProvider,
+    private val agentResolver: suspend (AgentConfig) -> AgentConfig = { it }
 ) : ViewModel() {
 
     private val gson = Gson()
@@ -415,9 +416,9 @@ class AgoraDetailViewModel(
                                 "Your reply ends when you finish your own thought. Stop there. "
                             )
                         }
-                        val agoraAgent = agent.copy(
+                        val agoraAgent = agentResolver(agent.copy(
                             systemPrompt = "$nameContext\n\n${agent.systemPrompt}".trim()
-                        )
+                        ))
 
                         fun String.stripNamePrefix(): String {
                             // Strip any [Name]: or [Name said]: prefix at the start
@@ -525,7 +526,8 @@ class AgoraDetailViewModel(
         private val agentRepo: AgentRepository,
         private val assistantRuntime: ToolAwareAssistantRuntime,
         private val webGateway: WebGateway,
-        private val providerFactory: (AgentConfig) -> AiProvider
+        private val providerFactory: (AgentConfig) -> AiProvider,
+        private val agentResolver: suspend (AgentConfig) -> AgentConfig = { it }
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
@@ -535,7 +537,8 @@ class AgoraDetailViewModel(
                 agentRepo,
                 assistantRuntime,
                 webGateway,
-                providerFactory
+                providerFactory,
+                agentResolver
             ) as T
     }
 }

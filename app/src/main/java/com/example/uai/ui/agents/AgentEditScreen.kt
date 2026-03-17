@@ -52,6 +52,7 @@ import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.isOpenRouterFreeModel
 import com.example.uai.data.model.normalizeOpenAiCompatibleBaseUrl
 import com.example.uai.ai.NativeWebSearchConfig
+import com.example.uai.data.model.MONEY_SAVER_MODEL
 import com.example.uai.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
 import com.example.uai.ui.components.ProductPill
 import com.example.uai.ui.components.ProductScreenIntro
@@ -416,16 +417,31 @@ fun AgentEditScreen(
                             ) {
                                 HorizontalDivider()
                                 if (!isCustomProvider) {
-                                    RawModelSelector(
-                                        provider = agent.provider,
-                                        selectedModel = agent.model,
-                                        onModelChange = { viewModel.update { copy(model = it) } },
-                                        fetchedProviderModels = providerModels,
-                                        freeModelIds = freeModelIds,
-                                        isLoadingModels = isLoadingModels,
-                                        labelText = stringResource(R.string.assistants_custom_model_label),
-                                        supportingText = stringResource(R.string.assistants_custom_model_hint)
-                                    )
+                                    if (agent.model == MONEY_SAVER_MODEL) {
+                                        val resolvedId = remember(agent.provider, providerModels) {
+                                            resolvedMoneySaverModelId(agent.provider, providerModels)
+                                        }
+                                        OutlinedTextField(
+                                            value = resolvedId,
+                                            onValueChange = {},
+                                            label = { Text(stringResource(R.string.assistants_custom_model_label)) },
+                                            supportingText = { Text("Resolved by Money Saver at request time") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = false,
+                                            singleLine = true
+                                        )
+                                    } else {
+                                        RawModelSelector(
+                                            provider = agent.provider,
+                                            selectedModel = agent.model,
+                                            onModelChange = { viewModel.update { copy(model = it) } },
+                                            fetchedProviderModels = providerModels,
+                                            freeModelIds = freeModelIds,
+                                            isLoadingModels = isLoadingModels,
+                                            labelText = stringResource(R.string.assistants_custom_model_label),
+                                            supportingText = stringResource(R.string.assistants_custom_model_hint)
+                                        )
+                                    }
                                 }
                                 if (agent.model == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL) {
                                     InternetAccessToggle(

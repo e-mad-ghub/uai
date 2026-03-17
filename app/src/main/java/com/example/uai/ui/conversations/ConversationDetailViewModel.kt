@@ -39,7 +39,8 @@ class ConversationDetailViewModel(
     private val agentRepo: AgentRepository,
     private val assistantRuntime: ToolAwareAssistantRuntime,
     private val webGateway: WebGateway,
-    private val providerFactory: (AgentConfig) -> AiProvider
+    private val providerFactory: (AgentConfig) -> AiProvider,
+    private val agentResolver: suspend (AgentConfig) -> AgentConfig = { it }
 ) : ViewModel() {
 
     private data class RepairResolution(
@@ -331,6 +332,9 @@ class ConversationDetailViewModel(
                 val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
                 val history = compressHistory(dbHistory.map { msg -> msg.toChatMessage() })
 
+                // Resolve Money Saver sentinel to actual cheapest model if needed.
+                val agent = agentResolver(agent)
+
                 // Shared chunk processor used by both paths below.
                 suspend fun processChunk(chunk: StreamChunk) {
                     when (chunk) {
@@ -448,7 +452,8 @@ class ConversationDetailViewModel(
         private val agentRepo: AgentRepository,
         private val assistantRuntime: ToolAwareAssistantRuntime,
         private val webGateway: WebGateway,
-        private val providerFactory: (AgentConfig) -> AiProvider
+        private val providerFactory: (AgentConfig) -> AiProvider,
+        private val agentResolver: suspend (AgentConfig) -> AgentConfig = { it }
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
@@ -458,7 +463,8 @@ class ConversationDetailViewModel(
                 agentRepo,
                 assistantRuntime,
                 webGateway,
-                providerFactory
+                providerFactory,
+                agentResolver
             ) as T
     }
 }

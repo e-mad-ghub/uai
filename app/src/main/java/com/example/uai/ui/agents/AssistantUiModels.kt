@@ -2,6 +2,7 @@ package com.example.uai.ui.agents
 
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
+import com.example.uai.data.model.MONEY_SAVER_MODEL
 import com.example.uai.data.model.OPENROUTER_FREE_ROUTER_MODEL
 import com.example.uai.data.model.OpenRouterCatalogEntry
 import com.example.uai.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
@@ -9,6 +10,18 @@ import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.hasInternetAccess
 import com.example.uai.data.model.isOpenRouterFreeModel
 import com.example.uai.data.model.preferredOpenRouterReasoningFreeModel
+
+fun resolvedMoneySaverModelId(provider: AiProviderType, catalog: List<String>): String = when (provider) {
+    AiProviderType.ANTHROPIC -> catalog.minByOrNull { id ->
+        val n = id.lowercase()
+        when { n.contains("haiku") -> 0; n.contains("sonnet") -> 1; n.contains("opus") -> 2; else -> 3 }
+    } ?: "claude-haiku-4-5-20251001"
+    AiProviderType.OPENAI -> catalog.minByOrNull { id ->
+        val n = id.lowercase()
+        when { n.contains("nano") -> 0; n.contains("mini") -> 1; n.contains("4o") -> 2; n.contains("4.1") -> 3; n.contains("gpt-5") -> 4; else -> 5 }
+    } ?: "gpt-4o-mini"
+    else -> ""
+}
 
 private fun pickScoredProviderModel(
     fetchedModels: List<String>,
@@ -193,6 +206,13 @@ fun recommendedModelChoices(
             val detailedVision = AgentConfig(provider = provider, model = detailedModel).canHandleImageRequests()
             listOf(
                 RecommendedModelChoice(
+                    id = MONEY_SAVER_MODEL,
+                    label = "Money Saver",
+                    description = "Automatically picks the least costly available OpenAI model.",
+                    supportsVision = true,
+                    supportsDocuments = true
+                ),
+                RecommendedModelChoice(
                     id = balancedModel,
                     label = "Balanced",
                     description = if (balancedVision) {
@@ -232,6 +252,13 @@ fun recommendedModelChoices(
             val fastModel = preferredAnthropicFastModel(fetchedProviderModels)
             val bestModel = preferredAnthropicBestModel(fetchedProviderModels)
             listOf(
+                RecommendedModelChoice(
+                    id = MONEY_SAVER_MODEL,
+                    label = "Money Saver",
+                    description = "Automatically picks the least costly available Anthropic model.",
+                    supportsVision = true,
+                    supportsDocuments = true
+                ),
                 RecommendedModelChoice(
                     id = balancedModel,
                     label = "Balanced",

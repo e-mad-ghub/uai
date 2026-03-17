@@ -84,12 +84,15 @@ fun ConversationDetailScreen(
     val onlineSearchStatus by viewModel.onlineSearchStatus.collectAsStateWithLifecycle()
     val activeAgent by viewModel.activeAgent.collectAsStateWithLifecycle()
     val agents by viewModel.agents.collectAsStateWithLifecycle()
+    val isAgentsInitialized by viewModel.isAgentsInitialized.collectAsStateWithLifecycle()
     val bubbleEnabled by appContainer.agentRepository
         .bubbleEnabledFlow
-        .collectAsStateWithLifecycle(initialValue = true)
+        .collectAsStateWithLifecycle(initialValue = false)
+    // Start as true (dismissed) so the tip never flashes in before DataStore loads.
+    // If the user hasn't dismissed it, it will appear once isAgentsInitialized becomes true.
     val miniChatEntryTipDismissed by appContainer.preferences
         .miniChatEntryTipDismissedFlow
-        .collectAsStateWithLifecycle(initialValue = false)
+        .collectAsStateWithLifecycle(initialValue = true)
 
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -347,6 +350,7 @@ fun ConversationDetailScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (!isAgentsInitialized) return@Column
             if (showMiniChatEntryTip) {
                 ProductInlineHintStrip(
                     message = stringResource(

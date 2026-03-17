@@ -117,6 +117,10 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
                 mapOf("role" to msg.role, "content" to content)
             }
 
+        val toolType = config.nativeWebSearchToolType
+            ?.takeIf { it.isNotBlank() }
+            ?: NativeWebSearchConfig.ANTHROPIC_DEFAULT_TOOL_TYPE
+
         return gson.toJson(
             buildMap {
                 put("model", config.model)
@@ -125,6 +129,15 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
                 put("messages", apiMessages)
                 if (config.systemPrompt.isNotBlank()) {
                     put("system", config.systemPrompt)
+                }
+                if (config.nativeWebSearchEnabled) {
+                    put("tools", listOf(
+                        mapOf(
+                            "type" to toolType,
+                            "name" to "web_search",
+                            "max_uses" to NativeWebSearchConfig.ANTHROPIC_MAX_USES
+                        )
+                    ))
                 }
             }
         )

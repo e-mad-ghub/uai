@@ -383,5 +383,5 @@ fun assistantCapabilities(agent: AgentConfig): List<String> = buildList {
     if (agent.provider == AiProviderType.OPENROUTER && isOpenRouterFreeModel(agent.model)) add("Free")
     if (agent.provider == AiProviderType.OPENROUTER && agent.model == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL) add("Adaptive")
     if (agent.provider == AiProviderType.OPENROUTER && agent.model == OPENROUTER_FREE_ROUTER_MODEL) add("Auto route")
-    if (agent.hasInternetAccess) add("Internet")
+    if (agent.hasInternetAccess || agent.nativeWebSearchEnabled) add("Internet")
 }

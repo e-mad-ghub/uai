@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
@@ -26,10 +27,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -250,6 +254,7 @@ fun ConversationDetailScreen(
 
     Scaffold(
         modifier = modifier,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -424,11 +429,16 @@ fun ConversationDetailScreen(
                     sendEnabled = (inputText.isNotBlank() || hasAttachment) &&
                         activeAgent != null &&
                         !isPreparingAttachment,
-                    modifier = Modifier.imePadding()
+                    modifier = Modifier.navigationBarsPadding().imePadding()
                 ) {
+                    val clipboardManager = LocalClipboardManager.current
+                    var tfv by remember { mutableStateOf(TextFieldValue(inputText)) }
+                    LaunchedEffect(inputText) {
+                        if (tfv.text != inputText) tfv = TextFieldValue(inputText, TextRange(inputText.length))
+                    }
                     TextField(
-                        value = inputText,
-                        onValueChange = viewModel::onInputChange,
+                        value = tfv,
+                        onValueChange = { new -> tfv = new; viewModel.onInputChange(new.text) },
                         modifier = Modifier.weight(1f),
                         placeholder = {
                             Text(
@@ -453,6 +463,25 @@ fun ConversationDetailScreen(
                         maxLines = 5,
                         enabled = !isLoading
                     )
+                    val clipText = clipboardManager.getText()?.text?.takeIf { it.isNotBlank() }
+                    if (clipText != null) {
+                        IconButton(
+                            onClick = {
+                                val newText = inputText + clipText
+                                tfv = TextFieldValue(newText, TextRange(newText.length))
+                                viewModel.onInputChange(newText)
+                            },
+                            modifier = Modifier.size(36.dp),
+                            enabled = !isLoading
+                        ) {
+                            Icon(
+                                Icons.Default.ContentPaste,
+                                contentDescription = "Paste",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
         }

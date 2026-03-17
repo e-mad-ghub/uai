@@ -52,7 +52,11 @@ import com.example.uai.data.model.canHandleImageRequests
 import com.example.uai.data.model.isOpenRouterFreeModel
 import com.example.uai.data.model.normalizeOpenAiCompatibleBaseUrl
 import com.example.uai.ai.NativeWebSearchConfig
+import com.example.uai.data.model.MONEY_SAVER_MODEL
 import com.example.uai.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.example.uai.ui.components.ProductPill
 import com.example.uai.ui.components.ProductScreenIntro
 import com.example.uai.ui.components.ProductTopBarTitle
@@ -416,16 +420,31 @@ fun AgentEditScreen(
                             ) {
                                 HorizontalDivider()
                                 if (!isCustomProvider) {
-                                    RawModelSelector(
-                                        provider = agent.provider,
-                                        selectedModel = agent.model,
-                                        onModelChange = { viewModel.update { copy(model = it) } },
-                                        fetchedProviderModels = providerModels,
-                                        freeModelIds = freeModelIds,
-                                        isLoadingModels = isLoadingModels,
-                                        labelText = stringResource(R.string.assistants_custom_model_label),
-                                        supportingText = stringResource(R.string.assistants_custom_model_hint)
-                                    )
+                                    if (agent.model == MONEY_SAVER_MODEL) {
+                                        val resolvedId = remember(agent.provider, providerModels) {
+                                            resolvedMoneySaverModelId(agent.provider, providerModels)
+                                        }
+                                        OutlinedTextField(
+                                            value = resolvedId,
+                                            onValueChange = {},
+                                            label = { Text(stringResource(R.string.assistants_custom_model_label)) },
+                                            supportingText = { Text("Resolved by Money Saver at request time") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = false,
+                                            singleLine = true
+                                        )
+                                    } else {
+                                        RawModelSelector(
+                                            provider = agent.provider,
+                                            selectedModel = agent.model,
+                                            onModelChange = { viewModel.update { copy(model = it) } },
+                                            fetchedProviderModels = providerModels,
+                                            freeModelIds = freeModelIds,
+                                            isLoadingModels = isLoadingModels,
+                                            labelText = stringResource(R.string.assistants_custom_model_label),
+                                            supportingText = stringResource(R.string.assistants_custom_model_hint)
+                                        )
+                                    }
                                 }
                                 if (agent.model == SIDEAGENT_OPENROUTER_BEST_FREE_MODEL) {
                                     InternetAccessToggle(
@@ -484,6 +503,45 @@ fun AgentEditScreen(
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+                                    }
+                                }
+                                // Token limit
+                                HorizontalDivider()
+                                var tokenLimitText by rememberSaveable(agent.id) {
+                                    mutableStateOf(agent.tokenLimit?.toString() ?: "")
+                                }
+                                OutlinedTextField(
+                                    value = tokenLimitText,
+                                    onValueChange = { raw ->
+                                        tokenLimitText = raw.filter { it.isDigit() }
+                                        val parsed = tokenLimitText.toLongOrNull()
+                                        viewModel.update { copy(tokenLimit = parsed) }
+                                    },
+                                    label = { Text("Monthly token limit") },
+                                    supportingText = { Text("Leave empty for no limit. Counts input + output tokens.") },
+                                    placeholder = { Text("e.g. 100000") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                                val currentMonth = remember {
+                                    SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+                                }
+                                val effectiveUsed = if (agent.tokenUsedMonth == currentMonth) agent.tokenUsed else 0L
+                                if (effectiveUsed > 0L) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "Used this month: ${formatTokenCount(effectiveUsed)} tokens",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        TextButton(onClick = { viewModel.resetTokenUsage() }) {
+                                            Text("Reset usage")
+                                        }
                                     }
                                 }
                             }

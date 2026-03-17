@@ -214,6 +214,15 @@ class AgentEditViewModel(
         }
     }
 
+    fun resetTokenUsage() {
+        viewModelScope.launch {
+            repo.resetTokenUsage(_agent.value.id)
+            // Reload the updated agent so the UI reflects the reset immediately
+            val updated = repo.agentsFlow.first().firstOrNull { it.id == _agent.value.id }
+            if (updated != null) _agent.value = updated
+        }
+    }
+
     fun testConnection() {
         val agent = _agent.value.normalizedForSave()
         if (agent.apiKey.isBlank()) {
@@ -427,11 +436,18 @@ class AgentEditViewModel(
     ) {
         _isLoadingModels.value = true
         try {
-            providerModelCatalogRepository.refreshCatalogIfStale(
+            val catalog = providerModelCatalogRepository.refreshCatalogIfStale(
                 provider = provider,
                 apiKey = apiKey,
                 force = force
             )
+            // Update in-memory cache directly so updateCurrentProviderModels sees the fresh list
+            // without waiting for the DataStore flow collector to fire.
+            when (provider) {
+                AiProviderType.OPENAI -> if (catalog.models.isNotEmpty()) openAiModels = catalog.models.map { it.id }
+                AiProviderType.ANTHROPIC -> if (catalog.models.isNotEmpty()) anthropicModels = catalog.models.map { it.id }
+                else -> {}
+            }
         } catch (_: Exception) {
             // silently fall back to cached or static list
         } finally {

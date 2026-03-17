@@ -47,7 +47,8 @@ fun AppNavGraph(
                     agentRepo = container.agentRepository,
                     assistantRuntime = container.assistantRuntime,
                     webGateway = container.webGateway,
-                    providerFactory = container.providerFactory
+                    providerFactory = container.providerFactory,
+                    agentResolver = container::resolveAgentConfig
                 )
             )
             ConversationDetailScreen(
@@ -70,7 +71,8 @@ fun AppNavGraph(
                     agentRepo = container.agentRepository,
                     assistantRuntime = container.assistantRuntime,
                     webGateway = container.webGateway,
-                    providerFactory = container.providerFactory
+                    providerFactory = container.providerFactory,
+                    agentResolver = container::resolveAgentConfig
                 )
             )
             ConversationDetailScreen(
@@ -185,7 +187,8 @@ fun AppNavGraph(
                         agentRepo = container.agentRepository,
                         assistantRuntime = container.assistantRuntime,
                         webGateway = container.webGateway,
-                        providerFactory = container.providerFactory
+                        providerFactory = container.providerFactory,
+                        agentResolver = container::resolveAgentConfig
                     )
                 )
                 AgoraDetailScreen(

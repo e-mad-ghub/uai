@@ -9,7 +9,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -30,7 +29,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -40,9 +38,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.example.uai.R
@@ -59,6 +59,8 @@ fun ChatPanel(
     inputText: String,
     isLoading: Boolean,
     agentName: String,
+    agentTokenInfo: String? = null,
+    agentTokenInfoColor: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color.Unspecified,
     selectedAgentId: String?,
     hasSelectedAgent: Boolean,
     agents: List<AgentConfig>,
@@ -198,6 +200,7 @@ fun ChatPanel(
                         Spacer(Modifier.weight(1f))
 
                         Box {
+                            Column(horizontalAlignment = Alignment.End) {
                             TextButton(
                                 onClick = {
                                     if (agents.isNotEmpty()) {
@@ -221,6 +224,17 @@ fun ChatPanel(
                                     )
                                 }
                             }
+                            if (!agentTokenInfo.isNullOrBlank()) {
+                                Text(
+                                    text = agentTokenInfo,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (agentTokenInfoColor == androidx.compose.ui.graphics.Color.Unspecified)
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    else agentTokenInfoColor,
+                                    modifier = Modifier.padding(end = 4.dp, bottom = 4.dp)
+                                )
+                            }
+                            } // end Column
                             DropdownMenu(
                                 expanded = agentDropdownExpanded,
                                 onDismissRequest = { agentDropdownExpanded = false }
@@ -401,21 +415,15 @@ fun ChatPanel(
                             pendingFileName != null -> "Ask about this file…"
                             else -> "Message…"
                         }
-                        val inputClipboard = LocalClipboardManager.current
-                        var showInputCopyMenu by remember { mutableStateOf(false) }
-                        Box(modifier = Modifier.weight(1f)) {
+                        val clipboardManager = LocalClipboardManager.current
+                        var tfv by remember { mutableStateOf(TextFieldValue(inputText)) }
+                        LaunchedEffect(inputText) {
+                            if (tfv.text != inputText) tfv = TextFieldValue(inputText, TextRange(inputText.length))
+                        }
                         TextField(
-                            value = inputText,
-                            onValueChange = onInputChange,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .pointerInput(inputText) {
-                                    detectTapGestures(
-                                        onLongPress = {
-                                            if (inputText.isNotBlank()) showInputCopyMenu = true
-                                        }
-                                    )
-                                },
+                            value = tfv,
+                            onValueChange = { new -> tfv = new; onInputChange(new.text) },
+                            modifier = Modifier.weight(1f),
                             placeholder = {
                                 Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             },
@@ -439,20 +447,25 @@ fun ChatPanel(
                             maxLines = 5,
                             enabled = !isLoading
                         )
-                        DropdownMenu(
-                            expanded = showInputCopyMenu,
-                            onDismissRequest = { showInputCopyMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Copy") },
-                                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                        val clipText = clipboardManager.getText()?.text?.takeIf { it.isNotBlank() }
+                        if (clipText != null) {
+                            IconButton(
                                 onClick = {
-                                    inputClipboard.setText(AnnotatedString(inputText))
-                                    showInputCopyMenu = false
-                                }
-                            )
+                                    val newText = inputText + clipText
+                                    tfv = TextFieldValue(newText, TextRange(newText.length))
+                                    onInputChange(newText)
+                                },
+                                modifier = Modifier.size(36.dp),
+                                enabled = !isLoading
+                            ) {
+                                Icon(
+                                    Icons.Default.ContentPaste,
+                                    contentDescription = "Paste",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        } // Box
                     }
                 }
             },

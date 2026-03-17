@@ -87,6 +87,23 @@ class OpenAiProvider(
                 while (!source.exhausted()) {
                     currentCoroutineContext().ensureActive()
                     val line = source.readUtf8Line() ?: break
+                    // Handle response.completed inline so we can emit Usage + Done together
+                    if (line.startsWith("data: ")) {
+                        val data = line.removePrefix("data: ").trim()
+                        try {
+                            val obj = gson.fromJson(data, JsonObject::class.java)
+                            if (obj?.get("type")?.asString == "response.completed") {
+                                val usageObj = obj.getAsJsonObject("response")?.getAsJsonObject("usage")
+                                if (usageObj != null) {
+                                    val input = usageObj.get("input_tokens")?.asInt ?: 0
+                                    val output = usageObj.get("output_tokens")?.asInt ?: 0
+                                    if (input > 0 || output > 0) emit(StreamChunk.Usage(input, output))
+                                }
+                                emit(StreamChunk.Done)
+                                return@use
+                            }
+                        } catch (_: Exception) {}
+                    }
                     parseResponsesApiLine(line)?.let { chunk ->
                         emit(chunk)
                         if (chunk == StreamChunk.Done) return@use
@@ -134,6 +151,7 @@ class OpenAiProvider(
                 "model" to config.model,
                 "messages" to msgs,
                 "stream" to true,
+                "stream_options" to mapOf("include_usage" to true),
                 "temperature" to config.temperature
             )
         )
@@ -166,6 +184,13 @@ class OpenAiProvider(
         if (data == "[DONE]") return StreamChunk.Done
         return try {
             val json = gson.fromJson(data, JsonObject::class.java)
+            // Usage chunk: choices is empty, usage field is present
+            val usageObj = json?.getAsJsonObject("usage")
+            if (usageObj != null) {
+                val input = usageObj.get("prompt_tokens")?.asInt ?: 0
+                val output = usageObj.get("completion_tokens")?.asInt ?: 0
+                if (input > 0 || output > 0) return StreamChunk.Usage(input, output)
+            }
             val content = json
                 ?.getAsJsonArray("choices")
                 ?.get(0)?.asJsonObject

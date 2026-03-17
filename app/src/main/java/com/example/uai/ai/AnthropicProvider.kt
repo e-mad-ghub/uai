@@ -33,7 +33,8 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
         try {
             call.execute().use { response ->
                 if (!response.isSuccessful) {
-                    emit(StreamChunk.Error(Exception(httpErrorMessage(response.code))))
+                    val errorBody = response.body?.string()?.take(400) ?: ""
+                    emit(StreamChunk.Error(Exception("${httpErrorMessage(response.code)}\n$errorBody".trim())))
                     return@use
                 }
                 val source = response.body?.source() ?: run {
@@ -42,6 +43,8 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
                 }
 
                 var currentEventType = ""
+                var inputTokens = 0
+                var outputTokens = 0
                 while (!source.exhausted()) {
                     currentCoroutineContext().ensureActive()
                     val line = source.readUtf8Line() ?: break
@@ -52,6 +55,14 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
                         line.startsWith("data: ") -> {
                             val data = line.removePrefix("data: ").trim()
                             when (currentEventType) {
+                                "message_start" -> {
+                                    try {
+                                        val obj = gson.fromJson(data, JsonObject::class.java)
+                                        inputTokens = obj?.getAsJsonObject("message")
+                                            ?.getAsJsonObject("usage")
+                                            ?.get("input_tokens")?.asInt ?: 0
+                                    } catch (_: Exception) {}
+                                }
                                 "content_block_delta" -> {
                                     try {
                                         val obj = gson.fromJson(data, JsonObject::class.java)
@@ -59,7 +70,17 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
                                         if (!text.isNullOrEmpty()) emit(StreamChunk.Token(text))
                                     } catch (_: Exception) {}
                                 }
+                                "message_delta" -> {
+                                    try {
+                                        val obj = gson.fromJson(data, JsonObject::class.java)
+                                        outputTokens = obj?.getAsJsonObject("usage")
+                                            ?.get("output_tokens")?.asInt ?: outputTokens
+                                    } catch (_: Exception) {}
+                                }
                                 "message_stop" -> {
+                                    if (inputTokens > 0 || outputTokens > 0) {
+                                        emit(StreamChunk.Usage(inputTokens, outputTokens))
+                                    }
                                     emit(StreamChunk.Done)
                                     return@use
                                 }
@@ -79,9 +100,28 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
     }.flowOn(Dispatchers.IO)
 
     private fun buildBody(messages: List<ChatMessage>, config: AgentConfig): String {
-        val apiMessages = messages
+        // Anthropic requires: first message is "user", messages alternate user/assistant.
+        // After history compression the list may start with an "assistant" turn — drop leading
+        // non-user messages. Then merge consecutive same-role messages so the list alternates.
+        val normalized = messages
             .filter { it.role != "system" }
-            .map { msg ->
+            .dropWhile { it.role != "user" }
+            .fold(mutableListOf<ChatMessage>()) { acc, msg ->
+                val last = acc.lastOrNull()
+                if (last != null && last.role == msg.role) {
+                    // Merge: concatenate text content; keep attachments from last entry
+                    acc[acc.lastIndex] = last.copy(
+                        content = if (last.content.isBlank()) msg.content
+                                  else if (msg.content.isBlank()) last.content
+                                  else "${last.content}\n${msg.content}"
+                    )
+                } else {
+                    acc += msg
+                }
+                acc
+            }
+
+        val apiMessages = normalized.map { msg ->
                 val textContent = msg.contentWithFileContext()
                 val content: Any = when {
                     msg.images.isNotEmpty() -> buildList {

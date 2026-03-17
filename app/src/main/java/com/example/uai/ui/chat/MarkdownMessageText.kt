@@ -1,9 +1,23 @@
 package com.example.uai.ui.chat
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -22,6 +36,7 @@ private sealed interface MarkdownBlock {
     data class Heading(val level: Int, val text: String) : MarkdownBlock
     data class Bullet(val text: String) : MarkdownBlock
     data class Paragraph(val text: String) : MarkdownBlock
+    data class Table(val headers: List<String>, val rows: List<List<String>>) : MarkdownBlock
 }
 
 @Composable
@@ -73,9 +88,84 @@ fun MarkdownMessageText(
                         style = resolvedBaseStyle
                     )
                 }
+
+                is MarkdownBlock.Table -> {
+                    MarkdownTable(
+                        table = block,
+                        color = color,
+                        baseStyle = resolvedBaseStyle
+                    )
+                }
             }
         }
     }
+}
+
+@Composable
+private fun MarkdownTable(
+    table: MarkdownBlock.Table,
+    color: Color,
+    baseStyle: TextStyle
+) {
+    val borderColor = color.copy(alpha = 0.25f)
+    val headerBg = color.copy(alpha = 0.10f)
+    val cellStyle = baseStyle.copy(fontSize = baseStyle.fontSize)
+
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, borderColor)
+    ) {
+        Column(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+            // Header row
+            Row(
+                modifier = Modifier
+                    .background(headerBg)
+                    .height(IntrinsicSize.Min)
+            ) {
+                table.headers.forEachIndexed { i, header ->
+                    if (i > 0) ColumnDivider(borderColor)
+                    Text(
+                        text = markdownInlineAnnotatedString(header, color),
+                        style = cellStyle.copy(fontWeight = FontWeight.Bold),
+                        color = color,
+                        modifier = Modifier
+                            .defaultMinSize(minWidth = 72.dp)
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+            HorizontalDivider(thickness = 1.dp, color = borderColor)
+
+            // Data rows
+            val colCount = table.headers.size
+            table.rows.forEachIndexed { rowIdx, row ->
+                if (rowIdx > 0) HorizontalDivider(thickness = 1.dp, color = borderColor)
+                Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                    for (i in 0 until colCount) {
+                        if (i > 0) ColumnDivider(borderColor)
+                        Text(
+                            text = markdownInlineAnnotatedString(row.getOrElse(i) { "" }, color),
+                            style = cellStyle,
+                            color = color,
+                            modifier = Modifier
+                                .defaultMinSize(minWidth = 72.dp)
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColumnDivider(color: Color) {
+    Box(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(1.dp)
+            .background(color)
+    )
 }
 
 @Composable
@@ -106,6 +196,7 @@ private fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
 
     val blocks = mutableListOf<MarkdownBlock>()
     val paragraphLines = mutableListOf<String>()
+    val tableLines = mutableListOf<String>()
 
     fun flushParagraph() {
         val paragraph = paragraphLines
@@ -118,13 +209,35 @@ private fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
         paragraphLines.clear()
     }
 
+    fun flushTable() {
+        if (tableLines.isEmpty()) return
+        val nonSeparator = tableLines.filterNot { isSeparatorRow(it) }
+        if (nonSeparator.size >= 1) {
+            val headers = parseTableRow(nonSeparator[0])
+            val rows = nonSeparator.drop(1).map { parseTableRow(it) }
+            if (headers.isNotEmpty()) {
+                blocks += MarkdownBlock.Table(headers, rows)
+            }
+        }
+        tableLines.clear()
+    }
+
     normalized.lines().forEach { line ->
         val trimmed = line.trim()
         when {
-            trimmed.isBlank() -> flushParagraph()
+            trimmed.isBlank() -> {
+                flushParagraph()
+                flushTable()
+            }
+
+            isTableRow(trimmed) -> {
+                flushParagraph()
+                tableLines += trimmed
+            }
 
             trimmed.matches(Regex("""^#{1,6}\s+.*$""")) -> {
                 flushParagraph()
+                flushTable()
                 val level = trimmed.takeWhile { it == '#' }.length
                 blocks += MarkdownBlock.Heading(
                     level = level,
@@ -134,16 +247,43 @@ private fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
 
             trimmed.matches(Regex("""^([-*]|\d+\.)\s+.*$""")) -> {
                 flushParagraph()
+                flushTable()
                 val bulletText = trimmed.replaceFirst(Regex("""^([-*]|\d+\.)\s+"""), "").trim()
                 blocks += MarkdownBlock.Bullet(bulletText)
             }
 
-            else -> paragraphLines += trimmed
+            else -> {
+                flushTable()
+                paragraphLines += trimmed
+            }
         }
     }
 
     flushParagraph()
+    flushTable()
     return blocks
+}
+
+/** A line is a table row if it contains `|` and is not a heading/bullet/separator-only line. */
+private fun isTableRow(line: String): Boolean {
+    if (!line.contains('|')) return false
+    // headings and bullets are not table rows
+    if (line.matches(Regex("""^#{1,6}\s+.*"""))) return false
+    if (line.matches(Regex("""^([-*]|\d+\.)\s+.*"""))) return false
+    return true
+}
+
+/** A separator row consists only of `|`, `-`, `:`, and spaces. */
+private fun isSeparatorRow(line: String): Boolean {
+    val stripped = line.replace("|", "").replace("-", "").replace(":", "").replace(" ", "")
+    return stripped.isEmpty() && line.contains('-')
+}
+
+private fun parseTableRow(line: String): List<String> {
+    return line.trim().trimStart('|').trimEnd('|')
+        .split('|')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() || true } // keep empty cells for alignment
 }
 
 private fun markdownInlineAnnotatedString(

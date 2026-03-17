@@ -29,6 +29,8 @@ import androidx.compose.ui.unit.dp
 fun ProductTopBarTitle(
     title: String,
     subtitle: String? = null,
+    tokenInfo: String? = null,
+    tokenInfoColor: Color = Color.Unspecified,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -46,6 +48,15 @@ fun ProductTopBarTitle(
                 text = subtitle,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (!tokenInfo.isNullOrBlank()) {
+            Text(
+                text = tokenInfo,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (tokenInfoColor == Color.Unspecified) MaterialTheme.colorScheme.onSurfaceVariant else tokenInfoColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )

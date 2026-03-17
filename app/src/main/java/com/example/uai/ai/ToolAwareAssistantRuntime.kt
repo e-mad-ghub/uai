@@ -224,6 +224,7 @@ class ToolAwareAssistantRuntime(
                         }
                     }
                     is StreamChunk.ModelSelection -> modelSelections += chunk
+                    is StreamChunk.Usage -> emit(chunk)
                     is StreamChunk.Error -> error = chunk.cause
                     is StreamChunk.Done -> Unit
                 }

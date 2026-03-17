@@ -6,8 +6,10 @@ import com.example.uai.data.model.ProviderModelCatalogEntry
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import java.time.Instant
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -59,7 +61,7 @@ class ProviderModelCatalogRepository(
             .build()
 
         val gson = Gson()
-        val catalog = httpClient.newCall(request).execute().use { response ->
+        val catalog = withContext(Dispatchers.IO) { httpClient.newCall(request).execute() }.use { response ->
             if (!response.isSuccessful) return@use ProviderModelCatalog()
 
             val body = response.body?.string().orEmpty()
@@ -105,7 +107,7 @@ class ProviderModelCatalogRepository(
             .build()
 
         val gson = Gson()
-        val catalog = httpClient.newCall(request).execute().use { response ->
+        val catalog = withContext(Dispatchers.IO) { httpClient.newCall(request).execute() }.use { response ->
             if (!response.isSuccessful) return@use ProviderModelCatalog()
 
             val body = response.body?.string().orEmpty()

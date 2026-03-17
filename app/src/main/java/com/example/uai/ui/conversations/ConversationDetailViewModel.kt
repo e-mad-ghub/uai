@@ -31,6 +31,9 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 class ConversationDetailViewModel(
@@ -39,7 +42,8 @@ class ConversationDetailViewModel(
     private val agentRepo: AgentRepository,
     private val assistantRuntime: ToolAwareAssistantRuntime,
     private val webGateway: WebGateway,
-    private val providerFactory: (AgentConfig) -> AiProvider
+    private val providerFactory: (AgentConfig) -> AiProvider,
+    private val agentResolver: suspend (AgentConfig) -> AgentConfig = { it }
 ) : ViewModel() {
 
     private data class RepairResolution(
@@ -243,6 +247,21 @@ class ConversationDetailViewModel(
         val agent = activeAgent.value ?: return
         if ((text.isBlank() && images.isEmpty() && attachedFile == null) || _isLoading.value) return
 
+        // Check token limit before doing any work
+        val tokenLimit = agent.tokenLimit
+        if (tokenLimit != null) {
+            val currentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+            val effectiveUsed = if (agent.tokenUsedMonth == currentMonth) agent.tokenUsed else 0L
+            if (effectiveUsed >= tokenLimit) {
+                viewModelScope.launch {
+                    _errorEvent.send(
+                        "Token limit reached for \"${agent.name}\".\n\nThis assistant has used $effectiveUsed/$tokenLimit tokens this month. Reset usage in the assistant settings to continue."
+                    )
+                }
+                return
+            }
+        }
+
         streamingJob = viewModelScope.launch {
             _isLoading.value = true
             _inputText.value = ""
@@ -331,6 +350,9 @@ class ConversationDetailViewModel(
                 val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
                 val history = compressHistory(dbHistory.map { msg -> msg.toChatMessage() })
 
+                // Resolve Money Saver sentinel to actual cheapest model if needed.
+                val agent = agentResolver(agent)
+
                 // Shared chunk processor used by both paths below.
                 suspend fun processChunk(chunk: StreamChunk) {
                     when (chunk) {
@@ -342,6 +364,8 @@ class ConversationDetailViewModel(
                         }
                         is StreamChunk.ModelSelection ->
                             repo.updateMessageResponseModel(assistantId, chunk.modelId, chunk.viaFallback)
+                        is StreamChunk.Usage ->
+                            agentRepo.addTokenUsage(agent.id, (chunk.inputTokens + chunk.outputTokens).toLong())
                         is StreamChunk.Done -> Unit
                         is StreamChunk.Error -> {
                             val errMsg = chunk.cause.message ?: "Unknown error"
@@ -448,7 +472,8 @@ class ConversationDetailViewModel(
         private val agentRepo: AgentRepository,
         private val assistantRuntime: ToolAwareAssistantRuntime,
         private val webGateway: WebGateway,
-        private val providerFactory: (AgentConfig) -> AiProvider
+        private val providerFactory: (AgentConfig) -> AiProvider,
+        private val agentResolver: suspend (AgentConfig) -> AgentConfig = { it }
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
@@ -458,7 +483,8 @@ class ConversationDetailViewModel(
                 agentRepo,
                 assistantRuntime,
                 webGateway,
-                providerFactory
+                providerFactory,
+                agentResolver
             ) as T
     }
 }

@@ -29,6 +29,10 @@ class AgentsViewModel(private val repo: AgentRepository) : ViewModel() {
         viewModelScope.launch { repo.setActiveAgent(id) }
     }
 
+    fun reorderAgents(agents: List<AgentConfig>) {
+        viewModelScope.launch { repo.saveAgentList(agents) }
+    }
+
     fun deleteAgent(agent: AgentConfig) {
         viewModelScope.launch {
             val current = uiState.value.agents.toMutableList()

@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
+import org.jsoup.parser.Parser
 import java.net.URLEncoder
 
 data class WebGroundingSource(
@@ -412,20 +413,29 @@ class BraveHtmlSearchProvider(
             val encodedQuery = URLEncoder.encode(query, Charsets.UTF_8.name())
             val request = Request.Builder()
                 .url("https://search.brave.com/search?q=$encodedQuery&source=web")
-                .header(
-                    "User-Agent",
-                    "Mozilla/5.0 (Android 13; Mobile) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36"
-                )
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "en-US,en;q=0.9")
                 .build()
 
             client.newCall(request).execute().use { response ->
+                logWebGroundingDebug("Brave HTTP ${response.code} query=\"$query\"")
                 if (!response.isSuccessful) return@use emptyList()
                 val html = response.body?.string().orEmpty()
-                if (html.isBlank()) return@use emptyList()
-                if (html.contains("PoW Captcha", ignoreCase = true)) return@use emptyList()
+                if (html.isBlank()) {
+                    logWebGroundingDebug("Brave empty body query=\"$query\"")
+                    return@use emptyList()
+                }
+                if (html.contains("PoW Captcha", ignoreCase = true) ||
+                    html.contains("cf-turnstile", ignoreCase = true) ||
+                    html.contains("challenge-platform", ignoreCase = true)
+                ) {
+                    logWebGroundingDebug("Brave CAPTCHA/challenge detected query=\"$query\"")
+                    return@use emptyList()
+                }
 
                 val document = Jsoup.parse(html)
-                document.select("div.snippet[data-type=web]")
+                val results = document.select("div.snippet[data-type=web]")
                     .mapNotNull { element ->
                         val link = element.selectFirst("a[href^=http]") ?: return@mapNotNull null
                         val title = element.selectFirst("div.title")?.text()
@@ -448,6 +458,8 @@ class BraveHtmlSearchProvider(
                     }
                     .distinctBy { it.url }
                     .take(maxResults)
+                logWebGroundingDebug("Brave results=${results.size} query=\"$query\"")
+                results
             }
         }
 }
@@ -460,19 +472,26 @@ class DuckDuckGoHtmlSearchProvider(
         withContext(Dispatchers.IO) {
             val request = Request.Builder()
                 .url("https://html.duckduckgo.com/html/?q=${URLEncoder.encode(query, Charsets.UTF_8.name())}")
-                .header(
-                    "User-Agent",
-                    "Mozilla/5.0 (Android 13; Mobile) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36"
-                )
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "en-US,en;q=0.9")
                 .build()
 
             client.newCall(request).execute().use { response ->
+                logWebGroundingDebug("DDG HTTP ${response.code} query=\"$query\"")
+                if (response.code == 202) {
+                    logWebGroundingDebug("DDG rate-limited (202) query=\"$query\"")
+                    return@use emptyList()
+                }
                 if (!response.isSuccessful) return@use emptyList()
                 val html = response.body?.string().orEmpty()
-                if (html.isBlank()) return@use emptyList()
+                if (html.isBlank()) {
+                    logWebGroundingDebug("DDG empty body query=\"$query\"")
+                    return@use emptyList()
+                }
 
                 val document = Jsoup.parse(html)
-                document.select("div.result")
+                val results = document.select("div.result")
                     .mapNotNull { element ->
                         val link = element.selectFirst("a.result__a[href]") ?: return@mapNotNull null
                         val title = link.text()
@@ -494,8 +513,506 @@ class DuckDuckGoHtmlSearchProvider(
                     }
                     .distinctBy { it.url }
                     .take(maxResults)
+                logWebGroundingDebug("DDG results=${results.size} query=\"$query\"")
+                results
             }
         }
+}
+
+class DuckDuckGoLiteSearchProvider(
+    private val client: OkHttpClient
+) : WebSearchProvider {
+
+    override suspend fun search(query: String, maxResults: Int): List<WebGroundingSource> =
+        withContext(Dispatchers.IO) {
+            val encodedQuery = URLEncoder.encode(query, Charsets.UTF_8.name())
+            val request = Request.Builder()
+                .url("https://lite.duckduckgo.com/lite/?q=$encodedQuery")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                logWebGroundingDebug("DDG-Lite HTTP ${response.code} query=\"$query\"")
+                if (!response.isSuccessful) return@use emptyList()
+                val html = response.body?.string().orEmpty()
+                if (html.isBlank()) return@use emptyList()
+
+                val document = Jsoup.parse(html)
+                val results = document.select("a.result-link")
+                    .mapNotNull { link ->
+                        val title = link.text().trim()
+                        val url = link.attr("href").trim()
+                        val snippet = link.closest("tr")
+                            ?.nextElementSibling()
+                            ?.selectFirst("td.result-snippet")
+                            ?.text()
+                            ?.replace(Regex("""\s+"""), " ")
+                            ?.trim()
+                            .orEmpty()
+
+                        if (title.isBlank() || !url.startsWith("http")) return@mapNotNull null
+                        WebGroundingSource(
+                            title = title.take(180),
+                            url = url,
+                            snippet = snippet.take(420)
+                        )
+                    }
+                    .distinctBy { it.url }
+                    .take(maxResults)
+                logWebGroundingDebug("DDG-Lite results=${results.size} query=\"$query\"")
+                results
+            }
+        }
+}
+
+class BingHtmlSearchProvider(
+    private val client: OkHttpClient
+) : WebSearchProvider {
+
+    override suspend fun search(query: String, maxResults: Int): List<WebGroundingSource> =
+        withContext(Dispatchers.IO) {
+            val encodedQuery = URLEncoder.encode(query, Charsets.UTF_8.name())
+            val request = Request.Builder()
+                .url("https://www.bing.com/search?q=$encodedQuery&cc=US&setlang=en&FORM=HDRSC1")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                // Bypass Bing's GDPR/cookie-consent gate so we get search results instead of a consent page
+                .header("Cookie", "MSCC=NR; SRCHHPGUSR=SRCHLANG=en; _EDGE_S=F=1&SID=0; _SS=SID=0")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                logWebGroundingDebug("Bing HTTP ${response.code} query=\"$query\"")
+                if (!response.isSuccessful) return@use emptyList()
+                val html = response.body?.string().orEmpty()
+                if (html.isBlank()) return@use emptyList()
+                logWebGroundingDebug("Bing body=${html.length} hasResults=${html.contains("b_algo")}")
+
+                val document = Jsoup.parse(html)
+                val results = document.select("li.b_algo")
+                    .mapNotNull { element ->
+                        val titleEl = element.selectFirst("h2 a") ?: return@mapNotNull null
+                        val title = titleEl.text().trim()
+                        val url = titleEl.attr("href").trim()
+                        val snippet = element.selectFirst(".b_caption p, .b_algoSlug, .b_snippet")
+                            ?.text()
+                            ?.replace(Regex("""\s+"""), " ")
+                            ?.trim()
+                            .orEmpty()
+
+                        if (title.isBlank() || !url.startsWith("http")) return@mapNotNull null
+                        WebGroundingSource(
+                            title = title.take(180),
+                            url = url,
+                            snippet = snippet.take(420)
+                        )
+                    }
+                    .distinctBy { it.url }
+                    .take(maxResults)
+                logWebGroundingDebug("Bing results=${results.size} query=\"$query\"")
+                results
+            }
+        }
+}
+
+class SearXSearchProvider(
+    private val client: OkHttpClient
+) : WebSearchProvider {
+
+    override suspend fun search(query: String, maxResults: Int): List<WebGroundingSource> =
+        withContext(Dispatchers.IO) {
+            val instances = SearXInstanceCache.getInstances()
+            val encodedQuery = URLEncoder.encode(query, Charsets.UTF_8.name())
+            for (instance in instances) {
+                val results = runCatching {
+                    val request = Request.Builder()
+                        .url("$instance/search?q=$encodedQuery&categories=general&language=en-US")
+                        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                        .header("Accept-Language", "en-US,en;q=0.9")
+                        .build()
+                    client.newCall(request).execute().use { response ->
+                        logWebGroundingDebug("SearX HTTP ${response.code} instance=$instance query=\"$query\"")
+                        if (!response.isSuccessful) return@use emptyList()
+                        val html = response.body?.string().orEmpty()
+                        if (html.isBlank()) return@use emptyList()
+                        val document = Jsoup.parse(html)
+                        document.select("article.result")
+                            .mapNotNull { article ->
+                                // SearXNG structure: <a href="URL"><h3>Title</h3></a>
+                                // The anchor wraps the h3, so select the anchor from header, title from h3.
+                                val link = article.selectFirst("header a[href]") ?: return@mapNotNull null
+                                val title = (article.selectFirst("h3")?.text() ?: link.text()).trim()
+                                val url = link.attr("href").trim()
+                                val snippet = article.selectFirst("p.content")
+                                    ?.text()
+                                    ?.replace(Regex("""\s+"""), " ")
+                                    ?.trim()
+                                    .orEmpty()
+                                if (title.isBlank() || !url.startsWith("http")) null
+                                else WebGroundingSource(title.take(180), url, snippet.take(420))
+                            }
+                            .distinctBy { it.url }
+                            .take(maxResults)
+                    }
+                }.getOrElse { emptyList() }
+                logWebGroundingDebug("SearX results=${results.size} instance=$instance query=\"$query\"")
+                if (results.isNotEmpty()) return@withContext results
+            }
+            emptyList()
+        }
+}
+
+// === SearXNG dynamic instance cache ===
+
+private object SearXInstanceCache {
+    val hardcodedInstances = listOf(
+        "https://searx.be",
+        "https://paulgo.io",
+        "https://priv.au",
+        "https://search.inetol.net",
+        "https://search.sapti.me",
+        "https://searx.tiekoetter.com",
+        "https://searx.bar",
+        "https://search.hbubli.cc",
+        "https://search.epicsite.xyz",
+        "https://searx.lunar.icu",
+        "https://search.projectsegfau.lt",
+        "https://searx.sev.monster",
+        "https://search.bus-hit.me",
+        "https://etsi.me",
+        "https://search.ononoki.org"
+    )
+
+    @Volatile private var cachedInstances: List<String>? = null
+    @Volatile private var cacheTime: Long = 0
+    private const val CACHE_DURATION_MS = 24 * 60 * 60 * 1000L
+
+    fun getInstances(): List<String> =
+        cachedInstances?.takeIf { System.currentTimeMillis() - cacheTime < CACHE_DURATION_MS }
+            ?: hardcodedInstances
+
+    fun setCachedInstances(instances: List<String>) {
+        cachedInstances = instances.shuffled()
+        cacheTime = System.currentTimeMillis()
+    }
+}
+
+internal suspend fun fetchAndCacheSearXInstances(client: OkHttpClient): Unit =
+    withContext(Dispatchers.IO) {
+        runCatching {
+            val request = Request.Builder()
+                .url("https://searx.space/data/instances.json")
+                .header("User-Agent", "Mozilla/5.0 (compatible)")
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use
+                val body = response.body?.string().orEmpty()
+                val root = runCatching { JsonParser.parseString(body).asJsonObject }.getOrNull() ?: return@use
+                val instancesObj = root.getAsJsonObject("instances") ?: return@use
+                val fetched = instancesObj.entrySet()
+                    .filter { (url, data) ->
+                        val obj = runCatching { data.asJsonObject }.getOrNull() ?: return@filter false
+                        val networkType = obj.get("network_type")?.asString
+                        networkType == "normal" && url.startsWith("https://")
+                    }
+                    .map { (url, _) -> url.trimEnd('/') }
+                    .shuffled()
+                    .take(20)
+                if (fetched.isNotEmpty()) {
+                    SearXInstanceCache.setCachedInstances(fetched)
+                    logWebGroundingDebug("SearX fetched ${fetched.size} instances from searx.space")
+                }
+            }
+        }
+        Unit
+    }
+
+// === News RSS Provider ===
+
+class NewsRssProvider(private val client: OkHttpClient) : WebSearchProvider {
+
+    override suspend fun search(query: String, maxResults: Int): List<WebGroundingSource> =
+        withContext(Dispatchers.IO) {
+            // Primary: Google News RSS (query-aware, no key needed)
+            val googleResults = runCatching { searchGoogleNews(query, maxResults) }.getOrElse { emptyList() }
+            if (googleResults.isNotEmpty()) {
+                logWebGroundingDebug("NewsRSS Google results=${googleResults.size} query=\"$query\"")
+                return@withContext googleResults
+            }
+            // Fallback: direct RSS feeds filtered by keywords
+            val keywords = query.lowercase().split(Regex("""\s+""")).filter { it.length > 2 }
+            val feedResults = coroutineScope {
+                rssFeeds.map { (name, url) ->
+                    async { runCatching { fetchRssFeed(url, keywords, maxResults) }.getOrElse { emptyList() } }
+                }.flatMap { it.await() }
+            }
+                .distinctBy { it.url }
+                .take(maxResults)
+            logWebGroundingDebug("NewsRSS feeds results=${feedResults.size} query=\"$query\"")
+            feedResults
+        }
+
+    private suspend fun searchGoogleNews(query: String, maxResults: Int): List<WebGroundingSource> {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val request = Request.Builder()
+            .url("https://news.google.com/rss/search?q=$encoded&hl=en-US&gl=US&ceid=US:en")
+            .header("User-Agent", "Mozilla/5.0 (compatible)")
+            .build()
+        return client.newCall(request).execute().use { response ->
+            logWebGroundingDebug("NewsRSS Google HTTP ${response.code} query=\"$query\"")
+            if (!response.isSuccessful) return@use emptyList()
+            parseRssItems(response.body?.string().orEmpty(), maxResults)
+        }
+    }
+
+    private fun parseRssItems(xml: String, maxResults: Int): List<WebGroundingSource> {
+        if (xml.isBlank()) return emptyList()
+        val doc = Jsoup.parse(xml, "", Parser.xmlParser())
+        return doc.select("item").take(maxResults * 2).mapNotNull { item ->
+            val title = item.selectFirst("title")?.text()?.trim().orEmpty()
+            val link = (item.selectFirst("link")?.text()?.trim()?.takeIf { it.startsWith("http") }
+                ?: item.selectFirst("guid")?.text()?.trim()).orEmpty()
+            val description = item.selectFirst("description")?.text()
+                ?.replace(Regex("<[^>]+>"), "")
+                ?.replace(Regex("""\s+"""), " ")
+                ?.trim()
+                .orEmpty()
+            if (title.isBlank() || !link.startsWith("http")) null
+            else WebGroundingSource(title = title.take(180), url = link, snippet = description.take(420))
+        }.distinctBy { it.url }.take(maxResults)
+    }
+
+    private val rssFeeds = listOf(
+        "BBC News" to "https://feeds.bbci.co.uk/news/rss.xml",
+        "Reuters" to "https://feeds.reuters.com/reuters/topNews",
+        "Al Jazeera" to "https://www.aljazeera.com/xml/rss/all.xml",
+        "AP News" to "https://apnews.com/rss"
+    )
+
+    private suspend fun fetchRssFeed(
+        url: String,
+        keywords: List<String>,
+        maxResults: Int
+    ): List<WebGroundingSource> {
+        val request = Request.Builder().url(url)
+            .header("User-Agent", "Mozilla/5.0 (compatible)")
+            .build()
+        return client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@use emptyList()
+            parseRssItems(response.body?.string().orEmpty(), maxResults * 3)
+                .filter { source ->
+                    keywords.isEmpty() || keywords.any {
+                        source.title.lowercase().contains(it) || source.snippet.lowercase().contains(it)
+                    }
+                }
+                .take(maxResults)
+        }
+    }
+}
+
+// === Hacker News Provider (Algolia API, no key) ===
+
+class HackerNewsProvider(private val client: OkHttpClient) : WebSearchProvider {
+
+    override suspend fun search(query: String, maxResults: Int): List<WebGroundingSource> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val encoded = URLEncoder.encode(query, "UTF-8")
+                val request = Request.Builder()
+                    .url("https://hn.algolia.com/api/v1/search?query=$encoded&tags=story&hitsPerPage=$maxResults")
+                    .header("User-Agent", "Mozilla/5.0 (compatible)")
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    logWebGroundingDebug("HackerNews HTTP ${response.code} query=\"$query\"")
+                    if (!response.isSuccessful) return@use emptyList()
+                    val root = runCatching {
+                        JsonParser.parseString(response.body?.string().orEmpty()).asJsonObject
+                    }.getOrNull() ?: return@use emptyList()
+                    root.getAsJsonArray("hits")?.mapNotNull { hit ->
+                        val obj = hit.asJsonObject
+                        val title = obj.get("title")?.asString?.trim().orEmpty()
+                        val url = obj.get("url")?.asString?.trim().orEmpty()
+                        val points = obj.get("points")?.asInt ?: 0
+                        val text = obj.get("story_text")?.asString?.trim().orEmpty()
+                        if (title.isBlank() || !url.startsWith("http")) return@mapNotNull null
+                        WebGroundingSource(
+                            title = title.take(180),
+                            url = url,
+                            snippet = text.take(420).ifBlank { "$points points on Hacker News" }
+                        )
+                    }?.take(maxResults) ?: emptyList()
+                }
+            }.getOrElse {
+                logWebGroundingDebug("HackerNews error=${it.message} query=\"$query\"")
+                emptyList()
+            }
+        }
+}
+
+// === Wikipedia Provider (Search API, no key) ===
+
+class WikipediaProvider(private val client: OkHttpClient) : WebSearchProvider {
+
+    override suspend fun search(query: String, maxResults: Int): List<WebGroundingSource> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val encoded = URLEncoder.encode(query, "UTF-8")
+                val request = Request.Builder()
+                    .url("https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&format=json&utf8=1&srlimit=$maxResults")
+                    .header("User-Agent", "UAI/1.0 (Android)")
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    logWebGroundingDebug("Wikipedia HTTP ${response.code} query=\"$query\"")
+                    if (!response.isSuccessful) return@use emptyList()
+                    val root = runCatching {
+                        JsonParser.parseString(response.body?.string().orEmpty()).asJsonObject
+                    }.getOrNull() ?: return@use emptyList()
+                    root.getAsJsonObject("query")
+                        ?.getAsJsonArray("search")
+                        ?.mapNotNull { item ->
+                            val obj = item.asJsonObject
+                            val title = obj.get("title")?.asString?.trim().orEmpty()
+                            val snippet = obj.get("snippet")?.asString
+                                ?.replace(Regex("<[^>]+>"), "")
+                                ?.replace(Regex("""\s+"""), " ")
+                                ?.trim()
+                                .orEmpty()
+                            if (title.isBlank()) return@mapNotNull null
+                            val encodedTitle = URLEncoder.encode(title.replace(" ", "_"), "UTF-8")
+                            WebGroundingSource(
+                                title = "Wikipedia: $title",
+                                url = "https://en.wikipedia.org/wiki/$encodedTitle",
+                                snippet = snippet.take(420)
+                            )
+                        }
+                        ?.take(maxResults) ?: emptyList()
+                }
+            }.getOrElse {
+                logWebGroundingDebug("Wikipedia error=${it.message} query=\"$query\"")
+                emptyList()
+            }
+        }
+}
+
+// === MetaGer Provider (open-source meta-search, HTML scrape) ===
+
+class MetaGerSearchProvider(private val client: OkHttpClient) : WebSearchProvider {
+
+    override suspend fun search(query: String, maxResults: Int): List<WebGroundingSource> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val encoded = URLEncoder.encode(query, "UTF-8")
+                val request = Request.Builder()
+                    .url("https://metager.org/meta/meta.ger3?eingabe=$encoded&aus=0&lang=all")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .header("Accept-Language", "en-US,en;q=0.9")
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    logWebGroundingDebug("MetaGer HTTP ${response.code} query=\"$query\"")
+                    if (!response.isSuccessful) return@use emptyList()
+                    val html = response.body?.string().orEmpty()
+                    val doc = Jsoup.parse(html)
+                    val results = doc.select(".result, .result-li, li.result")
+                        .mapNotNull { el ->
+                            val link = el.selectFirst("a[href^=http]") ?: return@mapNotNull null
+                            val title = (el.selectFirst("h2, h3, .result-title")?.text()
+                                ?: link.text()).trim()
+                            val url = link.attr("href").trim()
+                            val snippet = el.selectFirst(".result-description, p")
+                                ?.text()?.trim().orEmpty()
+                            if (title.isBlank() || !url.startsWith("http")) null
+                            else WebGroundingSource(title.take(180), url, snippet.take(420))
+                        }
+                        .distinctBy { it.url }
+                        .take(maxResults)
+                    logWebGroundingDebug("MetaGer results=${results.size} query=\"$query\"")
+                    results
+                }
+            }.getOrElse {
+                logWebGroundingDebug("MetaGer error=${it.message} query=\"$query\"")
+                emptyList()
+            }
+        }
+}
+
+// === Yandex Provider (HTML scrape, independent index) ===
+
+class YandexSearchProvider(private val client: OkHttpClient) : WebSearchProvider {
+
+    override suspend fun search(query: String, maxResults: Int): List<WebGroundingSource> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val encoded = URLEncoder.encode(query, "UTF-8")
+                val request = Request.Builder()
+                    .url("https://yandex.com/search/?text=$encoded&lang=en")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .header("Accept-Language", "en-US,en;q=0.9")
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    logWebGroundingDebug("Yandex HTTP ${response.code} query=\"$query\"")
+                    if (!response.isSuccessful) return@use emptyList()
+                    val html = response.body?.string().orEmpty()
+                    val doc = Jsoup.parse(html)
+                    val results = doc.select(".organic, li.serp-item")
+                        .mapNotNull { el ->
+                            val link = el.selectFirst("a.organic__url, .organic__title a, a[href^=http]")
+                                ?: return@mapNotNull null
+                            val title = (el.selectFirst(".organic__title, h2")?.text()
+                                ?: link.text()).trim()
+                            val url = link.attr("href").trim()
+                            val snippet = el.selectFirst(".organic__content-wrapper, .text-container, p")
+                                ?.text()?.trim().orEmpty()
+                            if (title.isBlank() || !url.startsWith("http")) null
+                            else WebGroundingSource(title.take(180), url, snippet.take(420))
+                        }
+                        .distinctBy { it.url }
+                        .take(maxResults)
+                    logWebGroundingDebug("Yandex results=${results.size} query=\"$query\"")
+                    results
+                }
+            }.getOrElse {
+                logWebGroundingDebug("Yandex error=${it.message} query=\"$query\"")
+                emptyList()
+            }
+        }
+}
+
+// === Domain-Routing Search Provider ===
+
+class DomainRoutingSearchProvider(
+    val newsProvider: WebSearchProvider,
+    val techProvider: WebSearchProvider,
+    val wikiProvider: WebSearchProvider,
+    val generalProvider: WebSearchProvider
+) : WebSearchProvider {
+
+    override suspend fun search(query: String, maxResults: Int): List<WebGroundingSource> =
+        generalProvider.search(query, maxResults)
+
+    suspend fun searchForDomain(
+        query: String,
+        domain: String?,
+        maxResults: Int = 5
+    ): List<WebGroundingSource> = when (domain) {
+        "news" -> newsProvider.search(query, maxResults)
+            .ifEmpty { generalProvider.search(query, maxResults) }
+        "tech" -> techProvider.search(query, maxResults)
+            .ifEmpty { generalProvider.search(query, maxResults) }
+        "wiki" -> wikiProvider.search(query, maxResults)
+            .ifEmpty { generalProvider.search(query, maxResults) }
+        else -> generalProvider.search(query, maxResults)
+    }
+}
+
+private fun ConversationIntent.toDomainString(): String? = when (this) {
+    ConversationIntent.NEWS -> "news"
+    ConversationIntent.TECH_SEARCH -> "tech"
+    else -> null
 }
 
 class FallbackWebSearchProvider(
@@ -562,20 +1079,29 @@ class WebGroundingService(
 
     private suspend fun searchWithCache(
         query: String,
-        maxResults: Int
+        maxResults: Int,
+        domain: String? = null
     ): List<WebGroundingSource> {
-        val cacheKey = "$maxResults::$query"
+        val cacheKey = "${domain ?: ""}::$maxResults::$query"
         searchCacheMutex.withLock {
             searchCache[cacheKey]?.let { cached ->
-                logWebGroundingDebug("cache hit query=\"$query\" results=${cached.size}")
+                logWebGroundingDebug("cache hit query=\"$query\" domain=$domain results=${cached.size}")
                 return cached
             }
         }
 
         val freshResults = runCatching {
-            searchProvider.search(query, maxResults = maxResults)
+            val router = searchProvider as? DomainRoutingSearchProvider
+            if (router != null && domain != null) {
+                router.searchForDomain(query, domain, maxResults)
+            } else {
+                searchProvider.search(query, maxResults)
+            }
         }.getOrElse { emptyList() }
         val rankedResults = rankSourcesForQuery(query, freshResults)
+
+        // Only cache successful (non-empty) results so transient failures don't poison future queries.
+        if (rankedResults.isEmpty()) return rankedResults
 
         searchCacheMutex.withLock {
             searchCache[cacheKey] = rankedResults
@@ -872,15 +1398,21 @@ class WebGroundingService(
         }
 
         val maxResultsPerQuery = if (queries.size > 1) 3 else 5
+        val domain = intent.toDomainString()
         val sources = if (timeQueries.size == queries.size && timeQueries.isNotEmpty()) {
             emptyList()
         } else {
             coroutineScope {
                 queries.map { query ->
                     async {
-                        val querySources = searchWithCache(query, maxResultsPerQuery)
+                        // Detect news intent from query keywords if not already set
+                        val effectiveDomain = domain ?: when {
+                            query.contains("news", ignoreCase = true) -> "news"
+                            else -> null
+                        }
+                        val querySources = searchWithCache(query, maxResultsPerQuery, effectiveDomain)
                             .map { source -> source.copy(sourceQuery = query) }
-                        logWebGroundingDebug("query=\"$query\" results=${querySources.size}")
+                        logWebGroundingDebug("query=\"$query\" domain=$effectiveDomain results=${querySources.size}")
                         querySources
                     }
                 }.flatMap { it.await() }

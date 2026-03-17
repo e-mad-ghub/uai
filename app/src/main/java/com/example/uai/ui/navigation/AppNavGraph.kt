@@ -46,7 +46,8 @@ fun AppNavGraph(
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
                     assistantRuntime = container.assistantRuntime,
-                    webGateway = container.webGateway
+                    webGateway = container.webGateway,
+                    providerFactory = container.providerFactory
                 )
             )
             ConversationDetailScreen(
@@ -62,12 +63,14 @@ fun AppNavGraph(
         ) { backStack ->
             val conversationId = backStack.arguments!!.getString("conversationId")!!
             val vm: ConversationDetailViewModel = viewModel(
+                key = conversationId,
                 factory = ConversationDetailViewModel.Factory(
                     conversationId = conversationId,
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
                     assistantRuntime = container.assistantRuntime,
-                    webGateway = container.webGateway
+                    webGateway = container.webGateway,
+                    providerFactory = container.providerFactory
                 )
             )
             ConversationDetailScreen(
@@ -175,6 +178,7 @@ fun AppNavGraph(
             ) { backStack ->
                 val agoraId = backStack.arguments!!.getString("agoraId")!!
                 val vm: AgoraDetailViewModel = viewModel(
+                    key = agoraId,
                     factory = AgoraDetailViewModel.Factory(
                         conversationId = agoraId,
                         repo = container.conversationRepository,

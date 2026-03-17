@@ -510,6 +510,14 @@ fun AgentConfig.canHandleImageRequests(): Boolean {
             )
 }
 
+/**
+ * True when AgentSide Internet Access is active for this agent.
+ * Null agentSideInternetAccess defers to model default:
+ *   ScreenAgent Optimized → on, all other models → off.
+ */
+val AgentConfig.hasInternetAccess: Boolean
+    get() = agentSideInternetAccess ?: isSideAgentManagedOpenRouterFreeRoute(model)
+
 fun shouldRetryOpenRouterFreeFallback(code: Int?, message: String): Boolean {
     val normalized = message.lowercase()
     return code in setOf(400, 404, 408, 409, 429, 500, 502, 503, 504, 529) ||

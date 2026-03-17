@@ -7,7 +7,9 @@ enum class ConversationIntent {
     NONE,
     STOCK_PRICE,
     CURRENT_TIME,
-    GENERAL_WEB
+    GENERAL_WEB,
+    NEWS,
+    TECH_SEARCH
 }
 
 data class ConversationWorkingState(

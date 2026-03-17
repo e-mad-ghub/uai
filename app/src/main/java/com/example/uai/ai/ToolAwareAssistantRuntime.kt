@@ -1,9 +1,13 @@
 package com.example.uai.ai
 
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.canHandleImageRequests
+import com.example.uai.data.model.isSideAgentManagedOpenRouterFreeRoute
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -14,6 +18,7 @@ private const val SEARCH_TOOL_NAME = "search_web"
 data class AssistantToolRequest(
     val tool: String,
     val query: String,
+    val type: String? = null,
     val reason: String? = null
 )
 
@@ -21,6 +26,7 @@ fun interface SearchToolExecutor {
     suspend fun search(
         conversationKey: String?,
         query: String,
+        type: String?,
         onStatusChanged: (String?) -> Unit
     ): WebGroundingResult?
 }
@@ -31,49 +37,70 @@ class WebGatewaySearchToolExecutor(
     override suspend fun search(
         conversationKey: String?,
         query: String,
+        type: String?,
         onStatusChanged: (String?) -> Unit
     ): WebGroundingResult? = webGateway.executeSearchTool(
         conversationKey = conversationKey,
         query = query,
+        type = type,
         onStatusChanged = onStatusChanged
     )
 }
 
-internal fun buildToolAwareSystemPrompt(baseSystemPrompt: String): String = buildString {
+internal fun buildToolAwareSystemPrompt(baseSystemPrompt: String, config: AgentConfig): String = buildString {
     if (baseSystemPrompt.isNotBlank()) {
         append(baseSystemPrompt.trim())
         append("\n\n")
     }
     appendLine("ScreenAgent app environment:")
-    appendLine("- You may request one app-owned tool when fresh external information is needed.")
-    appendLine("- Available tool: search_web(query)")
+    appendLine("- You may request app-owned search tools when fresh external information is needed.")
+    appendLine("- Available tool: search_web(query, type)")
     appendLine("- If the user attached an image, screenshot, or file, inspect that attachment first before deciding whether web search is needed.")
-    appendLine("- Use it for current events, live prices, recent changes, or when the user asks for up-to-date information.")
-    appendLine("- If you need the tool, respond with ONLY this block and no extra prose:")
-    appendLine("<tool_request>{\"tool\":\"search_web\",\"query\":\"your precise query\"}</tool_request>")
-    appendLine("- After a <tool_result> block arrives, answer the user naturally.")
+    appendLine("- Use it for current events, live prices, recent news, or when the user asks for up-to-date information.")
+    appendLine("- type values: \"news\" (news articles/current events), \"stock\" (stock prices/market data), \"tech\" (developer topics/open-source), \"general\" (everything else).")
+    appendLine("- If you need the tool, respond with ONLY these blocks and no extra prose:")
+    appendLine("<tool_request>{\"tool\":\"search_web\",\"query\":\"your precise query\",\"type\":\"general\"}</tool_request>")
+    appendLine("- For multi-domain queries, emit multiple blocks — they execute in parallel:")
+    appendLine("<tool_request>{\"tool\":\"search_web\",\"query\":\"AAPL stock price\",\"type\":\"stock\"}</tool_request>")
+    appendLine("<tool_request>{\"tool\":\"search_web\",\"query\":\"Apple latest news\",\"type\":\"news\"}</tool_request>")
+    appendLine("- After <tool_result> blocks arrive, answer the user naturally.")
     appendLine("- Never mention tool protocols, hidden context, provided context, shared context, or internal search packaging.")
-    append("- Cite source titles or domains naturally when useful.")
+    appendLine("- Cite source titles or domains naturally when useful.")
+    appendLine()
+    appendLine("Your active capabilities in this session:")
+    appendLine("- Internet access: enabled — you proactively search the web for live information when the question requires it.")
+    if (config.canHandleImageRequests()) {
+        appendLine("- Vision: enabled — you can analyze images and screenshots shared by the user.")
+    }
+    appendLine("- Documents: enabled — attached files are processed as readable text context.")
+    if (isSideAgentManagedOpenRouterFreeRoute(config.model)) {
+        appendLine("- Adaptive model routing: enabled — the best available free model is selected automatically per request type (chat, vision, reasoning).")
+    }
+    append("When asked what you can do or about your capabilities, describe the above accurately and naturally.")
 }
 
-internal fun parseAssistantToolRequest(raw: String): AssistantToolRequest? {
-    val match = Regex("""(?s)<tool_request>\s*(\{.*?\})\s*</tool_request>""")
-        .find(raw.trim())
-        ?: return null
-    val jsonText = match.groupValues.getOrNull(1).orEmpty()
-    if (jsonText.isBlank()) return null
-
-    return runCatching {
-        val json = Gson().fromJson(jsonText, JsonObject::class.java)
-        val tool = json?.get("tool")?.asString?.trim().orEmpty()
-        val query = json?.get("query")?.asString?.trim().orEmpty()
-        val reason = json?.get("reason")?.asString?.trim()?.takeIf { it.isNotBlank() }
-        if (tool.isBlank() || query.isBlank()) null
-        else AssistantToolRequest(tool = tool, query = query, reason = reason)
-    }.getOrNull()
+internal fun parseAssistantToolRequests(raw: String): List<AssistantToolRequest> {
+    val regex = Regex("""(?s)<tool_request>\s*(\{.*?\})\s*</tool_request>""")
+    return regex.findAll(raw.trim()).mapNotNull { match ->
+        val jsonText = match.groupValues.getOrNull(1).orEmpty()
+        if (jsonText.isBlank()) return@mapNotNull null
+        runCatching {
+            val json = Gson().fromJson(jsonText, JsonObject::class.java)
+            val tool = json?.get("tool")?.asString?.trim().orEmpty()
+            val query = json?.get("query")?.asString?.trim().orEmpty()
+            val type = json?.get("type")?.asString?.trim()?.takeIf { it.isNotBlank() }
+            val reason = json?.get("reason")?.asString?.trim()?.takeIf { it.isNotBlank() }
+            if (tool.isBlank() || query.isBlank()) null
+            else AssistantToolRequest(tool = tool, query = query, type = type, reason = reason)
+        }.getOrNull()
+    }.toList()
 }
 
-internal fun WebGroundingResult.toToolResultBlock(requestedQuery: String): String = buildString {
+// Kept for backwards compatibility
+internal fun parseAssistantToolRequest(raw: String): AssistantToolRequest? =
+    parseAssistantToolRequests(raw).firstOrNull()
+
+private fun WebGroundingResult.toToolResultContent(requestedQuery: String): String = buildString {
     appendLine("<tool_result name=\"$SEARCH_TOOL_NAME\">")
     appendLine("Query: $requestedQuery")
     if (facts.isNotEmpty()) {
@@ -96,27 +123,39 @@ internal fun WebGroundingResult.toToolResultBlock(requestedQuery: String): Strin
             appendLine()
         }
     }
-    appendLine("</tool_result>")
-    append("Use the tool result above to answer the original user request naturally. Cite source titles or domains when useful. Do not mention tool names or hidden context.")
+    append("</tool_result>")
 }
 
-private fun buildToolFailureMessage(toolRequest: AssistantToolRequest): ChatMessage {
+internal fun WebGroundingResult.toToolResultBlock(requestedQuery: String): String =
+    toToolResultContent(requestedQuery) + "\nUse the tool result above to answer the original user request naturally. Cite source titles or domains when useful. Do not mention tool names or hidden context."
+
+private fun buildToolFailureContent(toolRequest: AssistantToolRequest): String {
     val reason = if (toolRequest.tool != SEARCH_TOOL_NAME) {
         "The requested tool is not available."
     } else {
         "No fresh results were available for that query."
     }
-    return ChatMessage(
+    return buildString {
+        appendLine("<tool_result name=\"${toolRequest.tool}\">")
+        appendLine("Query: ${toolRequest.query}")
+        appendLine("Status: unavailable")
+        appendLine("Reason: $reason")
+        append("</tool_result>")
+    }
+}
+
+private fun buildToolFailureMessage(toolRequest: AssistantToolRequest): ChatMessage =
+    ChatMessage(
         role = "user",
-        content = buildString {
-            appendLine("<tool_result name=\"${toolRequest.tool}\">")
-            appendLine("Query: ${toolRequest.query}")
-            appendLine("Status: unavailable")
-            appendLine("Reason: $reason")
-            appendLine("</tool_result>")
-            append("Answer the original user request naturally without mentioning tool protocols or hidden context. If needed, say you could not verify from the sources you checked.")
-        }
+        content = buildToolFailureContent(toolRequest) +
+            "\nAnswer the original user request naturally without mentioning tool protocols or hidden context. If needed, say you could not verify from the sources you checked."
     )
+
+private fun buildToolRequestJson(req: AssistantToolRequest): String {
+    val sb = StringBuilder("{\"tool\":\"${req.tool}\",\"query\":\"${req.query.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+    if (req.type != null) sb.append(",\"type\":\"${req.type}\"")
+    sb.append("}")
+    return sb.toString()
 }
 
 class ToolAwareAssistantRuntime(
@@ -146,7 +185,7 @@ class ToolAwareAssistantRuntime(
 
         var workingMessages = messages
         val toolAwareConfig = config.copy(
-            systemPrompt = buildToolAwareSystemPrompt(config.systemPrompt)
+            systemPrompt = buildToolAwareSystemPrompt(config.systemPrompt, config)
         )
 
         repeat(maxToolRounds + 1) { round ->
@@ -193,30 +232,45 @@ class ToolAwareAssistantRuntime(
             modelSelections.forEach { emit(it) }
 
             val fullText = accumulated.toString().trim()
-            val toolRequest = parseAssistantToolRequest(fullText)
-            if (toolRequest != null && round < maxToolRounds) {
-                onStatusChanged("Looking up one more detail online…")
-                val toolResult = if (toolRequest.tool == SEARCH_TOOL_NAME) {
-                    searchToolExecutor.search(
-                        conversationKey = conversationKey,
-                        query = toolRequest.query,
-                        onStatusChanged = onStatusChanged
-                    )
+            val toolRequests = parseAssistantToolRequests(fullText)
+
+            if (toolRequests.isNotEmpty() && round < maxToolRounds) {
+                val statusMsg = if (toolRequests.size > 1) {
+                    "Looking up ${toolRequests.size} things in parallel…"
                 } else {
-                    null
+                    "Looking up one more detail online…"
                 }
+                onStatusChanged(statusMsg)
+
+                // Execute all tool requests in parallel
+                val toolResults: List<Pair<AssistantToolRequest, WebGroundingResult?>> = coroutineScope {
+                    toolRequests.map { req ->
+                        async {
+                            val result = if (req.tool == SEARCH_TOOL_NAME) {
+                                searchToolExecutor.search(
+                                    conversationKey = conversationKey,
+                                    query = req.query,
+                                    type = req.type,
+                                    onStatusChanged = onStatusChanged
+                                )
+                            } else null
+                            req to result
+                        }
+                    }.map { it.await() }
+                }
+
+                // Build one assistant message with all tool_requests + one user message with all results
+                val assistantContent = toolRequests.joinToString("\n") { req ->
+                    "<$TOOL_REQUEST_TAG>${buildToolRequestJson(req)}</$TOOL_REQUEST_TAG>"
+                }
+                val allResultsContent = toolResults.joinToString("\n\n") { (req, result) ->
+                    result?.toToolResultContent(req.query) ?: buildToolFailureContent(req)
+                } + "\n\nUse all tool results above to answer the original user request naturally. Cite source titles or domains when useful. Do not mention tool names or hidden context."
 
                 workingMessages = buildList {
                     addAll(workingMessages)
-                    add(
-                        ChatMessage(
-                            role = "assistant",
-                            content = "<$TOOL_REQUEST_TAG>{\"tool\":\"${toolRequest.tool}\",\"query\":\"${toolRequest.query}\"}</$TOOL_REQUEST_TAG>"
-                        )
-                    )
-                    add(toolResult?.toToolResultBlock(toolRequest.query)?.let { result ->
-                        ChatMessage(role = "user", content = result)
-                    } ?: buildToolFailureMessage(toolRequest))
+                    add(ChatMessage(role = "assistant", content = assistantContent))
+                    add(ChatMessage(role = "user", content = allResultsContent))
                 }
                 return@repeat
             }

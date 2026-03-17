@@ -21,6 +21,9 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations WHERE id = :id")
     fun getById(id: String): Flow<ConversationEntity?>
 
+    @Query("SELECT * FROM conversations WHERE id = :id LIMIT 1")
+    suspend fun getByIdOnce(id: String): ConversationEntity?
+
     @Query("UPDATE conversations SET updatedAt = :timestamp WHERE id = :id")
     suspend fun touchUpdatedAt(id: String, timestamp: Long = System.currentTimeMillis())
 }

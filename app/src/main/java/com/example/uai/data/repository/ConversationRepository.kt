@@ -19,6 +19,9 @@ class ConversationRepository(
     fun getConversation(id: String): Flow<ConversationEntity?> =
         conversationDao.getById(id)
 
+    suspend fun getConversationOnce(id: String): ConversationEntity? =
+        conversationDao.getByIdOnce(id)
+
     fun getMessages(conversationId: String): Flow<List<MessageEntity>> =
         messageDao.getMessages(conversationId)
 

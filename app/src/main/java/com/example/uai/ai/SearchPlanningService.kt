@@ -154,6 +154,7 @@ class SearchPlanningService(
                 is StreamChunk.Token -> text.append(chunk.text)
                 is StreamChunk.Error -> error = chunk.cause
                 is StreamChunk.ModelSelection -> Unit
+                is StreamChunk.Usage -> Unit
                 is StreamChunk.Done -> Unit
             }
         }

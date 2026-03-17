@@ -45,6 +45,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +54,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.uai.R
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.canHandleImageRequests
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.example.uai.ui.components.ProductEmptyStateCard
 import com.example.uai.ui.components.ProductPill
 import com.example.uai.ui.components.ProductScreenIntro
@@ -222,6 +226,27 @@ private fun AgentItem(
                                 }
                             }
                         }
+                    }
+                    // Token usage line (only shown when there is a limit OR some usage)
+                    val currentMonth = remember { SimpleDateFormat("yyyy-MM", Locale.US).format(Date()) }
+                    val effectiveUsed = if (agent.tokenUsedMonth == currentMonth) agent.tokenUsed else 0L
+                    val tokenLimit = agent.tokenLimit
+                    if (tokenLimit != null || effectiveUsed > 0L) {
+                        val usageText = if (tokenLimit != null) {
+                            "(${formatTokenCount(effectiveUsed)}/${formatTokenCount(tokenLimit)})"
+                        } else {
+                            "(${formatTokenCount(effectiveUsed)} tokens used)"
+                        }
+                        val usageColor = when {
+                            tokenLimit != null && effectiveUsed >= tokenLimit * 0.85 -> Color(0xFFD32F2F)
+                            tokenLimit != null && effectiveUsed >= tokenLimit * 0.60 -> Color(0xFFF57C00)
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                        Text(
+                            usageText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = usageColor
+                        )
                     }
                     Text(
                         assistantSummary(agent),

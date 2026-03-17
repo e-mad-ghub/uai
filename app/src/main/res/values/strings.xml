@@ -92,7 +92,7 @@
     <string name="mini_chat_tip_minimize_body">Double-tap the Mini Chat message area to collapse it back to the bubble.</string>
     <string name="mini_chat_tip_rooms_title">Agora rooms</string>
     <string name="mini_chat_tip_rooms_body">Agora rooms stay in the main app and do not transfer into Mini Chat.</string>
-    <string name="mini_chat_entry_hint_ready">Mini Chat: double-tap this 1:1 chat to continue it in the bubble. Agora rooms stay in the app.</string>
+    <string name="mini_chat_entry_hint_ready">Mini Chat: double-tap this 1:1 chat to continue it in the bubble.</string>
     <string name="mini_chat_entry_hint_permission">Mini Chat is on, but Android still needs overlay permission. Allow display over other apps, then double-tap any 1:1 chat to continue it in the bubble.</string>
     <string name="mini_chat_panel_hint">Double-tap to minimize Mini Chat</string>
     <string name="conversations_empty_title">No chats yet</string>

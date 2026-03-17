@@ -214,6 +214,15 @@ class AgentEditViewModel(
         }
     }
 
+    fun resetTokenUsage() {
+        viewModelScope.launch {
+            repo.resetTokenUsage(_agent.value.id)
+            // Reload the updated agent so the UI reflects the reset immediately
+            val updated = repo.agentsFlow.first().firstOrNull { it.id == _agent.value.id }
+            if (updated != null) _agent.value = updated
+        }
+    }
+
     fun testConnection() {
         val agent = _agent.value.normalizedForSave()
         if (agent.apiKey.isBlank()) {

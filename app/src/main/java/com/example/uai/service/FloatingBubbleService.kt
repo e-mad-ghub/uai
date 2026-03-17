@@ -73,6 +73,7 @@ import com.example.uai.data.model.AppColorTheme
 import com.example.uai.ui.MediaPickerActivity
 import com.example.uai.ui.OverlayScreenCaptureActivity
 import com.example.uai.ui.OverlayScreenCaptureOutcome
+import com.example.uai.ui.agents.formatTokenCount
 import com.example.uai.ui.chat.persistImageAttachment
 import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.BubbleContent
@@ -95,6 +96,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
 
@@ -795,13 +799,34 @@ class FloatingBubbleService : Service() {
                             }
                         }
                     }
+                    val bubbleAgent = selectedAgentForCurrentContext()
+                    val bubbleCurrentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+                    val bubbleEffectiveUsed = bubbleAgent?.let { a ->
+                        if (a.tokenUsedMonth == bubbleCurrentMonth) a.tokenUsed else 0L
+                    } ?: 0L
+                    val bubbleTokenInfo = bubbleAgent?.let { a ->
+                        when {
+                            a.tokenLimit != null -> "(${formatTokenCount(bubbleEffectiveUsed)}/${formatTokenCount(a.tokenLimit)})"
+                            bubbleEffectiveUsed > 0L -> "(${formatTokenCount(bubbleEffectiveUsed)} tokens)"
+                            else -> null
+                        }
+                    }
+                    val bubbleTokenColor = bubbleAgent?.let { a ->
+                        when {
+                            a.tokenLimit != null && bubbleEffectiveUsed >= a.tokenLimit * 0.85 -> androidx.compose.ui.graphics.Color(0xFFD32F2F)
+                            a.tokenLimit != null && bubbleEffectiveUsed >= a.tokenLimit * 0.60 -> androidx.compose.ui.graphics.Color(0xFFF57C00)
+                            else -> androidx.compose.ui.graphics.Color.Unspecified
+                        }
+                    } ?: androidx.compose.ui.graphics.Color.Unspecified
                     ChatPanel(
                         messages = displayMessages,
                         inputText = inputText,
                         isLoading = isLoading,
-                        agentName = selectedAgentForCurrentContext()?.name ?: "Select assistant",
-                        selectedAgentId = selectedAgentForCurrentContext()?.id,
-                        hasSelectedAgent = selectedAgentForCurrentContext() != null,
+                        agentName = bubbleAgent?.name ?: "Select assistant",
+                        agentTokenInfo = bubbleTokenInfo,
+                        agentTokenInfoColor = bubbleTokenColor,
+                        selectedAgentId = bubbleAgent?.id,
+                        hasSelectedAgent = bubbleAgent != null,
                         agents = allAgents,
                         conversations = availableConversations,
                         currentConversationId = currentConversationId,
@@ -1573,6 +1598,32 @@ class FloatingBubbleService : Service() {
 
         if ((fullText.isBlank() && imageList.isEmpty() && attachedFile == null) || isLoading || agent == null) return
 
+        // Check token limit before doing any work
+        val tokenLimit = agent.tokenLimit
+        if (tokenLimit != null) {
+            val currentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+            val effectiveUsed = if (agent.tokenUsedMonth == currentMonth) agent.tokenUsed else 0L
+            if (effectiveUsed >= tokenLimit) {
+                // Show a system message in the chat about the limit
+                val container = (application as UaiApplication).container
+                serviceScope.launch {
+                    val convId = currentConversationId
+                    if (convId != null) {
+                        val limitMsg = MessageEntity(
+                            id = UUID.randomUUID().toString(),
+                            conversationId = convId,
+                            role = "assistant",
+                            content = "Token limit reached for \"${agent.name}\".\n\nThis assistant has used $effectiveUsed/$tokenLimit tokens this month. Reset usage in the assistant settings to continue.",
+                            createdAt = System.currentTimeMillis()
+                        )
+                        container.conversationRepository.insertMessage(limitMsg)
+                        chatMessages.add(limitMsg)
+                    }
+                }
+                return
+            }
+        }
+
         // Clear attachment before starting the stream (don't wait for it)
         clearAttachment()
 
@@ -1736,6 +1787,11 @@ class FloatingBubbleService : Service() {
                                     chunk.viaFallback
                                 )
                             }
+                            is StreamChunk.Usage ->
+                                container.agentRepository.addTokenUsage(
+                                    agent.id,
+                                    (chunk.inputTokens + chunk.outputTokens).toLong()
+                                )
                             is StreamChunk.Done -> Unit
                             is StreamChunk.Error -> {
                                 // Keep accumulated non-blank so finally() doesn't delete the message bubble.

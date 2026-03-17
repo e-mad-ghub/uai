@@ -24,7 +24,13 @@ data class AgentConfig(
     /** Anthropic / OpenAI native web search — off by default, opt-in per agent. */
     val nativeWebSearchEnabled: Boolean = false,
     /** Tool type sent to the provider. Null = use NativeWebSearchConfig default for the provider. */
-    val nativeWebSearchToolType: String? = null
+    val nativeWebSearchToolType: String? = null,
+    /** Monthly token limit (input + output combined). Null = no limit. */
+    val tokenLimit: Long? = null,
+    /** Cumulative tokens used this month (input + output). */
+    val tokenUsed: Long = 0L,
+    /** "YYYY-MM" of the month tokenUsed was last accumulated. Empty = never used. */
+    val tokenUsedMonth: String = ""
 ) {
     /** True when the selected model is known to accept image input. */
     val supportsVision: Boolean get() = when {

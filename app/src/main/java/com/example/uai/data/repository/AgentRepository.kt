@@ -6,8 +6,15 @@ import com.example.uai.data.prefs.AppPreferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class AgentRepository(private val prefs: AppPreferences) {
+
+    private val tokenUsageMutex = Mutex()
 
     val agentsFlow: Flow<List<AgentConfig>> = prefs.agentListFlow
 
@@ -39,4 +46,33 @@ class AgentRepository(private val prefs: AppPreferences) {
     val colorThemeFlow: Flow<AppColorTheme> = prefs.colorThemeFlow
 
     suspend fun setColorTheme(theme: AppColorTheme) = prefs.setColorTheme(theme)
+
+    /** Add [tokens] to [agentId]'s monthly usage, auto-resetting on month change. */
+    suspend fun addTokenUsage(agentId: String, tokens: Long) {
+        if (tokens <= 0L) return
+        tokenUsageMutex.withLock {
+            val currentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+            val current = prefs.agentListFlow.first().toMutableList()
+            val idx = current.indexOfFirst { it.id == agentId }
+            if (idx < 0) return@withLock
+            val agent = current[idx]
+            val prevUsed = if (agent.tokenUsedMonth == currentMonth) agent.tokenUsed else 0L
+            current[idx] = agent.copy(
+                tokenUsed = prevUsed + tokens,
+                tokenUsedMonth = currentMonth
+            )
+            prefs.saveAgentList(current)
+        }
+    }
+
+    /** Reset token usage counter for [agentId] to zero. */
+    suspend fun resetTokenUsage(agentId: String) {
+        tokenUsageMutex.withLock {
+            val current = prefs.agentListFlow.first().toMutableList()
+            val idx = current.indexOfFirst { it.id == agentId }
+            if (idx < 0) return@withLock
+            current[idx] = current[idx].copy(tokenUsed = 0L, tokenUsedMonth = "")
+            prefs.saveAgentList(current)
+        }
+    }
 }

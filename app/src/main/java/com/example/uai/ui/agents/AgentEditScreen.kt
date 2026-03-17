@@ -54,6 +54,9 @@ import com.example.uai.data.model.normalizeOpenAiCompatibleBaseUrl
 import com.example.uai.ai.NativeWebSearchConfig
 import com.example.uai.data.model.MONEY_SAVER_MODEL
 import com.example.uai.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.example.uai.ui.components.ProductPill
 import com.example.uai.ui.components.ProductScreenIntro
 import com.example.uai.ui.components.ProductTopBarTitle
@@ -500,6 +503,45 @@ fun AgentEditScreen(
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+                                    }
+                                }
+                                // Token limit
+                                HorizontalDivider()
+                                var tokenLimitText by rememberSaveable(agent.id) {
+                                    mutableStateOf(agent.tokenLimit?.toString() ?: "")
+                                }
+                                OutlinedTextField(
+                                    value = tokenLimitText,
+                                    onValueChange = { raw ->
+                                        tokenLimitText = raw.filter { it.isDigit() }
+                                        val parsed = tokenLimitText.toLongOrNull()
+                                        viewModel.update { copy(tokenLimit = parsed) }
+                                    },
+                                    label = { Text("Monthly token limit") },
+                                    supportingText = { Text("Leave empty for no limit. Counts input + output tokens.") },
+                                    placeholder = { Text("e.g. 100000") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                                val currentMonth = remember {
+                                    SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+                                }
+                                val effectiveUsed = if (agent.tokenUsedMonth == currentMonth) agent.tokenUsed else 0L
+                                if (effectiveUsed > 0L) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "Used this month: ${formatTokenCount(effectiveUsed)} tokens",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        TextButton(onClick = { viewModel.resetTokenUsage() }) {
+                                            Text("Reset usage")
+                                        }
                                     }
                                 }
                             }

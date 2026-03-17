@@ -59,6 +59,8 @@ fun ChatPanel(
     inputText: String,
     isLoading: Boolean,
     agentName: String,
+    agentTokenInfo: String? = null,
+    agentTokenInfoColor: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color.Unspecified,
     selectedAgentId: String?,
     hasSelectedAgent: Boolean,
     agents: List<AgentConfig>,
@@ -198,6 +200,7 @@ fun ChatPanel(
                         Spacer(Modifier.weight(1f))
 
                         Box {
+                            Column(horizontalAlignment = Alignment.End) {
                             TextButton(
                                 onClick = {
                                     if (agents.isNotEmpty()) {
@@ -221,6 +224,17 @@ fun ChatPanel(
                                     )
                                 }
                             }
+                            if (!agentTokenInfo.isNullOrBlank()) {
+                                Text(
+                                    text = agentTokenInfo,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (agentTokenInfoColor == androidx.compose.ui.graphics.Color.Unspecified)
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    else agentTokenInfoColor,
+                                    modifier = Modifier.padding(end = 4.dp, bottom = 4.dp)
+                                )
+                            }
+                            } // end Column
                             DropdownMenu(
                                 expanded = agentDropdownExpanded,
                                 onDismissRequest = { agentDropdownExpanded = false }

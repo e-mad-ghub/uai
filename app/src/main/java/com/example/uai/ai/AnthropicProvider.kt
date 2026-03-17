@@ -43,6 +43,8 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
                 }
 
                 var currentEventType = ""
+                var inputTokens = 0
+                var outputTokens = 0
                 while (!source.exhausted()) {
                     currentCoroutineContext().ensureActive()
                     val line = source.readUtf8Line() ?: break
@@ -53,6 +55,14 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
                         line.startsWith("data: ") -> {
                             val data = line.removePrefix("data: ").trim()
                             when (currentEventType) {
+                                "message_start" -> {
+                                    try {
+                                        val obj = gson.fromJson(data, JsonObject::class.java)
+                                        inputTokens = obj?.getAsJsonObject("message")
+                                            ?.getAsJsonObject("usage")
+                                            ?.get("input_tokens")?.asInt ?: 0
+                                    } catch (_: Exception) {}
+                                }
                                 "content_block_delta" -> {
                                     try {
                                         val obj = gson.fromJson(data, JsonObject::class.java)
@@ -60,7 +70,17 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
                                         if (!text.isNullOrEmpty()) emit(StreamChunk.Token(text))
                                     } catch (_: Exception) {}
                                 }
+                                "message_delta" -> {
+                                    try {
+                                        val obj = gson.fromJson(data, JsonObject::class.java)
+                                        outputTokens = obj?.getAsJsonObject("usage")
+                                            ?.get("output_tokens")?.asInt ?: outputTokens
+                                    } catch (_: Exception) {}
+                                }
                                 "message_stop" -> {
+                                    if (inputTokens > 0 || outputTokens > 0) {
+                                        emit(StreamChunk.Usage(inputTokens, outputTokens))
+                                    }
                                     emit(StreamChunk.Done)
                                     return@use
                                 }

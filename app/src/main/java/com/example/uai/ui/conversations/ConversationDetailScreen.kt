@@ -47,6 +47,7 @@ import com.example.uai.service.FloatingBubbleService
 import com.example.uai.ui.components.ProductEmptyStateCard
 import com.example.uai.ui.components.ProductInlineHintStrip
 import com.example.uai.ui.components.ProductPill
+import com.example.uai.ui.agents.formatTokenCount
 import com.example.uai.ui.components.ProductTopBarTitle
 import com.example.uai.ui.chat.FileAttachmentImportResult
 import com.example.uai.ui.chat.ChatInputBar
@@ -61,6 +62,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import android.widget.Toast
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
@@ -268,6 +272,24 @@ fun ConversationDetailScreen(
                 navigationIcon = { IconButton(onClick = openDrawer) { Icon(Icons.Default.Menu, "Menu") } },
                 actions = {
                     if (agents.isNotEmpty()) {
+                        val actionMonth = remember { SimpleDateFormat("yyyy-MM", Locale.US).format(Date()) }
+                        val actionTokenText = activeAgent?.let { agent ->
+                            val effectiveUsed = if (agent.tokenUsedMonth == actionMonth) agent.tokenUsed else 0L
+                            when {
+                                agent.tokenLimit != null -> "(${formatTokenCount(effectiveUsed)}/${formatTokenCount(agent.tokenLimit)})"
+                                effectiveUsed > 0L -> "(${formatTokenCount(effectiveUsed)} tokens)"
+                                else -> null
+                            }
+                        }
+                        val actionTokenColor = activeAgent?.let { agent ->
+                            val effectiveUsed = if (agent.tokenUsedMonth == actionMonth) agent.tokenUsed else 0L
+                            when {
+                                agent.tokenLimit != null && effectiveUsed >= agent.tokenLimit * 0.85 -> Color(0xFFD32F2F)
+                                agent.tokenLimit != null && effectiveUsed >= agent.tokenLimit * 0.60 -> Color(0xFFF57C00)
+                                else -> Color.Unspecified
+                            }
+                        } ?: Color.Unspecified
+                        Column(horizontalAlignment = Alignment.End) {
                         Box {
                             TextButton(onClick = { agentMenuExpanded = true }) {
                                 Text(
@@ -278,13 +300,28 @@ fun ConversationDetailScreen(
                                 Icon(Icons.Default.ArrowDropDown, "Switch agent", tint = MaterialTheme.colorScheme.primary)
                             }
                             DropdownMenu(expanded = agentMenuExpanded, onDismissRequest = { agentMenuExpanded = false }) {
+                                val dropdownMonth = remember { SimpleDateFormat("yyyy-MM", Locale.US).format(Date()) }
                                 agents.forEach { agent ->
+                                    val dropdownUsed = if (agent.tokenUsedMonth == dropdownMonth) agent.tokenUsed else 0L
+                                    val dropdownTokenText = when {
+                                        agent.tokenLimit != null -> "(${formatTokenCount(dropdownUsed)}/${formatTokenCount(agent.tokenLimit)})"
+                                        dropdownUsed > 0L -> "(${formatTokenCount(dropdownUsed)} tokens)"
+                                        else -> null
+                                    }
+                                    val dropdownTokenColor = when {
+                                        agent.tokenLimit != null && dropdownUsed >= agent.tokenLimit * 0.85 -> Color(0xFFD32F2F)
+                                        agent.tokenLimit != null && dropdownUsed >= agent.tokenLimit * 0.60 -> Color(0xFFF57C00)
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
                                     DropdownMenuItem(
                                         text = {
                                             Column {
                                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                     Text(agent.name)
                                                     if (agent.canHandleImageRequests()) Icon(Icons.Default.Image, null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
+                                                }
+                                                if (dropdownTokenText != null) {
+                                                    Text(dropdownTokenText, style = MaterialTheme.typography.labelSmall, color = dropdownTokenColor)
                                                 }
                                                 Text("${agent.provider.displayName} · ${agent.model}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                             }
@@ -294,6 +331,15 @@ fun ConversationDetailScreen(
                                     )
                                 }
                             }
+                        }
+                        if (!actionTokenText.isNullOrBlank()) {
+                            Text(
+                                actionTokenText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = actionTokenColor,
+                                modifier = Modifier.padding(end = 8.dp, bottom = 4.dp)
+                            )
+                        }
                         }
                     }
                 }

@@ -460,6 +460,11 @@ class AgoraDetailViewModel(
                                             chunk.viaFallback
                                         )
                                     }
+                                    is StreamChunk.Usage ->
+                                        agentRepo.addTokenUsage(
+                                            agent.id,
+                                            (chunk.inputTokens + chunk.outputTokens).toLong()
+                                        )
                                     is StreamChunk.Done -> {}
                                     is StreamChunk.Error -> {
                                         val errMsg = chunk.cause.message ?: "Unknown error"

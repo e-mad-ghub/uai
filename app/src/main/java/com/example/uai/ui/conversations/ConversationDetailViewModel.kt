@@ -31,6 +31,9 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 class ConversationDetailViewModel(
@@ -244,6 +247,21 @@ class ConversationDetailViewModel(
         val agent = activeAgent.value ?: return
         if ((text.isBlank() && images.isEmpty() && attachedFile == null) || _isLoading.value) return
 
+        // Check token limit before doing any work
+        val tokenLimit = agent.tokenLimit
+        if (tokenLimit != null) {
+            val currentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+            val effectiveUsed = if (agent.tokenUsedMonth == currentMonth) agent.tokenUsed else 0L
+            if (effectiveUsed >= tokenLimit) {
+                viewModelScope.launch {
+                    _errorEvent.send(
+                        "Token limit reached for \"${agent.name}\".\n\nThis assistant has used $effectiveUsed/$tokenLimit tokens this month. Reset usage in the assistant settings to continue."
+                    )
+                }
+                return
+            }
+        }
+
         streamingJob = viewModelScope.launch {
             _isLoading.value = true
             _inputText.value = ""
@@ -346,6 +364,8 @@ class ConversationDetailViewModel(
                         }
                         is StreamChunk.ModelSelection ->
                             repo.updateMessageResponseModel(assistantId, chunk.modelId, chunk.viaFallback)
+                        is StreamChunk.Usage ->
+                            agentRepo.addTokenUsage(agent.id, (chunk.inputTokens + chunk.outputTokens).toLong())
                         is StreamChunk.Done -> Unit
                         is StreamChunk.Error -> {
                             val errMsg = chunk.cause.message ?: "Unknown error"

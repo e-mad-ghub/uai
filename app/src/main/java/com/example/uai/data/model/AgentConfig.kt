@@ -19,7 +19,7 @@ data class AgentConfig(
     val customBaseUrl: String = "",
     val systemPrompt: String = "You are a helpful assistant.",
     val temperature: Float = 0.7f,
-    /** Null = use model default (ScreenAgent Optimized → on, all others → off). */
+    /** Null = use model default (ScreenAgent Free → on, all others → off). */
     val agentSideInternetAccess: Boolean? = null
 ) {
     /** True when the selected model is known to accept image input. */

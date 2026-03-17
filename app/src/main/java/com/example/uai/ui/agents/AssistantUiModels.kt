@@ -273,7 +273,7 @@ fun recommendedModelChoices(
             val knownChoices = listOf(
                 RecommendedModelChoice(
                     id = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
-                    label = "ScreenAgent Optimized",
+                    label = "ScreenAgent Free",
                     description = "Best available free model per request, with built-in internet access, adaptive vision, and file routing.",
                     isRecommended = true,
                     isFree = true,

@@ -61,6 +61,7 @@ import com.example.uai.ai.FileAttachmentContext
 import com.example.uai.ai.ImageAttachment
 import com.example.uai.ai.StreamChunk
 import com.example.uai.ai.ThrottledStreamingMessageWriter
+import com.example.uai.ai.compressHistory
 import com.example.uai.ai.sanitizeGroundedAssistantResponse
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageEntity
@@ -1667,7 +1668,7 @@ class FloatingBubbleService : Service() {
 
                 // Build history, attaching images to the last user message.
                 val allHistory = chatMessages.filter { !it.isStreaming }
-                val history = allHistory.mapIndexed { idx, msg ->
+                val history = compressHistory(allHistory.mapIndexed { idx, msg ->
                     if (idx == allHistory.lastIndex && msg.role == "user") {
                         when {
                             imageList.isNotEmpty() -> msg.toChatMessage(
@@ -1678,7 +1679,7 @@ class FloatingBubbleService : Service() {
                     } else {
                         msg.toChatMessage()
                     }
-                }
+                })
                 val effectiveHistory = if (agent.hasInternetAccess) {
                     container.webGateway.prepareTurn(
                         conversationKey = activeConversationId,
@@ -1717,7 +1718,7 @@ class FloatingBubbleService : Service() {
                         when (chunk) {
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
-                                val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                                val sanitized = if (agent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
                                 session?.onToken(sanitized)
                                 streamingWriter?.emitStreaming(sanitized)
                             }
@@ -1752,7 +1753,7 @@ class FloatingBubbleService : Service() {
                             if (idx != -1) chatMessages.removeAt(idx)
                             container.conversationRepository.deleteMessage(id)
                         } else {
-                            val sanitized = sanitizeGroundedAssistantResponse(accumulated)
+                            val sanitized = if (agent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
                             streamingWriter?.emitFinal(sanitized)
                             session?.finalize(sanitized)
                             if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = sanitized, isStreaming = false)

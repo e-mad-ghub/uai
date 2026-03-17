@@ -511,12 +511,13 @@ fun AgentConfig.canHandleImageRequests(): Boolean {
 }
 
 /**
- * True when AgentSide Internet Access is active for this agent.
- * Null agentSideInternetAccess defers to model default:
- *   ScreenAgent Optimized → on, all other models → off.
+ * True only for ScreenAgent Free (sideagent/openrouter-best-free).
+ * All other models — regardless of provider or toggle value — never get
+ * the internet/tool/grounding pipeline; they receive only the raw chat
+ * environment (history, images, files).
  */
 val AgentConfig.hasInternetAccess: Boolean
-    get() = agentSideInternetAccess ?: isSideAgentManagedOpenRouterFreeRoute(model)
+    get() = isSideAgentManagedOpenRouterFreeRoute(model) && (agentSideInternetAccess ?: true)
 
 fun shouldRetryOpenRouterFreeFallback(code: Int?, message: String): Boolean {
     val normalized = message.lowercase()

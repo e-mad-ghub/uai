@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.AttachFile
@@ -302,47 +301,45 @@ fun MessageBubble(
                                 }
                             }
                             if (displayContent.fileNames.isNotEmpty() || displayContent.visibleText.isNotEmpty()) {
-                                SelectionContainer {
-                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        if (displayContent.fileNames.isNotEmpty()) {
-                                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                                displayContent.fileNames.forEach { fileName ->
-                                                    Surface(
-                                                        shape = RoundedCornerShape(8.dp),
-                                                        color = if (isUser) {
-                                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                                        } else {
-                                                            MaterialTheme.colorScheme.secondaryContainer
-                                                        }
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    if (displayContent.fileNames.isNotEmpty()) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            displayContent.fileNames.forEach { fileName ->
+                                                Surface(
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = if (isUser) {
+                                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                                    } else {
+                                                        MaterialTheme.colorScheme.secondaryContainer
+                                                    }
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                                                     ) {
-                                                        Row(
-                                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                                            verticalAlignment = Alignment.CenterVertically,
-                                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                                        ) {
-                                                            Icon(
-                                                                Icons.Default.AttachFile,
-                                                                contentDescription = null,
-                                                                modifier = Modifier.size(16.dp),
-                                                                tint = textColor
-                                                            )
-                                                            Text(
-                                                                text = fileName,
-                                                                style = MaterialTheme.typography.labelMedium,
-                                                                color = textColor
-                                                            )
-                                                        }
+                                                        Icon(
+                                                            Icons.Default.AttachFile,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(16.dp),
+                                                            tint = textColor
+                                                        )
+                                                        Text(
+                                                            text = fileName,
+                                                            style = MaterialTheme.typography.labelMedium,
+                                                            color = textColor
+                                                        )
                                                     }
                                                 }
                                             }
                                         }
-                                        if (displayContent.visibleText.isNotEmpty()) {
-                                            MarkdownMessageText(
-                                                text = displayContent.visibleText,
-                                                color = textColor,
-                                                baseStyle = MaterialTheme.typography.bodyMedium
-                                            )
-                                        }
+                                    }
+                                    if (displayContent.visibleText.isNotEmpty()) {
+                                        MarkdownMessageText(
+                                            text = displayContent.visibleText,
+                                            color = textColor,
+                                            baseStyle = MaterialTheme.typography.bodyMedium
+                                        )
                                     }
                                 }
                             }

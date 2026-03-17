@@ -63,6 +63,7 @@ fun AppNavGraph(
         ) { backStack ->
             val conversationId = backStack.arguments!!.getString("conversationId")!!
             val vm: ConversationDetailViewModel = viewModel(
+                key = conversationId,
                 factory = ConversationDetailViewModel.Factory(
                     conversationId = conversationId,
                     repo = container.conversationRepository,
@@ -177,6 +178,7 @@ fun AppNavGraph(
             ) { backStack ->
                 val agoraId = backStack.arguments!!.getString("agoraId")!!
                 val vm: AgoraDetailViewModel = viewModel(
+                    key = agoraId,
                     factory = AgoraDetailViewModel.Factory(
                         conversationId = agoraId,
                         repo = container.conversationRepository,

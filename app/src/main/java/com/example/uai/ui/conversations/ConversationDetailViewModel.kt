@@ -262,9 +262,11 @@ class ConversationDetailViewModel(
             }
         }
 
+        // Set loading state synchronously before launching to close the race window where
+        // two rapid sendMessage() calls could both pass the _isLoading check above.
+        _isLoading.value = true
+        _inputText.value = ""
         streamingJob = viewModelScope.launch {
-            _isLoading.value = true
-            _inputText.value = ""
 
             val isFirstMessage = messages.value.isEmpty()
 

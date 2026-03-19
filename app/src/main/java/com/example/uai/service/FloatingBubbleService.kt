@@ -220,7 +220,10 @@ class FloatingBubbleService : Service() {
         registerSystemDialogReceiver()
 
         container.preferences.colorThemeFlow
-            .onEach { colorTheme = it }
+            .onEach {
+                colorTheme = it
+                refreshBubbleContent()
+            }
             .catch { }
             .launchIn(serviceScope)
 
@@ -297,6 +300,7 @@ class FloatingBubbleService : Service() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         isDarkMode = (newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        refreshBubbleContent()
         serviceScope.launch {
             val previousMode = currentBubbleLayoutMode
             val newMode = detectBubbleLayoutMode()
@@ -1111,13 +1115,12 @@ class FloatingBubbleService : Service() {
         if (bubbleView == null) {
             setupBubble()
         } else if (colorTheme != bubbleLastColorTheme || isDarkMode != bubbleLastDarkMode) {
-            // Theme changed while bubble was hidden and detached — detached ComposeViews
-            // may not recompose, so force a content refresh on the existing view.
-            bubbleView?.setContent {
-                UaiTheme(colorTheme = colorTheme, darkTheme = isDarkMode) {
-                    BubbleContent(isLoading = isLoading)
-                }
-            }
+            // Theme changed while bubble was detached — a detached ComposeView has no frame
+            // clock so setContent() scheduling is unreliable. Dispose and recreate to guarantee
+            // the new theme is applied from the first draw.
+            bubbleView?.disposeComposition()
+            bubbleView = null
+            setupBubble()
         }
         bubbleLastColorTheme = colorTheme
         bubbleLastDarkMode = isDarkMode
@@ -1133,6 +1136,22 @@ class FloatingBubbleService : Service() {
         }
         overlaySurfaceState = OverlaySurfaceState.BubbleVisible
         scheduleBubbleIdleFade()
+    }
+
+    private fun refreshBubbleContent() {
+        val view = bubbleView ?: return
+        if (!view.isAttachedToWindow) {
+            // Bubble is hidden — leave bubbleLastColorTheme/bubbleLastDarkMode stale so
+            // ensureBubbleVisible() detects the change and forces a refresh when reshowing.
+            return
+        }
+        bubbleLastColorTheme = colorTheme
+        bubbleLastDarkMode = isDarkMode
+        view.setContent {
+            UaiTheme(colorTheme = colorTheme, darkTheme = isDarkMode) {
+                BubbleContent(isLoading = isLoading)
+            }
+        }
     }
 
     private fun hideBubbleWindow(immediate: Boolean = true) {

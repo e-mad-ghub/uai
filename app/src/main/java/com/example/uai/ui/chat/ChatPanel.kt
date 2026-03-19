@@ -35,7 +35,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import com.example.uai.ui.components.BrandMarkIcon
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
@@ -542,16 +542,12 @@ fun BubbleContent(isLoading: Boolean, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(18.dp))
-            .background(Color(0xFF17193A)),
+            .background(Color(0xFF0B1020)),
         contentAlignment = Alignment.Center
     ) {
-        Image(
-            painter = painterResource(R.drawable.floating_bubble_icon),
-            contentDescription = "ScreenAgent Mini Chat",
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(4.dp),
-            contentScale = ContentScale.Fit
+        BrandMarkIcon(
+            modifier = Modifier.fillMaxSize().padding(8.dp),
+            tint = Color(0xFFF4F7FF)
         )
         if (isLoading) {
             CircularProgressIndicator(

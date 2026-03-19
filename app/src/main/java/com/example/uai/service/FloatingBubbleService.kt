@@ -2048,7 +2048,7 @@ class FloatingBubbleService : Service() {
         val notification: Notification = NotificationCompat.Builder(this, UaiApplication.BUBBLE_CHANNEL_ID)
             .setContentTitle(getString(R.string.bubble_notification_title))
             .setContentText(getString(R.string.bubble_notification_text))
-            .setSmallIcon(R.drawable.ic_launcher_monochrome)
+            .setSmallIcon(R.drawable.ic_brand_monochrome)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()

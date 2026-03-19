@@ -351,17 +351,9 @@ fun ConversationDetailScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (!isAgentsInitialized) return@Column
-            if (showMiniChatEntryTip) {
+            if (showMiniChatEntryTip && canTransferToMiniChat) {
                 ProductInlineHintStrip(
-                    message = stringResource(
-                        if (canTransferToMiniChat) {
-                            R.string.mini_chat_entry_hint_ready
-                        } else {
-                            R.string.mini_chat_entry_hint_permission
-                        }
-                    ),
-                    actionLabel = if (canTransferToMiniChat) null else stringResource(R.string.action_allow_display_over_other_apps),
-                    onAction = if (canTransferToMiniChat) null else ::openOverlaySettings,
+                    message = stringResource(R.string.mini_chat_entry_hint_ready),
                     onDismiss = {
                         scope.launch {
                             appContainer.preferences.setMiniChatEntryTipDismissed(true)
@@ -433,6 +425,8 @@ fun ConversationDetailScreen(
                 ElevatedCard(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .imePadding()
                         .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
                     Row(

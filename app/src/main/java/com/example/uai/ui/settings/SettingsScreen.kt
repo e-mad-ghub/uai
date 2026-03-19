@@ -176,50 +176,6 @@ fun SettingsScreen(
 
             SettingsSectionHeader(title = stringResource(R.string.settings_section_mini_chat))
 
-            if (showOverlayPermissionCard) {
-                OutlinedCard {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Security,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                stringResource(R.string.overlay_permission_required),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                stringResource(
-                                    if (isMiniChatConfigured) {
-                                        R.string.mini_chat_permission_needed_message
-                                    } else {
-                                        R.string.overlay_permission_message
-                                    }
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                stringResource(R.string.mini_chat_requires_overlay),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(onClick = ::openOverlaySettings) {
-                            Text(stringResource(R.string.action_allow_display_over_other_apps))
-                        }
-                    }
-                }
-            }
-
             ElevatedCard {
                 Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
                     ListItem(
@@ -273,6 +229,25 @@ fun SettingsScreen(
                             )
                         }
                     )
+
+                    if (showOverlayPermissionCard) {
+                        HorizontalDivider()
+                        MiniChatHelperItem(
+                            icon = { Icon(Icons.Default.Security, contentDescription = null) },
+                            title = stringResource(R.string.overlay_permission_required),
+                            status = stringResource(R.string.mini_chat_screenshots_status_needs_setup),
+                            body = stringResource(
+                                if (isMiniChatConfigured) {
+                                    R.string.mini_chat_permission_needed_message
+                                } else {
+                                    R.string.overlay_permission_message
+                                }
+                            ),
+                            emphasized = false,
+                            actionLabel = stringResource(R.string.action_allow_display_over_other_apps),
+                            onAction = ::openOverlaySettings
+                        )
+                    }
 
                     if (showMiniChatScreenshotsCard) {
                         HorizontalDivider()
@@ -413,7 +388,8 @@ private fun MiniChatHelperItem(
                     Text(
                         text = title,
                         style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
                     )
                     ProductPill(
                         label = status,

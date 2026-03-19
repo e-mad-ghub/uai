@@ -182,6 +182,10 @@ class FloatingBubbleService : Service() {
     private var repairInFlightKey: String? = null
     private var lastAssistantRepairNotificationKey: String? = null
     private var bubbleAlphaAnimator: ValueAnimator? = null
+    // Track which theme was applied when the bubble was last composed, so we can
+    // force a setContent() refresh if the theme changed while the bubble was hidden.
+    private var bubbleLastColorTheme: AppColorTheme? = null
+    private var bubbleLastDarkMode: Boolean? = null
     private val systemDialogsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != Intent.ACTION_CLOSE_SYSTEM_DIALOGS) return
@@ -560,6 +564,8 @@ class FloatingBubbleService : Service() {
             alpha = 0f
         }
 
+        bubbleLastColorTheme = colorTheme
+        bubbleLastDarkMode = isDarkMode
         bubbleView = ComposeView(this).apply {
             attachLifecycleOwners(this)
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
@@ -1102,18 +1108,27 @@ class FloatingBubbleService : Service() {
             overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
             return
         }
-        val justCreated = bubbleView == null
-        if (justCreated) {
+        if (bubbleView == null) {
             setupBubble()
+        } else if (colorTheme != bubbleLastColorTheme || isDarkMode != bubbleLastDarkMode) {
+            // Theme changed while bubble was hidden and detached — detached ComposeViews
+            // may not recompose, so force a content refresh on the existing view.
+            bubbleView?.setContent {
+                UaiTheme(colorTheme = colorTheme, darkTheme = isDarkMode) {
+                    BubbleContent(isLoading = isLoading)
+                }
+            }
         }
+        bubbleLastColorTheme = colorTheme
+        bubbleLastDarkMode = isDarkMode
         clampBubblePositionToDisplay(saveIfChanged = true)
         bubbleParams.flags = BUBBLE_WINDOW_FLAGS
         bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
         bubbleView?.let { bubble ->
-            if (justCreated || !bubble.isAttachedToWindow) {
-                runCatching { windowManager.addView(bubble, bubbleParams) }
-            } else {
+            if (bubble.isAttachedToWindow) {
                 runCatching { windowManager.updateViewLayout(bubble, bubbleParams) }
+            } else {
+                runCatching { windowManager.addView(bubble, bubbleParams) }
             }
         }
         overlaySurfaceState = OverlaySurfaceState.BubbleVisible
@@ -1126,8 +1141,7 @@ class FloatingBubbleService : Service() {
         bubbleAlphaAnimator?.cancel()
         bubbleAlphaAnimator = null
         removeSafely(bubbleView, immediate = immediate)
-        bubbleView?.disposeComposition()
-        bubbleView = null
+        // Keep bubbleView alive so it can be re-added cheaply; only dispose on destroy.
     }
 
     private fun clearChatPanelInteractionState() {

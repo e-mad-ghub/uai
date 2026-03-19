@@ -542,17 +542,17 @@ fun BubbleContent(isLoading: Boolean, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(18.dp))
-            .background(Color(0xFF0B1020)),
+            .background(MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center
     ) {
         BrandMarkIcon(
             modifier = Modifier.fillMaxSize().padding(8.dp),
-            tint = Color(0xFFF4F7FF)
+            tint = MaterialTheme.colorScheme.onPrimaryContainer
         )
         if (isLoading) {
             CircularProgressIndicator(
                 modifier = Modifier.size(28.dp),
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
                 strokeWidth = 2.5.dp
             )
         }

@@ -133,6 +133,7 @@ class FloatingBubbleService : Service() {
     private var allAgents by mutableStateOf<List<AgentConfig>>(emptyList())
     private var availableConversations by mutableStateOf<List<ConversationEntity>>(emptyList())
     private var colorTheme by mutableStateOf(AppColorTheme.DEFAULT)
+    private var isDarkMode by mutableStateOf(false)
     private var isDismissTargetActive by mutableStateOf(false)
     private var isAppUiVisible = false
     private var miniChatMinimizeTipDismissed by mutableStateOf(false)
@@ -201,6 +202,7 @@ class FloatingBubbleService : Service() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         currentBubbleLayoutMode = detectBubbleLayoutMode()
         isAppUiVisible = app.isAppUiVisible.value
+        isDarkMode = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
         lifecycleOwner.onCreate()
         lifecycleOwner.onStart()
@@ -208,6 +210,7 @@ class FloatingBubbleService : Service() {
 
         startForegroundCompat()
         setupBubble()
+        windowManager.addView(bubbleView, bubbleParams)
         setupChatPanel()
         setupDismissZone()
         registerSystemDialogReceiver()
@@ -289,6 +292,7 @@ class FloatingBubbleService : Service() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        isDarkMode = (newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         serviceScope.launch {
             val previousMode = currentBubbleLayoutMode
             val newMode = detectBubbleLayoutMode()
@@ -537,6 +541,9 @@ class FloatingBubbleService : Service() {
         // (e.g. banking apps, Samsung secure folder) or on certain Samsung full-screen
         // modes. The OS prevents overlays on those screens — this is not a service crash.
         val sizePx = (64 * resources.displayMetrics.density).toInt()
+        // Preserve position across recreations (e.g. theme change dispose+recreate cycle)
+        val savedX = if (::bubbleParams.isInitialized) bubbleParams.x else 0
+        val savedY = if (::bubbleParams.isInitialized) bubbleParams.y else 300
         bubbleParams = WindowManager.LayoutParams(
             sizePx, sizePx,
             overlayType(),
@@ -546,8 +553,8 @@ class FloatingBubbleService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 300
+            x = savedX
+            y = savedY
             // Start invisible so the bubble doesn't flash at the default position
             // before we restore the saved position.
             alpha = 0f
@@ -557,14 +564,12 @@ class FloatingBubbleService : Service() {
             attachLifecycleOwners(this)
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                UaiTheme(colorTheme = colorTheme) {
+                UaiTheme(colorTheme = colorTheme, darkTheme = isDarkMode) {
                     BubbleContent(isLoading = isLoading)
                 }
             }
             setupDragAndTap(this)
         }
-        windowManager.addView(bubbleView, bubbleParams)
-        clampBubblePositionToDisplay(saveIfChanged = false)
     }
 
     private fun setupDragAndTap(view: View) {
@@ -720,7 +725,7 @@ class FloatingBubbleService : Service() {
             attachLifecycleOwners(this)
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                UaiTheme(colorTheme = colorTheme) {
+                UaiTheme(colorTheme = colorTheme, darkTheme = isDarkMode) {
                     val circleSize by animateDpAsState(
                         targetValue = if (isDismissTargetActive) 72.dp else 60.dp,
                         animationSpec = tween(150),
@@ -780,7 +785,7 @@ class FloatingBubbleService : Service() {
             // such as screenshot capture, so scroll state and other UI behavior persist.
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                UaiTheme(colorTheme = colorTheme) {
+                UaiTheme(colorTheme = colorTheme, darkTheme = isDarkMode) {
                     val sessionState by produceState<AssistantStreamingSession.State?>(null, currentSession) {
                         val session = currentSession
                         if (session == null) { value = null; return@produceState }
@@ -1097,17 +1102,18 @@ class FloatingBubbleService : Service() {
             overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
             return
         }
-        if (bubbleView == null) {
+        val justCreated = bubbleView == null
+        if (justCreated) {
             setupBubble()
         }
         clampBubblePositionToDisplay(saveIfChanged = true)
         bubbleParams.flags = BUBBLE_WINDOW_FLAGS
         bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
         bubbleView?.let { bubble ->
-            if (bubble.isAttachedToWindow) {
-                runCatching { windowManager.updateViewLayout(bubble, bubbleParams) }
-            } else {
+            if (justCreated || !bubble.isAttachedToWindow) {
                 runCatching { windowManager.addView(bubble, bubbleParams) }
+            } else {
+                runCatching { windowManager.updateViewLayout(bubble, bubbleParams) }
             }
         }
         overlaySurfaceState = OverlaySurfaceState.BubbleVisible
@@ -1120,6 +1126,8 @@ class FloatingBubbleService : Service() {
         bubbleAlphaAnimator?.cancel()
         bubbleAlphaAnimator = null
         removeSafely(bubbleView, immediate = immediate)
+        bubbleView?.disposeComposition()
+        bubbleView = null
     }
 
     private fun clearChatPanelInteractionState() {
@@ -1203,9 +1211,6 @@ class FloatingBubbleService : Service() {
         if (pendingPanelShowAfterAppHidden) {
             showChatPanel()
             return
-        }
-        if (bubbleView == null) {
-            setupBubble()
         }
         ensureBubbleVisible()
     }

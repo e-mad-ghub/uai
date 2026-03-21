@@ -84,12 +84,15 @@ fun ConversationDetailScreen(
     val onlineSearchStatus by viewModel.onlineSearchStatus.collectAsStateWithLifecycle()
     val activeAgent by viewModel.activeAgent.collectAsStateWithLifecycle()
     val agents by viewModel.agents.collectAsStateWithLifecycle()
+    val isAgentsInitialized by viewModel.isAgentsInitialized.collectAsStateWithLifecycle()
     val bubbleEnabled by appContainer.agentRepository
         .bubbleEnabledFlow
-        .collectAsStateWithLifecycle(initialValue = true)
+        .collectAsStateWithLifecycle(initialValue = false)
+    // Start as true (dismissed) so the tip never flashes in before DataStore loads.
+    // If the user hasn't dismissed it, it will appear once isAgentsInitialized becomes true.
     val miniChatEntryTipDismissed by appContainer.preferences
         .miniChatEntryTipDismissedFlow
-        .collectAsStateWithLifecycle(initialValue = false)
+        .collectAsStateWithLifecycle(initialValue = true)
 
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -259,7 +262,12 @@ fun ConversationDetailScreen(
     Scaffold(
         modifier = modifier,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            SnackbarHost(
+                snackbarHostState,
+                modifier = Modifier.navigationBarsPadding()
+            )
+        },
         topBar = {
             TopAppBar(
                 title = {
@@ -347,17 +355,10 @@ fun ConversationDetailScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            if (showMiniChatEntryTip) {
+            if (!isAgentsInitialized) return@Column
+            if (showMiniChatEntryTip && canTransferToMiniChat) {
                 ProductInlineHintStrip(
-                    message = stringResource(
-                        if (canTransferToMiniChat) {
-                            R.string.mini_chat_entry_hint_ready
-                        } else {
-                            R.string.mini_chat_entry_hint_permission
-                        }
-                    ),
-                    actionLabel = if (canTransferToMiniChat) null else stringResource(R.string.action_allow_display_over_other_apps),
-                    onAction = if (canTransferToMiniChat) null else ::openOverlaySettings,
+                    message = stringResource(R.string.mini_chat_entry_hint_ready),
                     onDismiss = {
                         scope.launch {
                             appContainer.preferences.setMiniChatEntryTipDismissed(true)
@@ -429,6 +430,8 @@ fun ConversationDetailScreen(
                 ElevatedCard(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .imePadding()
                         .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
                     Row(

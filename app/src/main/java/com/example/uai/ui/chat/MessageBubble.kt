@@ -28,9 +28,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -138,12 +135,11 @@ fun MessageBubble(
         parseAttachedFileDisplay(message)
     }
     val clipboardManager = LocalClipboardManager.current
-    var showCopyMenu by remember { mutableStateOf(false) }
     val textToCopy = displayContent.visibleText.takeIf { it.isNotBlank() }
     val interactionModifier = Modifier.pointerInput(onDoubleTap, textToCopy) {
         detectTapGestures(
             onDoubleTap = { onDoubleTap?.invoke() },
-            onLongPress = { if (textToCopy != null) showCopyMenu = true }
+            onLongPress = { if (textToCopy != null) clipboardManager.setText(AnnotatedString(textToCopy)) }
         )
     }
 
@@ -225,7 +221,7 @@ fun MessageBubble(
                 )
             }
 
-            // Bubble slides right with the drag; Box also anchors the copy DropdownMenu
+            // Bubble slides right with the drag
             @OptIn(ExperimentalFoundationApi::class)
             Box(modifier = Modifier.offset { IntOffset(dragOffset.value.roundToInt(), 0) }) {
             Surface(
@@ -347,23 +343,7 @@ fun MessageBubble(
                     }
                 }
             }
-            // Long-press copy menu — appears anchored to the bubble
-            if (textToCopy != null) {
-                DropdownMenu(
-                    expanded = showCopyMenu,
-                    onDismissRequest = { showCopyMenu = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Copy") },
-                        leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                        onClick = {
-                            clipboardManager.setText(AnnotatedString(textToCopy))
-                            showCopyMenu = false
-                        }
-                    )
-                }
-            }
-            } // Box (offset + DropdownMenu anchor)
+            } // Box (offset)
         }
     }
 }

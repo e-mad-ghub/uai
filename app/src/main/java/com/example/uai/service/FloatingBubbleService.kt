@@ -133,6 +133,7 @@ class FloatingBubbleService : Service() {
     private var allAgents by mutableStateOf<List<AgentConfig>>(emptyList())
     private var availableConversations by mutableStateOf<List<ConversationEntity>>(emptyList())
     private var colorTheme by mutableStateOf(AppColorTheme.DEFAULT)
+    private var isDarkMode by mutableStateOf(false)
     private var isDismissTargetActive by mutableStateOf(false)
     private var isAppUiVisible = false
     private var miniChatMinimizeTipDismissed by mutableStateOf(false)
@@ -181,6 +182,10 @@ class FloatingBubbleService : Service() {
     private var repairInFlightKey: String? = null
     private var lastAssistantRepairNotificationKey: String? = null
     private var bubbleAlphaAnimator: ValueAnimator? = null
+    // Track which theme was applied when the bubble was last composed, so we can
+    // force a setContent() refresh if the theme changed while the bubble was hidden.
+    private var bubbleLastColorTheme: AppColorTheme? = null
+    private var bubbleLastDarkMode: Boolean? = null
     private val systemDialogsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != Intent.ACTION_CLOSE_SYSTEM_DIALOGS) return
@@ -201,6 +206,7 @@ class FloatingBubbleService : Service() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         currentBubbleLayoutMode = detectBubbleLayoutMode()
         isAppUiVisible = app.isAppUiVisible.value
+        isDarkMode = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
         lifecycleOwner.onCreate()
         lifecycleOwner.onStart()
@@ -208,12 +214,16 @@ class FloatingBubbleService : Service() {
 
         startForegroundCompat()
         setupBubble()
+        windowManager.addView(bubbleView, bubbleParams)
         setupChatPanel()
         setupDismissZone()
         registerSystemDialogReceiver()
 
         container.preferences.colorThemeFlow
-            .onEach { colorTheme = it }
+            .onEach {
+                colorTheme = it
+                refreshBubbleContent()
+            }
             .catch { }
             .launchIn(serviceScope)
 
@@ -289,6 +299,8 @@ class FloatingBubbleService : Service() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        isDarkMode = (newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        refreshBubbleContent()
         serviceScope.launch {
             val previousMode = currentBubbleLayoutMode
             val newMode = detectBubbleLayoutMode()
@@ -537,6 +549,9 @@ class FloatingBubbleService : Service() {
         // (e.g. banking apps, Samsung secure folder) or on certain Samsung full-screen
         // modes. The OS prevents overlays on those screens — this is not a service crash.
         val sizePx = (64 * resources.displayMetrics.density).toInt()
+        // Preserve position across recreations (e.g. theme change dispose+recreate cycle)
+        val savedX = if (::bubbleParams.isInitialized) bubbleParams.x else 0
+        val savedY = if (::bubbleParams.isInitialized) bubbleParams.y else 300
         bubbleParams = WindowManager.LayoutParams(
             sizePx, sizePx,
             overlayType(),
@@ -546,25 +561,25 @@ class FloatingBubbleService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 300
+            x = savedX
+            y = savedY
             // Start invisible so the bubble doesn't flash at the default position
             // before we restore the saved position.
             alpha = 0f
         }
 
+        bubbleLastColorTheme = colorTheme
+        bubbleLastDarkMode = isDarkMode
         bubbleView = ComposeView(this).apply {
             attachLifecycleOwners(this)
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                UaiTheme(colorTheme = colorTheme) {
+                UaiTheme(colorTheme = colorTheme, darkTheme = isDarkMode) {
                     BubbleContent(isLoading = isLoading)
                 }
             }
             setupDragAndTap(this)
         }
-        windowManager.addView(bubbleView, bubbleParams)
-        clampBubblePositionToDisplay(saveIfChanged = false)
     }
 
     private fun setupDragAndTap(view: View) {
@@ -720,7 +735,7 @@ class FloatingBubbleService : Service() {
             attachLifecycleOwners(this)
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                UaiTheme(colorTheme = colorTheme) {
+                UaiTheme(colorTheme = colorTheme, darkTheme = isDarkMode) {
                     val circleSize by animateDpAsState(
                         targetValue = if (isDismissTargetActive) 72.dp else 60.dp,
                         animationSpec = tween(150),
@@ -780,7 +795,7 @@ class FloatingBubbleService : Service() {
             // such as screenshot capture, so scroll state and other UI behavior persist.
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                UaiTheme(colorTheme = colorTheme) {
+                UaiTheme(colorTheme = colorTheme, darkTheme = isDarkMode) {
                     val sessionState by produceState<AssistantStreamingSession.State?>(null, currentSession) {
                         val session = currentSession
                         if (session == null) { value = null; return@produceState }
@@ -1099,7 +1114,16 @@ class FloatingBubbleService : Service() {
         }
         if (bubbleView == null) {
             setupBubble()
+        } else if (colorTheme != bubbleLastColorTheme || isDarkMode != bubbleLastDarkMode) {
+            // Theme changed while bubble was detached — a detached ComposeView has no frame
+            // clock so setContent() scheduling is unreliable. Dispose and recreate to guarantee
+            // the new theme is applied from the first draw.
+            bubbleView?.disposeComposition()
+            bubbleView = null
+            setupBubble()
         }
+        bubbleLastColorTheme = colorTheme
+        bubbleLastDarkMode = isDarkMode
         clampBubblePositionToDisplay(saveIfChanged = true)
         bubbleParams.flags = BUBBLE_WINDOW_FLAGS
         bubbleParams.alpha = BUBBLE_NORMAL_ALPHA
@@ -1114,12 +1138,29 @@ class FloatingBubbleService : Service() {
         scheduleBubbleIdleFade()
     }
 
+    private fun refreshBubbleContent() {
+        val view = bubbleView ?: return
+        if (!view.isAttachedToWindow) {
+            // Bubble is hidden — leave bubbleLastColorTheme/bubbleLastDarkMode stale so
+            // ensureBubbleVisible() detects the change and forces a refresh when reshowing.
+            return
+        }
+        bubbleLastColorTheme = colorTheme
+        bubbleLastDarkMode = isDarkMode
+        view.setContent {
+            UaiTheme(colorTheme = colorTheme, darkTheme = isDarkMode) {
+                BubbleContent(isLoading = isLoading)
+            }
+        }
+    }
+
     private fun hideBubbleWindow(immediate: Boolean = true) {
         bubbleIdleJob?.cancel()
         bubbleIdleJob = null
         bubbleAlphaAnimator?.cancel()
         bubbleAlphaAnimator = null
         removeSafely(bubbleView, immediate = immediate)
+        // Keep bubbleView alive so it can be re-added cheaply; only dispose on destroy.
     }
 
     private fun clearChatPanelInteractionState() {
@@ -1203,9 +1244,6 @@ class FloatingBubbleService : Service() {
         if (pendingPanelShowAfterAppHidden) {
             showChatPanel()
             return
-        }
-        if (bubbleView == null) {
-            setupBubble()
         }
         ensureBubbleVisible()
     }
@@ -2048,7 +2086,7 @@ class FloatingBubbleService : Service() {
         val notification: Notification = NotificationCompat.Builder(this, UaiApplication.BUBBLE_CHANNEL_ID)
             .setContentTitle(getString(R.string.bubble_notification_title))
             .setContentText(getString(R.string.bubble_notification_text))
-            .setSmallIcon(R.drawable.ic_launcher_monochrome)
+            .setSmallIcon(R.drawable.ic_brand_monochrome)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()

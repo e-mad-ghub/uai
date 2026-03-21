@@ -23,8 +23,9 @@ import com.example.uai.ai.WikipediaProvider
 import com.example.uai.ai.YandexSearchProvider
 import com.example.uai.ai.AiProviderFactory
 import com.example.uai.ai.fetchAndCacheSearXInstances
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.MONEY_SAVER_MODEL
@@ -40,6 +41,8 @@ import java.util.concurrent.TimeUnit
  * resolve all singletons from here via (application as UaiApplication).container.
  */
 class AppContainer(context: Context) {
+
+    private val containerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -80,8 +83,7 @@ class AppContainer(context: Context) {
             generalProvider = generalSearchProvider
         )
         // Fetch fresh SearXNG instances in the background on startup
-        @OptIn(DelicateCoroutinesApi::class)
-        GlobalScope.launch { fetchAndCacheSearXInstances(okHttpClient) }
+        containerScope.launch { fetchAndCacheSearXInstances(okHttpClient) }
         WebGroundingService(domainRouter, okHttpClient)
     }
 

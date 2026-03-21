@@ -7,6 +7,7 @@ import com.example.uai.ai.httpErrorMessage
 import com.example.uai.data.model.AgentConfig
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.CustomProviderPreset
+import com.example.uai.data.model.MONEY_SAVER_MODEL
 import com.example.uai.data.model.OPENROUTER_FREE_ROUTER_MODEL
 import com.example.uai.data.model.OpenRouterCatalogEntry
 import com.example.uai.data.model.buildOpenAiCompatibleChatCompletionsUrl
@@ -236,14 +237,24 @@ class AgentEditViewModel(
                 if (agent.provider != AiProviderType.OPENROUTER) {
                     refreshCurrentProviderModels(force = true)
                 }
+                // Resolve the money-saver sentinel to an actual model so we don't
+                // send "uai:money-saver" as a model ID to the API (causes 404).
+                val probeAgent = if (agent.model == MONEY_SAVER_MODEL) {
+                    agent.copy(model = resolveMoneySaverModel(agent))
+                } else agent
                 _connectionTestState.value = if (
-                    agent.provider == AiProviderType.OPENROUTER &&
-                    isOpenRouterFreeModel(agent.model, _freeModelIds.value)
+                    probeAgent.provider == AiProviderType.OPENROUTER &&
+                    isOpenRouterFreeModel(probeAgent.model, _freeModelIds.value)
                 ) {
-                    testOpenRouterFreeConnection(agent)
+                    testOpenRouterFreeConnection(probeAgent)
                 } else {
-                    val failure = runProbe(agent)
-                    if (failure == null) ConnectionTestState.Success()
+                    val failure = runProbe(probeAgent)
+                    if (failure == null) ConnectionTestState.Success(
+                        if (agent.model == MONEY_SAVER_MODEL)
+                            "Availability confirmed. Using model: ${probeAgent.model}"
+                        else
+                            "Availability confirmed. This assistant is ready to use."
+                    )
                     else ConnectionTestState.Failure(failure.message)
                 }
             } catch (e: Exception) {
@@ -402,6 +413,38 @@ class AgentEditViewModel(
                     message = httpErrorMessage(response.code)
                 )
             }
+        }
+    }
+
+    private suspend fun resolveMoneySaverModel(agent: AgentConfig): String {
+        return when (agent.provider) {
+            AiProviderType.ANTHROPIC -> {
+                val models = providerModelCatalogRepository.getCatalog(AiProviderType.ANTHROPIC).models.map { it.id }
+                models.minByOrNull { id ->
+                    val n = id.lowercase()
+                    when {
+                        n.contains("haiku") -> 0
+                        n.contains("sonnet") -> 1
+                        n.contains("opus") -> 2
+                        else -> 3
+                    }
+                } ?: "claude-haiku-4-5-20251001"
+            }
+            AiProviderType.OPENAI -> {
+                val models = providerModelCatalogRepository.getCatalog(AiProviderType.OPENAI).models.map { it.id }
+                models.minByOrNull { id ->
+                    val n = id.lowercase()
+                    when {
+                        n.contains("nano") -> 0
+                        n.contains("mini") -> 1
+                        n.contains("4o") -> 2
+                        n.contains("4.1") -> 3
+                        n.contains("gpt-5") -> 4
+                        else -> 5
+                    }
+                } ?: "gpt-4o-mini"
+            }
+            else -> agent.model
         }
     }
 

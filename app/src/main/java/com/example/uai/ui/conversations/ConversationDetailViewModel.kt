@@ -76,6 +76,12 @@ class ConversationDetailViewModel(
     val agents = agentRepo.agentsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Becomes true after the first real emission from DataStore, used to suppress
+    // the initial "no agents" flash before data has loaded.
+    val isAgentsInitialized: StateFlow<Boolean> = agentRepo.agentsFlow
+        .map { true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
     private val defaultAgent = agentRepo.activeAgentFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
@@ -262,9 +268,11 @@ class ConversationDetailViewModel(
             }
         }
 
+        // Set loading state synchronously before launching to close the race window where
+        // two rapid sendMessage() calls could both pass the _isLoading check above.
+        _isLoading.value = true
+        _inputText.value = ""
         streamingJob = viewModelScope.launch {
-            _isLoading.value = true
-            _inputText.value = ""
 
             val isFirstMessage = messages.value.isEmpty()
 

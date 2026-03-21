@@ -1,0 +1,15 @@
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_brand_animatable">
+
+    <target
+        android:name="faceGroup"
+        android:animation="@animator/brand_face_pulse_scale_x" />
+
+    <target
+        android:name="faceGroup"
+        android:animation="@animator/brand_face_pulse_scale_y" />
+
+    <target
+        android:name="glassesGroup"
+        android:animation="@animator/brand_glasses_pulse_alpha" />
+</animated-vector>

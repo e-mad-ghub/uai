@@ -1,5 +1,6 @@
 package com.example.uai.ai
 
+import android.util.Log
 import com.example.uai.data.model.AgentConfig
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -21,6 +22,7 @@ class OpenAiProvider(
 
     private val gson = Gson()
     private val json = "application/json".toMediaType()
+    private val tag = "OpenAiProvider"
 
     override fun streamResponse(messages: List<ChatMessage>, config: AgentConfig): Flow<StreamChunk> =
         if (config.nativeWebSearchEnabled) streamResponsesApi(messages, config)
@@ -102,7 +104,7 @@ class OpenAiProvider(
                                 emit(StreamChunk.Done)
                                 return@use
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) { Log.w(tag, "Failed to parse response.completed event", e) }
                     }
                     parseResponsesApiLine(line)?.let { chunk ->
                         emit(chunk)
@@ -197,7 +199,7 @@ class OpenAiProvider(
                 ?.getAsJsonObject("delta")
                 ?.get("content")?.asString
             if (!content.isNullOrEmpty()) StreamChunk.Token(content) else null
-        } catch (_: Exception) { null }
+        } catch (e: Exception) { Log.w(tag, "Failed to parse chat completions SSE line", e); null }
     }
 
     private fun parseResponsesApiLine(line: String): StreamChunk? {
@@ -221,6 +223,6 @@ class OpenAiProvider(
                 }
                 else -> null
             }
-        } catch (_: Exception) { null }
+        } catch (e: Exception) { Log.w(tag, "Failed to parse responses API SSE line", e); null }
     }
 }

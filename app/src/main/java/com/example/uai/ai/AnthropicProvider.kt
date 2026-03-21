@@ -1,5 +1,6 @@
 package com.example.uai.ai
 
+import android.util.Log
 import com.example.uai.data.model.AgentConfig
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -17,6 +18,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
 
     private val gson = Gson()
+    private val tag = "AnthropicProvider"
     private val json = "application/json".toMediaType()
 
     override fun streamResponse(messages: List<ChatMessage>, config: AgentConfig): Flow<StreamChunk> = flow {
@@ -61,21 +63,27 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
                                         inputTokens = obj?.getAsJsonObject("message")
                                             ?.getAsJsonObject("usage")
                                             ?.get("input_tokens")?.asInt ?: 0
-                                    } catch (_: Exception) {}
+                                    } catch (e: Exception) {
+                                        Log.w(tag, "Failed to parse message_start usage", e)
+                                    }
                                 }
                                 "content_block_delta" -> {
                                     try {
                                         val obj = gson.fromJson(data, JsonObject::class.java)
                                         val text = obj?.getAsJsonObject("delta")?.get("text")?.asString
                                         if (!text.isNullOrEmpty()) emit(StreamChunk.Token(text))
-                                    } catch (_: Exception) {}
+                                    } catch (e: Exception) {
+                                        Log.w(tag, "Failed to parse content_block_delta", e)
+                                    }
                                 }
                                 "message_delta" -> {
                                     try {
                                         val obj = gson.fromJson(data, JsonObject::class.java)
                                         outputTokens = obj?.getAsJsonObject("usage")
                                             ?.get("output_tokens")?.asInt ?: outputTokens
-                                    } catch (_: Exception) {}
+                                    } catch (e: Exception) {
+                                        Log.w(tag, "Failed to parse message_delta usage", e)
+                                    }
                                 }
                                 "message_stop" -> {
                                     if (inputTokens > 0 || outputTokens > 0) {

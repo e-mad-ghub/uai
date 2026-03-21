@@ -37,7 +37,7 @@
         </activity>
 
         <service
-            android:name=".service.FloatingBubbleService"
+            android:name=".feature.bubble.FloatingBubbleService"
             android:foregroundServiceType="specialUse|mediaProjection"
             android:exported="false">
             <property
@@ -46,7 +46,7 @@
         </service>
 
         <service
-            android:name=".service.MiniChatScreenshotAccessibilityService"
+            android:name=".feature.bubble.MiniChatScreenshotAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="false"
             android:label="@string/mini_chat_screenshot_accessibility_title">

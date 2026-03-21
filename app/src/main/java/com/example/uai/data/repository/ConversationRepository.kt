@@ -5,7 +5,7 @@ import com.example.uai.data.db.ConversationDao
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.db.MessageDao
 import com.example.uai.data.db.MessageEntity
-import com.example.uai.ui.chat.deletePersistedImageAttachment
+import com.example.uai.shared.attachment.deletePersistedImageAttachment
 import kotlinx.coroutines.flow.Flow
 
 class ConversationRepository(

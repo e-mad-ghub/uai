@@ -35,11 +35,11 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.uai.data.db.ConversationEntity
 import com.example.uai.data.model.AppColorTheme
-import com.example.uai.service.FloatingBubbleService
-import com.example.uai.ui.components.BrandMarkBadge
+import com.example.uai.feature.bubble.FloatingBubbleService
+import com.example.uai.design.components.BrandMarkBadge
 import com.example.uai.ui.navigation.AppNavGraph
 import com.example.uai.ui.navigation.Routes
-import com.example.uai.ui.theme.UaiTheme
+import com.example.uai.design.theme.UaiTheme
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 

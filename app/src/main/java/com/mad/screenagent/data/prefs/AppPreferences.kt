@@ -14,6 +14,7 @@ import com.mad.screenagent.data.model.AiProviderType
 import com.mad.screenagent.data.model.AppColorTheme
 import com.mad.screenagent.data.model.OpenRouterCatalog
 import com.mad.screenagent.data.model.ProviderModelCatalog
+import com.mad.screenagent.data.model.QuickActionConfig
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.Flow
@@ -48,6 +49,8 @@ class AppPreferences(context: Context) {
         val OPENAI_MODEL_CATALOG_FETCHED_AT = longPreferencesKey("openai_model_catalog_fetched_at")
         val ANTHROPIC_MODEL_CATALOG_JSON = stringPreferencesKey("anthropic_model_catalog_json")
         val ANTHROPIC_MODEL_CATALOG_FETCHED_AT = longPreferencesKey("anthropic_model_catalog_fetched_at")
+        val QUICK_ACTIONS_JSON = stringPreferencesKey("quick_actions_json")
+        val LAST_ACTIVE_BUBBLE_CONVERSATION_ID = stringPreferencesKey("last_active_bubble_conversation_id")
     }
 
     val agentListFlow: Flow<List<AgentConfig>> = store.data.map { prefs ->
@@ -214,6 +217,30 @@ class AppPreferences(context: Context) {
                 AiProviderType.OPENROUTER,
                 AiProviderType.CUSTOM -> Unit
             }
+        }
+    }
+
+    // ----- Quick Actions -----
+
+    val quickActionsFlow: Flow<List<QuickActionConfig>> = store.data.map { prefs ->
+        val json = prefs[Keys.QUICK_ACTIONS_JSON] ?: return@map emptyList()
+        val type = object : com.google.gson.reflect.TypeToken<List<QuickActionConfig>>() {}.type
+        gson.fromJson(json, type) ?: emptyList()
+    }
+
+    suspend fun saveQuickActions(actions: List<QuickActionConfig>) {
+        store.edit { it[Keys.QUICK_ACTIONS_JSON] = gson.toJson(actions) }
+    }
+
+    // ----- Last active bubble conversation -----
+
+    val lastActiveBubbleConversationIdFlow: Flow<String?> =
+        store.data.map { it[Keys.LAST_ACTIVE_BUBBLE_CONVERSATION_ID] }
+
+    suspend fun saveLastActiveBubbleConversationId(id: String?) {
+        store.edit {
+            if (id == null) it.remove(Keys.LAST_ACTIVE_BUBBLE_CONVERSATION_ID)
+            else it[Keys.LAST_ACTIVE_BUBBLE_CONVERSATION_ID] = id
         }
     }
 }

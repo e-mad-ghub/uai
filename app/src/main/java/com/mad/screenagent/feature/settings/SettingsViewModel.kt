@@ -3,7 +3,9 @@ package com.mad.screenagent.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AppColorTheme
+import com.mad.screenagent.data.model.QuickActionConfig
 import com.mad.screenagent.data.repository.AgentRepository
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -17,12 +19,22 @@ class SettingsViewModel(private val repo: AgentRepository) : ViewModel() {
     val colorTheme = repo.colorThemeFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppColorTheme.DEFAULT)
 
+    val quickActions = repo.quickActionsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val agents = repo.agentsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     fun setBubbleEnabled(enabled: Boolean) {
         viewModelScope.launch { repo.setBubbleEnabled(enabled) }
     }
 
     fun setColorTheme(theme: AppColorTheme) {
         viewModelScope.launch { repo.setColorTheme(theme) }
+    }
+
+    fun saveQuickActions(actions: List<QuickActionConfig>) {
+        viewModelScope.launch { repo.saveQuickActions(actions) }
     }
 
     class Factory(private val repo: AgentRepository) : ViewModelProvider.Factory {

@@ -56,6 +56,7 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.mad.screenagent.MainActivity
 import com.mad.screenagent.R
 import com.mad.screenagent.UaiApplication
+import com.mad.screenagent.data.model.QuickActionConfig
 import com.mad.screenagent.shared.streaming.AssistantStreamingSession
 import com.mad.screenagent.shared.streaming.FileAttachmentContext
 import com.mad.screenagent.shared.streaming.ImageAttachment
@@ -94,7 +95,9 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -151,8 +154,17 @@ class FloatingBubbleService : Service() {
     private var pendingFileText by mutableStateOf<String?>(null)
     private var isOverlayScreenshotCaptureInProgress = false
 
+    // Quick access menu state
+    private var quickActions by mutableStateOf<List<QuickActionConfig>>(emptyList())
+    private var isQuickMenuVisible by mutableStateOf(false)
+    private var quickMenuBubbleX by mutableStateOf(0)
+    private var quickMenuBubbleY by mutableStateOf(0)
+    private var quickMenuHoveredItem by mutableStateOf<String?>(null)
+
     private var bubbleView: ComposeView? = null
     private var chatPanelView: ComposeView? = null
+    private var quickMenuView: ComposeView? = null
+    private lateinit var quickMenuParams: WindowManager.LayoutParams
     // FrameLayout wrapper that intercepts BACK key to close the panel
     private var chatPanelContainer: FrameLayout? = null
     private var dismissZoneView: ComposeView? = null
@@ -262,6 +274,11 @@ class FloatingBubbleService : Service() {
             .catch { }
             .launchIn(serviceScope)
 
+        container.agentRepository.quickActionsFlow
+            .onEach { quickActions = it }
+            .catch { }
+            .launchIn(serviceScope)
+
         serviceScope.launch {
             // Reveal the bubble at the correct position, avoiding an initial jump.
             bubbleParams.alpha = if (isAppUiVisible) 0f else BUBBLE_NORMAL_ALPHA
@@ -291,6 +308,7 @@ class FloatingBubbleService : Service() {
         screenshotRestoreJob?.cancel()
         screenshotHintJob?.cancel()
         currentConversationMessagesJob?.cancel()
+        removeSafely(quickMenuView, immediate = true)
         removeSafely(chatPanelContainer, immediate = true)
         removeSafely(dismissZoneView, immediate = true)
         removeSafely(bubbleView, immediate = true)
@@ -596,10 +614,7 @@ class FloatingBubbleService : Service() {
                 longPressConsumed = true
                 removeSafely(dismissZoneView, immediate = true)
                 isDismissTargetActive = false
-                val intent = Intent(this@FloatingBubbleService, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                }
-                startActivity(intent)
+                showQuickAccessMenu()
             }
         })
 
@@ -619,7 +634,8 @@ class FloatingBubbleService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - initialRawX
                     val dy = event.rawY - initialRawY
-                    if (!isDragging && (abs(dx) > 8 || abs(dy) > 8)) {
+                    // Issue-9: don't start a drag if long-press already consumed the gesture
+                    if (!isDragging && !longPressConsumed && (abs(dx) > 8 || abs(dy) > 8)) {
                         isDragging = true
                         dismissZoneView?.let {
                             if (!it.isAttachedToWindow) windowManager.addView(it, dismissZoneParams)
@@ -638,39 +654,44 @@ class FloatingBubbleService : Service() {
                         windowManager.updateViewLayout(view, bubbleParams)
                         isDismissTargetActive = isOverDismissZone()
                     }
+                    // Issue-8: while finger is held after long-press, track which item is under it
+                    if (longPressConsumed) {
+                        quickMenuHoveredItem = hitTestQuickMenuItem(event.rawX, event.rawY)
+                    }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     val wasOverDismiss = isDismissTargetActive
                     removeSafely(dismissZoneView, immediate = true)
                     isDismissTargetActive = false
-                    if (!isDragging && !longPressConsumed) {
-                        toggleChatPanel()
-                    } else if (isDragging) {
-                        if (wasOverDismiss) {
-                            disableBubbleFromDismissZone()
+                    if (longPressConsumed) {
+                        // Issue-6/8: release after long-press → trigger hovered item or dismiss
+                        val hovered = quickMenuHoveredItem
+                        quickMenuHoveredItem = null
+                        if (hovered != null) {
+                            triggerQuickMenuItemById(hovered)
                         } else {
-                            val dm = resources.displayMetrics
-                            val sizePx = (64 * dm.density).toInt()
-                            val targetX = if (bubbleParams.x + sizePx / 2 < dm.widthPixels / 2) 0
-                                          else dm.widthPixels - sizePx
-                            snapToSide(targetX)
+                            dismissQuickAccessMenu()
+                            scheduleBubbleIdleFade()
                         }
+                    } else if (!isDragging) {
+                        toggleChatPanel()
+                    } else if (wasOverDismiss) {
+                        disableBubbleFromDismissZone()
                     } else {
-                        scheduleBubbleIdleFade()
+                        snapToValidZone()
                     }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     removeSafely(dismissZoneView, immediate = true)
                     isDismissTargetActive = false
+                    val wasLongPress = longPressConsumed
                     longPressConsumed = false
+                    quickMenuHoveredItem = null
+                    if (wasLongPress) dismissQuickAccessMenu()
                     if (isDragging) {
-                        val dm = resources.displayMetrics
-                        val sizePx = (64 * dm.density).toInt()
-                        val targetX = if (bubbleParams.x + sizePx / 2 < dm.widthPixels / 2) 0
-                                      else dm.widthPixels - sizePx
-                        snapToSide(targetX)
+                        snapToValidZone()
                     } else {
                         scheduleBubbleIdleFade()
                     }
@@ -681,14 +702,42 @@ class FloatingBubbleService : Service() {
         }
     }
 
-    private fun snapToSide(targetX: Int) {
+    /**
+     * Snap the bubble to the nearest valid position after a free drag.
+     * The bubble settles on the closest screen edge (left/right) and is clamped
+     * vertically into the safe zone that leaves room for the radial menu icons.
+     */
+    private fun snapToValidZone() {
+        val dm = resources.displayMetrics
+        val sizePx = (64 * dm.density).toInt()
+        val screenWidth = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            windowManager.currentWindowMetrics.bounds.width()
+        } else { dm.widthPixels }
+        val bounds = calculateOverlayBubbleBounds(
+            screenWidth = screenWidth,
+            screenHeight = dm.heightPixels,
+            realHeight = getRealScreenHeight(),
+            statusBarHeight = getStatusBarHeight(),
+            bubbleSize = sizePx,
+            density = dm.density
+        )
+        val (targetX, targetY) = snapOverlayBubblePosition(
+            x = bubbleParams.x,
+            y = bubbleParams.y,
+            screenWidth = screenWidth,
+            bubbleSize = sizePx,
+            bounds = bounds
+        )
         val startX = bubbleParams.x
-        ValueAnimator.ofInt(startX, targetX).apply {
-            duration = 250L
+        val startY = bubbleParams.y
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 280L
             interpolator = DecelerateInterpolator()
             addUpdateListener { animator ->
-                bubbleParams.x = animator.animatedValue as Int
-                bubbleView?.let { windowManager.updateViewLayout(it, bubbleParams) }
+                val t = animator.animatedValue as Float
+                bubbleParams.x = (startX + (targetX - startX) * t).toInt()
+                bubbleParams.y = (startY + (targetY - startY) * t).toInt()
+                bubbleView?.let { runCatching { windowManager.updateViewLayout(it, bubbleParams) } }
             }
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
@@ -770,6 +819,354 @@ class FloatingBubbleService : Service() {
             }
         }
         // Not added to WindowManager here — shown only while dragging
+    }
+
+    // ----- Quick access menu -----
+
+    private fun setupQuickAccessMenu() {
+        quickMenuParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+
+        val dm = resources.displayMetrics
+        val screenWidthPx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+            windowManager.currentWindowMetrics.bounds.width()
+        else dm.widthPixels
+
+        quickMenuView = ComposeView(this).apply {
+            attachLifecycleOwners(this)
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                UaiTheme(colorTheme = colorTheme, darkTheme = isDarkMode) {
+                    BubbleQuickAccessMenu(
+                        bubbleX = quickMenuBubbleX,
+                        bubbleY = quickMenuBubbleY,
+                        bubbleSizePx = (64 * resources.displayMetrics.density).toInt(),
+                        screenWidthPx = screenWidthPx,
+                        quickActions = quickActions,
+                        hoveredItemId = quickMenuHoveredItem,
+                        onOpenApp = {
+                            dismissQuickAccessMenu()
+                            openAppFromQuickMenu()
+                        },
+                        onMoreDetails = {
+                            dismissQuickAccessMenu()
+                            triggerBuiltInQuickAction(
+                                actionName = "More Details",
+                                prompt = "Please analyze this screenshot and provide more details about what you see."
+                            )
+                        },
+                        onTranslate = {
+                            dismissQuickAccessMenu()
+                            triggerBuiltInQuickAction(
+                                actionName = "Translate",
+                                prompt = "Please translate all text visible in this screenshot to English."
+                            )
+                        },
+                        onCustomAction = { action ->
+                            dismissQuickAccessMenu()
+                            triggerCustomQuickAction(action)
+                        },
+                        onCreateAction = {
+                            dismissQuickAccessMenu()
+                            navigateToQuickActionsSettings()
+                        },
+                        onDismiss = {
+                            dismissQuickAccessMenu()
+                            scheduleBubbleIdleFade()
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    private fun showQuickAccessMenu() {
+        if (overlaySurfaceState == OverlaySurfaceState.ExternalFlow || isAppUiVisible) return
+        if (quickMenuView == null) setupQuickAccessMenu()
+        quickMenuBubbleX = bubbleParams.x
+        quickMenuBubbleY = bubbleParams.y
+        isQuickMenuVisible = true
+        quickMenuView?.takeIf { !it.isAttachedToWindow }?.let {
+            runCatching { windowManager.addView(it, quickMenuParams) }
+        }
+        activateBubbleOpacity()
+    }
+
+    private fun dismissQuickAccessMenu() {
+        isQuickMenuVisible = false
+        quickMenuHoveredItem = null
+        removeSafely(quickMenuView, immediate = true)
+        quickMenuView?.disposeComposition()
+        quickMenuView = null
+    }
+
+    /**
+     * Hit-test screen coordinates against each menu item's centre.
+     * Returns the matching [QuickMenuItemId] constant, or null if none is close enough.
+     * Coordinates match [bubbleParams.x/y] which use the same Gravity.TOP|START origin.
+     */
+    private fun hitTestQuickMenuItem(rawX: Float, rawY: Float): String? {
+        val dm = resources.displayMetrics
+        val density = dm.density
+        val bubbleSizePx = 64 * density
+        val iconSizePx   = QUICK_MENU_ACTION_ICON_SIZE_DP * density
+        val gapPx        = QUICK_MENU_ACTION_GAP_DP * density
+        val screenWidth  = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+            windowManager.currentWindowMetrics.bounds.width().toFloat()
+        else dm.widthPixels.toFloat()
+
+        val cx = quickMenuBubbleX + bubbleSizePx / 2f
+        val cy = quickMenuBubbleY + bubbleSizePx / 2f
+        val onRight = cx > screenWidth / 2f
+        val half  = iconSizePx / 2f
+        val hit   = iconSizePx * 0.75f   // generous hit radius
+
+        data class IC(val id: String, val x: Float, val y: Float)
+        val items = buildList {
+            // Top: Open App
+            add(IC(QuickMenuItemId.OPEN_APP, cx, cy - bubbleSizePx / 2f - half - gapPx))
+            // Side: More Details
+            val mdX = if (onRight) cx - bubbleSizePx / 2f - half - gapPx
+                      else         cx + bubbleSizePx / 2f + gapPx + half
+            add(IC(QuickMenuItemId.MORE_DETAILS, mdX, cy))
+            // Side: Translate
+            val trX = if (onRight) cx - bubbleSizePx / 2f - iconSizePx * 1.5f - gapPx * 2.5f
+                      else         cx + bubbleSizePx / 2f + iconSizePx * 1.5f + gapPx * 2.5f
+            add(IC(QuickMenuItemId.TRANSLATE, trX, cy))
+            // Bottom: Slot 1 (always present)
+            val s1y = cy + bubbleSizePx / 2f + gapPx + half
+            add(IC(QuickMenuItemId.SLOT1, cx, s1y))
+            // Bottom: Slot 2 (only if slot 1 has a real action)
+            if (quickActions.isNotEmpty()) {
+                add(IC(QuickMenuItemId.SLOT2, cx, s1y + iconSizePx + gapPx))
+            }
+        }
+        return items.firstOrNull { (_, ix, iy) ->
+            val dx = rawX - ix; val dy = rawY - iy
+            dx * dx + dy * dy <= hit * hit
+        }?.id
+    }
+
+    /** Triggered when the user releases the finger over a specific item (press-and-slide gesture). */
+    private fun triggerQuickMenuItemById(itemId: String) {
+        dismissQuickAccessMenu()
+        scheduleBubbleIdleFade()
+        when (itemId) {
+            QuickMenuItemId.OPEN_APP -> openAppFromQuickMenu()
+            QuickMenuItemId.MORE_DETAILS -> triggerBuiltInQuickAction(
+                "More Details",
+                "Please analyze this screenshot and provide more details about what you see."
+            )
+            QuickMenuItemId.TRANSLATE -> triggerBuiltInQuickAction(
+                "Translate",
+                "Please translate all text visible in this screenshot to English."
+            )
+            QuickMenuItemId.SLOT1 -> {
+                val action = quickActions.getOrNull(0)
+                if (action == null) { navigateToQuickActionsSettings(); return }
+                triggerCustomQuickAction(action)
+            }
+            QuickMenuItemId.SLOT2 -> {
+                val action = quickActions.getOrNull(1)
+                if (action == null) {
+                    if (quickActions.isNotEmpty()) navigateToQuickActionsSettings()
+                    return
+                }
+                triggerCustomQuickAction(action)
+            }
+        }
+    }
+
+    private fun openAppFromQuickMenu() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        startActivity(intent)
+    }
+
+    private fun navigateToQuickActionsSettings() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            action = ACTION_OPEN_QUICK_ACTIONS_SETTINGS
+        }
+        startActivity(intent)
+    }
+
+    /**
+     * Handles "More Details" and "Translate" built-in quick actions.
+     * 1. Takes a screenshot.
+     * 2. Finds or creates a conversation named [actionName].
+     * 3. Sends screenshot + [prompt] to that conversation.
+     * 4. Opens the chat panel showing streaming response.
+     */
+    private fun triggerBuiltInQuickAction(actionName: String, prompt: String) {
+        if (overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
+        serviceScope.launch {
+            val screenshotBase64 = captureScreenshotSuspend() ?: run {
+                if (MiniChatScreenshotAccessibilityService.isAvailable()) {
+                    miniChatErrorMessage = "Screenshot capture failed. The current screen may be protected."
+                } else {
+                    showMiniChatScreenshotHint(getString(R.string.mini_chat_screenshot_accessibility_hint))
+                }
+                showChatPanel()
+                return@launch
+            }
+
+            val container = (application as UaiApplication).container
+            val conversationName = "$actionName-Session"
+
+            // Find or create dedicated conversation
+            val existingConv = allConversations.firstOrNull {
+                !it.isAgora && it.title == conversationName
+            }
+            val agent = fallbackAgentForCurrentContext()
+            val targetConv = existingConv ?: run {
+                if (agent == null) {
+                    miniChatErrorMessage = "No assistant configured. Please add an assistant in settings."
+                    showChatPanel()
+                    return@launch
+                }
+                val newConv = ConversationEntity(
+                    id = UUID.randomUUID().toString(),
+                    title = conversationName,
+                    agentId = agent.id,
+                    agentName = agent.name,
+                    createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+                container.conversationRepository.upsertConversation(newConv)
+                newConv
+            }
+
+            // Switch to that conversation and open the panel before sending
+            prefersDraftConversation = false
+            switchConversation(targetConv.id, force = true)
+            showChatPanel()
+
+            // Save attachment and send
+            val persistedUri = withContext(Dispatchers.IO) {
+                persistImageAttachment(applicationContext, screenshotBase64)
+            }
+            pendingImages.add(Triple(screenshotBase64, null, persistedUri))
+            sendMessage(prompt)
+
+            // Persist last active conversation
+            container.agentRepository.saveLastActiveBubbleConversationId(targetConv.id)
+        }
+    }
+
+    /**
+     * Handles user-configured custom quick actions.
+     */
+    private fun triggerCustomQuickAction(action: QuickActionConfig) {
+        if (overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
+        serviceScope.launch {
+            val container = (application as UaiApplication).container
+
+            // Resolve agent: assigned → default → any
+            val assignedAgent = action.assignedAgentId?.let { id ->
+                allAgents.firstOrNull { it.id == id }
+            }
+            val agent = if (assignedAgent == null) {
+                if (action.assignedAgentId != null) {
+                    // Agent was deleted
+                    Toast.makeText(
+                        applicationContext,
+                        "Assigned assistant not found. Using default assistant.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+                fallbackAgentForCurrentContext()
+            } else {
+                assignedAgent
+            }
+
+            if (agent == null) {
+                miniChatErrorMessage = "No assistant configured. Please add an assistant in settings."
+                showChatPanel()
+                return@launch
+            }
+
+            // Capture screenshot if required
+            var screenshotBase64: String? = null
+            if (action.takeScreenshot) {
+                screenshotBase64 = captureScreenshotSuspend() ?: run {
+                    if (MiniChatScreenshotAccessibilityService.isAvailable()) {
+                        miniChatErrorMessage = "Screenshot capture failed. The current screen may be protected."
+                    } else {
+                        showMiniChatScreenshotHint(getString(R.string.mini_chat_screenshot_accessibility_hint))
+                    }
+                    showChatPanel()
+                    return@launch
+                }
+            }
+
+            // Find or create dedicated conversation by name
+            val convName = action.effectiveConversationName()
+            val existingConv = allConversations.firstOrNull {
+                !it.isAgora && it.title == convName
+            }
+            val targetConv = existingConv ?: run {
+                val newConv = ConversationEntity(
+                    id = UUID.randomUUID().toString(),
+                    title = convName,
+                    agentId = agent.id,
+                    agentName = agent.name,
+                    createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+                container.conversationRepository.upsertConversation(newConv)
+                newConv
+            }
+
+            prefersDraftConversation = false
+            switchConversation(targetConv.id, force = true)
+            showChatPanel()
+
+            if (screenshotBase64 != null) {
+                val persistedUri = withContext(Dispatchers.IO) {
+                    persistImageAttachment(applicationContext, screenshotBase64)
+                }
+                pendingImages.add(Triple(screenshotBase64, null, persistedUri))
+            }
+            sendMessage(action.prompt)
+            container.agentRepository.saveLastActiveBubbleConversationId(targetConv.id)
+        }
+    }
+
+    /**
+     * Suspends until a screenshot is captured (accessibility or media projection path).
+     * Returns the base64-encoded image, or null if capture fails/is blocked.
+     */
+    private suspend fun captureScreenshotSuspend(): String? {
+        return suspendCancellableCoroutine { cont ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (!MiniChatScreenshotAccessibilityService.isAvailable()) {
+                    cont.resume(null)
+                    return@suspendCancellableCoroutine
+                }
+                val started = MiniChatScreenshotAccessibilityService.requestScreenshot { outcome ->
+                    when (outcome) {
+                        is AccessibilityScreenCaptureOutcome.Success -> cont.resume(outcome.base64)
+                        is AccessibilityScreenCaptureOutcome.Error   -> cont.resume(null)
+                    }
+                }
+                if (!started) cont.resume(null)
+            } else {
+                // For pre-Android 11 we cannot easily suspend the MediaProjection flow here;
+                // return null to surface an appropriate error message.
+                cont.resume(null)
+            }
+        }
     }
 
     // ----- Chat panel setup -----
@@ -1184,6 +1581,7 @@ class FloatingBubbleService : Service() {
                             isChatPanelVisible ||
                             chatPanelContainer?.isAttachedToWindow == true
                     )
+        dismissQuickAccessMenu()
         removeSafely(dismissZoneView, immediate = true)
         isDismissTargetActive = false
         hideChatPanel(immediate = true, restoreBubble = false)
@@ -1913,7 +2311,8 @@ class FloatingBubbleService : Service() {
             screenHeight = dm.heightPixels,
             realHeight = getRealScreenHeight(),
             statusBarHeight = getStatusBarHeight(),
-            bubbleSize = bubbleSize
+            bubbleSize = bubbleSize,
+            density = dm.density
         )
     }
 
@@ -2046,6 +2445,7 @@ class FloatingBubbleService : Service() {
             "UAI_OVERLAY",
             "forceHideOverlayWindows reason=$reason panelAttached=${chatPanelContainer?.isAttachedToWindow == true} bubbleAttached=${bubbleView?.isAttachedToWindow == true} state=$overlaySurfaceState"
         )
+        dismissQuickAccessMenu()
         removeSafely(dismissZoneView, immediate = true)
         isDismissTargetActive = false
         clearChatPanelInteractionState()
@@ -2117,6 +2517,7 @@ class FloatingBubbleService : Service() {
         private const val ACTION_OPEN_CHAT_PANEL = "com.mad.screenagent.OPEN_CHAT_PANEL"
         private const val ACTION_OPEN_DRAFT_CHAT_PANEL = "com.mad.screenagent.OPEN_DRAFT_CHAT_PANEL"
         private const val ACTION_SUPPRESS_FOR_FOREGROUND_APP = "com.mad.screenagent.SUPPRESS_FOR_FOREGROUND_APP"
+        const val ACTION_OPEN_QUICK_ACTIONS_SETTINGS = "com.mad.screenagent.OPEN_QUICK_ACTIONS_SETTINGS"
         private const val EXTRA_CONVERSATION_ID = "conversationId"
         private const val EXTRA_ASSISTANT_ID = "assistantId"
         private const val NOTIFICATION_ID = 1001

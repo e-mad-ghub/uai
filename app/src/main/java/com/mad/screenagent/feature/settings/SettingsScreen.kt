@@ -7,6 +7,7 @@ import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -16,18 +17,36 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BubbleChart
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Screenshot
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Bookmark
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.FlashOn
+import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.RocketLaunch
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material.icons.outlined.Summarize
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -40,6 +59,9 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.mad.screenagent.data.model.AgentConfig
+import com.mad.screenagent.data.model.QuickActionConfig
+import com.mad.screenagent.data.model.QuickActionIconKey
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -83,7 +105,7 @@ fun SettingsScreen(
     val showOverlayPermissionCard = !hasOverlayPermission &&
         (showOverlayPermissionCallout || isMiniChatConfigured)
     val showMiniChatScreenshotsCard =
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !isScreenshotAccessibilityEnabled
     val miniChatStatusLabel = stringResource(
         when {
             isMiniChatActive -> R.string.mini_chat_status_active
@@ -506,6 +528,304 @@ private fun ThemeCard(theme: AppColorTheme, isSelected: Boolean, onClick: () -> 
             )
         }
     }
+}
+
+// ── Quick Actions ──────────────────────────────────────────────────────────
+
+@Composable
+internal fun QuickActionsSection(
+    bubbleEnabled: Boolean,
+    quickActions: List<QuickActionConfig>,
+    agents: List<AgentConfig>,
+    onDisabledTap: () -> Unit,
+    onSaveActions: (List<QuickActionConfig>) -> Unit,
+) {
+    val contentAlpha = if (bubbleEnabled) 1f else 0.38f
+    // Editing state: index 0 or 1 being edited, null = none
+    var editingSlot by rememberSaveable { mutableStateOf<Int?>(null) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        repeat(2) { slotIndex ->
+            val action = quickActions.getOrNull(slotIndex)
+            val isEditing = editingSlot == slotIndex
+
+            ElevatedCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alpha(contentAlpha)
+            ) {
+                if (action == null) {
+                    // Empty slot → "Add Action" row + optional inline editor
+                    ListItem(
+                        leadingContent = {
+                            Icon(Icons.Default.Add, contentDescription = null,
+                                tint = if (bubbleEnabled) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant)
+                        },
+                        headlineContent = {
+                            Text(
+                                "Add Quick Action ${slotIndex + 1}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (bubbleEnabled) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        modifier = Modifier.clickable(enabled = true) {
+                            if (!bubbleEnabled) { onDisabledTap(); return@clickable }
+                            editingSlot = if (isEditing) null else slotIndex
+                        }
+                    )
+                    if (isEditing) {
+                        HorizontalDivider()
+                        QuickActionEditor(
+                            action = QuickActionConfig(),
+                            agents = agents,
+                            onSave = { newAction ->
+                                val list = quickActions.toMutableList()
+                                while (list.size <= slotIndex) list.add(QuickActionConfig())
+                                list[slotIndex] = newAction
+                                onSaveActions(list)
+                                editingSlot = null
+                            },
+                            onCancel = { editingSlot = null }
+                        )
+                    }
+                } else {
+                    // Existing action → summary row + optional inline editor
+                    ListItem(
+                        leadingContent = {
+                            Icon(
+                                quickActionIconForKey(action.iconKey),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        headlineContent = { Text(action.name.ifBlank { "Unnamed Action" }) },
+                        supportingContent = {
+                            Text(
+                                action.prompt.take(60).let { if (action.prompt.length > 60) "$it…" else it },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        trailingContent = {
+                            Row {
+                                IconButton(onClick = {
+                                    if (!bubbleEnabled) { onDisabledTap(); return@IconButton }
+                                    editingSlot = if (isEditing) null else slotIndex
+                                }) {
+                                    Icon(Icons.Outlined.Edit, contentDescription = "Edit")
+                                }
+                                IconButton(onClick = {
+                                    if (!bubbleEnabled) { onDisabledTap(); return@IconButton }
+                                    val updated = quickActions.toMutableList().also { it.removeAt(slotIndex) }
+                                    onSaveActions(updated)
+                                    if (editingSlot == slotIndex) editingSlot = null
+                                }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete",
+                                        tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    )
+
+                    if (isEditing) {
+                        HorizontalDivider()
+                        QuickActionEditor(
+                            action = action,
+                            agents = agents,
+                            onSave = { updated ->
+                                val list = quickActions.toMutableList()
+                                list[slotIndex] = updated
+                                onSaveActions(list)
+                                editingSlot = null
+                            },
+                            onCancel = { editingSlot = null }
+                        )
+                    }
+                }
+            }
+
+        }
+    }
+}
+
+@Composable
+private fun QuickActionEditor(
+    action: QuickActionConfig,
+    agents: List<AgentConfig>,
+    onSave: (QuickActionConfig) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var name by rememberSaveable { mutableStateOf(action.name) }
+    var prompt by rememberSaveable { mutableStateOf(action.prompt) }
+    var selectedIcon by rememberSaveable { mutableStateOf(action.iconKey) }
+    var takeScreenshot by rememberSaveable { mutableStateOf(action.takeScreenshot) }
+    var conversationName by rememberSaveable { mutableStateOf(action.conversationName) }
+    var assignedAgentId by rememberSaveable { mutableStateOf(action.assignedAgentId) }
+    var agentDropdownExpanded by rememberSaveable { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Name
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("Action Name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        // Prompt
+        OutlinedTextField(
+            value = prompt,
+            onValueChange = { prompt = it },
+            label = { Text("Prompt") },
+            placeholder = { Text("What should the assistant do?") },
+            minLines = 2,
+            maxLines = 4,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        // Icon picker
+        Text("Icon", style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.horizontalScroll(rememberScrollState())
+        ) {
+            QuickActionIconKey.entries.forEach { key ->
+                val isSelected = key == selectedIcon
+                Surface(
+                    shape = CircleShape,
+                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surfaceVariant,
+                    border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                             else null,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clickable { selectedIcon = key }
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            quickActionIconForKey(key),
+                            contentDescription = key.displayName,
+                            tint = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                                   else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Agent picker
+        if (agents.isNotEmpty()) {
+            Box {
+                OutlinedTextField(
+                    value = agents.firstOrNull { it.id == assignedAgentId }?.name ?: "Default Agent",
+                    onValueChange = {},
+                    label = { Text("Assigned Agent") },
+                    readOnly = true,
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { agentDropdownExpanded = true },
+                    trailingIcon = {
+                        Icon(
+                            if (agentDropdownExpanded) Icons.Default.KeyboardArrowUp
+                            else Icons.Default.KeyboardArrowDown,
+                            contentDescription = null
+                        )
+                    }
+                )
+                DropdownMenu(
+                    expanded = agentDropdownExpanded,
+                    onDismissRequest = { agentDropdownExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Default Agent") },
+                        onClick = { assignedAgentId = null; agentDropdownExpanded = false }
+                    )
+                    agents.forEach { agent ->
+                        DropdownMenuItem(
+                            text = { Text(agent.name) },
+                            onClick = { assignedAgentId = agent.id; agentDropdownExpanded = false }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Screenshot toggle
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Capture Screenshot", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Take a screenshot when this action is triggered",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = takeScreenshot, onCheckedChange = { takeScreenshot = it })
+        }
+
+        // Conversation name
+        val defaultConvName = "${name.trim().ifBlank { "Action" }}-Session"
+        OutlinedTextField(
+            value = conversationName,
+            onValueChange = { conversationName = it },
+            label = { Text("Conversation Name") },
+            placeholder = { Text(defaultConvName) },
+            supportingText = { Text("Leave blank to use \"$defaultConvName\"") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        // Save / Cancel
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+        ) {
+            TextButton(onClick = onCancel) { Text("Cancel") }
+            Button(
+                onClick = {
+                    onSave(
+                        action.copy(
+                            name = name.trim(),
+                            prompt = prompt.trim(),
+                            iconKey = selectedIcon,
+                            takeScreenshot = takeScreenshot,
+                            conversationName = conversationName.trim(),
+                            assignedAgentId = assignedAgentId
+                        )
+                    )
+                },
+                enabled = name.isNotBlank() && prompt.isNotBlank()
+            ) { Text("Save") }
+        }
+    }
+}
+
+private fun quickActionIconForKey(key: QuickActionIconKey): ImageVector = when (key) {
+    QuickActionIconKey.BOLT         -> Icons.Outlined.Bolt
+    QuickActionIconKey.STAR         -> Icons.Outlined.Star
+    QuickActionIconKey.BOOKMARK     -> Icons.Outlined.Bookmark
+    QuickActionIconKey.SEARCH       -> Icons.Outlined.Search
+    QuickActionIconKey.EDIT         -> Icons.Outlined.Edit
+    QuickActionIconKey.CODE         -> Icons.Outlined.Code
+    QuickActionIconKey.AUTO_AWESOME -> Icons.Outlined.AutoAwesome
+    QuickActionIconKey.PSYCHOLOGY   -> Icons.Outlined.Psychology
+    QuickActionIconKey.SUMMARIZE    -> Icons.Outlined.Summarize
+    QuickActionIconKey.FLASH_ON     -> Icons.Outlined.FlashOn
+    QuickActionIconKey.TUNE         -> Icons.Outlined.Tune
+    QuickActionIconKey.ROCKET       -> Icons.Outlined.RocketLaunch
 }
 
 @Composable

@@ -2,10 +2,11 @@ package com.example.uai
 
 import com.example.uai.data.model.AiProviderType
 import com.example.uai.data.model.AgentConfig
+import com.example.uai.data.model.MONEY_SAVER_MODEL
 import com.example.uai.data.model.buildOpenAiCompatibleChatCompletionsUrl
 import com.example.uai.data.model.normalizeOpenAiCompatibleBaseUrl
-import com.example.uai.ui.agents.defaultRecommendedModelId
-import com.example.uai.ui.agents.recommendedModelChoices
+import com.example.uai.feature.agents.defaultRecommendedModelId
+import com.example.uai.feature.agents.recommendedModelChoices
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -13,16 +14,19 @@ import org.junit.Test
 class ProviderModelRecommendationsTest {
 
     @Test
-    fun openAiFallbackRecommendationUsesGpt5WhenLiveCatalogIsUnavailable() {
+    fun openAiDefaultRecommendationStartsWithMoneySaverWhenLiveCatalogIsUnavailable() {
+        // Money Saver is pinned as the first choice for all providers so defaultRecommendedModelId
+        // returns it regardless of catalog availability.
         val selected = defaultRecommendedModelId(
             provider = AiProviderType.OPENAI
         )
 
-        assertEquals("gpt-5", selected)
+        assertEquals(MONEY_SAVER_MODEL, selected)
     }
 
     @Test
-    fun openAiDefaultRecommendationPrefersBalancedGeneralModelFromLiveCatalog() {
+    fun openAiDefaultRecommendationStartsWithMoneySaverRegardlessOfCatalog() {
+        // Money Saver is always the first recommended choice even when the live catalog is present.
         val selected = defaultRecommendedModelId(
             provider = AiProviderType.OPENAI,
             fetchedProviderModels = listOf(
@@ -33,7 +37,7 @@ class ProviderModelRecommendationsTest {
             )
         )
 
-        assertEquals("gpt-4o", selected)
+        assertEquals(MONEY_SAVER_MODEL, selected)
     }
 
     @Test
@@ -69,16 +73,17 @@ class ProviderModelRecommendationsTest {
     }
 
     @Test
-    fun anthropicFallbackRecommendationUsesCurrentStarterModelWhenLiveCatalogIsUnavailable() {
+    fun anthropicDefaultRecommendationStartsWithMoneySaverWhenLiveCatalogIsUnavailable() {
         val selected = defaultRecommendedModelId(
             provider = AiProviderType.ANTHROPIC
         )
 
-        assertEquals("claude-sonnet-4-6", selected)
+        assertEquals(MONEY_SAVER_MODEL, selected)
     }
 
     @Test
-    fun anthropicFallsBackToLatestAvailableModelWhenPreferredFamilyIsMissing() {
+    fun anthropicDefaultRecommendationStartsWithMoneySaverRegardlessOfCatalog() {
+        // Money Saver is always the first recommended choice even when live models are provided.
         val selected = defaultRecommendedModelId(
             provider = AiProviderType.ANTHROPIC,
             fetchedProviderModels = listOf(
@@ -87,11 +92,13 @@ class ProviderModelRecommendationsTest {
             )
         )
 
-        assertEquals("claude-4-0", selected)
+        assertEquals(MONEY_SAVER_MODEL, selected)
     }
 
     @Test
-    fun openAiRecommendationsStayDistinctWhenCatalogHasEnoughChoices() {
+    fun openAiRecommendationsIncludeMoneySaverPlusThreeModelRolesWhenCatalogHasEnoughChoices() {
+        // Money Saver + Balanced + Fast + Detailed = 4 distinct choices when catalog provides
+        // enough distinct model IDs to fill all three model roles without duplication.
         val choices = recommendedModelChoices(
             provider = AiProviderType.OPENAI,
             fetchedProviderModels = listOf(
@@ -102,7 +109,7 @@ class ProviderModelRecommendationsTest {
             )
         )
 
-        assertEquals(3, choices.size)
+        assertEquals(4, choices.size)
         assertTrue(choices.map { it.id }.distinct().size == choices.size)
     }
 

@@ -334,6 +334,51 @@ This is the most common type of work. The rules below are mandatory — not opti
 
 ---
 
+## Testing Policy
+
+### Guiding principle
+
+Every active feature must have unit tests covering its key business logic. Tests exist to catch regressions — they are a contract, not a suggestion.
+
+### Rules
+
+1. **Test coverage is mandatory for active features.**
+   Each feature package (`conversations`, `agents`, `settings`, `bubble`) must have at least one unit test file covering the logic most likely to regress silently.
+
+2. **Test cases must not be modified when introducing a new feature.**
+   If a new feature or change causes an existing test to fail, that failure is a signal — investigate before touching the test. The only permitted reasons to modify an existing test are:
+   - The underlying behavior it covers was **intentionally changed** and the change was **explicitly agreed** with the feature requester.
+   - The test area that changes must be **documented** in the PR description, stating which behavior changed, why, and what regression risk exists.
+
+3. **Regression scope must be documented.**
+   When a feature change could affect tests outside its own package (e.g. a shared component was modified), the PR must list which test areas were re-run and their results.
+
+4. **Agora is excluded from the regression suite while disabled.**
+   Do not add or run Agora tests until Agora is re-enabled. See Feature Catalogue for details.
+
+### Test coverage map
+
+| Feature | Test file(s) | What is covered |
+|---|---|---|
+| `feature/conversations` | `ConversationEntityTest` | `parseAgoraAgentIds`: JSON parsing of agent ID lists stored in Room |
+| `feature/agents` | `AgentConfigVisionTest` | `AgentConfig.supportsVision`: per-provider model name heuristics |
+| `feature/agents` | `OpenAiCompatibleConfigTest` | URL normalization helpers; vision model detection for custom providers |
+| `feature/settings` | `AppColorThemeTest` | `AppColorTheme.fromKey`: DataStore key round-trip; enum invariants |
+| `feature/bubble` | `OverlayBubblePositioningTest` | Bubble clamp, inset guards, default placement |
+| `shared/streaming` | `ThrottledStreamingMessageWriterTest` | Rate-limit and flush behavior of DB streaming writer |
+| `shared/streaming` | `ToolAwareAssistantRuntimeTest` | Tool-loop execution, image pass-through, routing classification |
+| `shared/streaming` | `WebGatewayTest`, `WebGroundingServiceTest`, `SearchPlanningServiceTest` | Web search pipeline |
+| `shared/streaming` | `OpenRouterBestFreeRoutingStateStoreTest`, `OpenRouterModelsTest`, `ProviderModelRecommendationsTest` | Free-model selection and ranking |
+| `shared/attachment` | `MessageAttachmentDisplayTest` | Attachment display state helpers |
+
+### What is not covered by unit tests (and why)
+
+- **ViewModels** — depend on `viewModelScope`, which requires Android lifecycle infrastructure not available in JVM unit tests. ViewModel behavior is regression-tested manually per the regression scope rules above. If a mocking or coroutines-test infrastructure is added in future, ViewModel tests should be the first priority.
+- **`FloatingBubbleService`** — runs as a foreground `Service` with `WindowManager`; requires instrumented tests.
+- **`AppPreferences` / `AgentRepository`** — depend on Jetpack DataStore (`Context`-bound); requires instrumented tests or a future interface extraction.
+
+---
+
 ## Decision Log
 
 | # | Decision | Reason |
@@ -343,3 +388,4 @@ This is the most common type of work. The rules below are mandatory — not opti
 | 3 | Streaming logic duplicated between `feature/conversations/` and `feature/agora/` | Sharing a single streaming ViewModel base class would couple the two features. A bug fix or behavior change in one would require retesting the other. Duplication is the deliberate trade-off for isolation. |
 | 4 | Single Gradle module retained | Multi-module Gradle adds build complexity (configuration, inter-module API surfaces, longer initial setup). Package-level discipline achieves the same isolation benefit for this codebase's current scale. Revisit if the module grows significantly. |
 | 5 | Shared components use callback/slot APIs for behavior customization | Features must be able to specialize shared component behavior without forking the component. Callbacks and Compose slot parameters are the OOP composition mechanism in this stack. |
+| 6 | Unit tests cover pure Kotlin logic only (no ViewModel or Service tests) | ViewModels and Services have Android lifecycle dependencies that require instrumented tests or a mocking framework. The current test infrastructure uses plain JVM + JUnit4. Coverage is focused on the pure data model and utility logic most prone to silent regression. |

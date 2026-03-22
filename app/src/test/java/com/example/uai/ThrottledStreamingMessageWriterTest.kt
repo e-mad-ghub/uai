@@ -1,6 +1,6 @@
 package com.example.uai
 
-import com.example.uai.ai.ThrottledStreamingMessageWriter
+import com.example.uai.shared.streaming.ThrottledStreamingMessageWriter
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Test

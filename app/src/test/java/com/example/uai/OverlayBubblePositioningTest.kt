@@ -1,8 +1,8 @@
 package com.example.uai
 
-import com.example.uai.service.calculateOverlayBubbleBounds
-import com.example.uai.service.clampOverlayBubblePosition
-import com.example.uai.service.defaultOverlayBubblePosition
+import com.example.uai.feature.bubble.calculateOverlayBubbleBounds
+import com.example.uai.feature.bubble.clampOverlayBubblePosition
+import com.example.uai.feature.bubble.defaultOverlayBubblePosition
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

@@ -12,8 +12,8 @@ import com.example.uai.data.model.openRouterFreeFallbackModels
 import com.example.uai.data.model.openRouterFreeSupportsVision
 import com.example.uai.data.model.preferredOpenRouterFastFreeModel
 import com.example.uai.data.model.shouldRetryOpenRouterFreeFallback
-import com.example.uai.ui.agents.assistantProviderOrder
-import com.example.uai.ui.agents.defaultRecommendedModelId
+import com.example.uai.feature.agents.assistantProviderOrder
+import com.example.uai.feature.agents.defaultRecommendedModelId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

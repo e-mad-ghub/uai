@@ -1,6 +1,6 @@
 package com.example.uai
 
-import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
+import com.example.uai.shared.streaming.OpenRouterBestFreeRoutingStateStore
 import com.example.uai.data.model.OpenRouterFreeRoutingBucket
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

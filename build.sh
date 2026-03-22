@@ -37,7 +37,8 @@ require_signing_vars() {
 build_debug_apk() {
     info "Building debug APK…"
     ./gradlew assembleDebug
-    ok "Debug APK: $DEBUG_APK"
+    ok "Debug APK built"
+    printf '   \033[33m%s\033[0m\n' "$SCRIPT_DIR/$DEBUG_APK"
 }
 
 build_release_aab() {
@@ -48,7 +49,8 @@ build_release_aab() {
         -Pandroid.injected.signing.store.password="$KEYSTORE_PASS" \
         -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
         -Pandroid.injected.signing.key.password="$KEY_PASS"
-    ok "Release AAB: $RELEASE_AAB"
+    ok "Release AAB built"
+    printf '   \033[33m%s\033[0m\n' "$SCRIPT_DIR/$RELEASE_AAB"
 }
 
 build_release_apk() {
@@ -59,7 +61,8 @@ build_release_apk() {
         -Pandroid.injected.signing.store.password="$KEYSTORE_PASS" \
         -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
         -Pandroid.injected.signing.key.password="$KEY_PASS"
-    ok "Release APK: $RELEASE_APK"
+    ok "Release APK built"
+    printf '   \033[33m%s\033[0m\n' "$SCRIPT_DIR/$RELEASE_APK"
 }
 
 APP_ID="com.example.uai"
@@ -100,6 +103,24 @@ install_release_apk() {
     ok "Installed release APK"
 }
 
+# ── Test functions ─────────────────────────────────────────────────────────────
+run_unit_tests() {
+    info "Running unit tests…"
+    ./gradlew testDebugUnitTest
+    ok "Unit tests passed"
+}
+
+run_instrumented_tests() {
+    info "Running instrumented tests (device/emulator required)…"
+    ./gradlew connectedDebugAndroidTest
+    ok "Instrumented tests passed"
+}
+
+run_all_tests() {
+    run_unit_tests
+    run_instrumented_tests
+}
+
 # ── Menu / dispatch ────────────────────────────────────────────────────────────
 run_option() {
     case "$1" in
@@ -108,6 +129,9 @@ run_option() {
         3) build_release_apk ;;
         4) install_debug_apk ;;
         5) install_release_apk ;;
+        6) run_unit_tests ;;
+        7) run_instrumented_tests ;;
+        8) run_all_tests ;;
         *) err "Unknown option: $1"; exit 1 ;;
     esac
 }
@@ -123,8 +147,11 @@ else
     echo "  3) Build release APK  (sideload)"
     echo "  4) Install debug APK  (adb)"
     echo "  5) Install release APK (adb)"
+    echo "  6) Run unit tests"
+    echo "  7) Run instrumented tests  (adb)"
+    echo "  8) Run all tests"
     bold "  ─────────────────────────────────"
-    printf "\n  Choose [1-5]: "
+    printf "\n  Choose [1-8]: "
     read -r choice
     echo
     run_option "$choice"

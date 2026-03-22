@@ -3,26 +3,26 @@ package com.example.uai
 import android.content.Context
 import com.example.uai.data.db.AppDatabase
 import com.example.uai.data.prefs.AppPreferences
-import com.example.uai.ai.OpenRouterBestFreeRoutingStateStore
-import com.example.uai.ai.BingHtmlSearchProvider
-import com.example.uai.ai.BraveHtmlSearchProvider
-import com.example.uai.ai.DomainRoutingSearchProvider
-import com.example.uai.ai.DuckDuckGoHtmlSearchProvider
-import com.example.uai.ai.DuckDuckGoLiteSearchProvider
-import com.example.uai.ai.FallbackWebSearchProvider
-import com.example.uai.ai.HackerNewsProvider
-import com.example.uai.ai.MetaGerSearchProvider
-import com.example.uai.ai.NewsRssProvider
-import com.example.uai.ai.SearXSearchProvider
-import com.example.uai.ai.SearchPlanningService
-import com.example.uai.ai.ToolAwareAssistantRuntime
-import com.example.uai.ai.WebGateway
-import com.example.uai.ai.WebGatewaySearchToolExecutor
-import com.example.uai.ai.WebGroundingService
-import com.example.uai.ai.WikipediaProvider
-import com.example.uai.ai.YandexSearchProvider
-import com.example.uai.ai.AiProviderFactory
-import com.example.uai.ai.fetchAndCacheSearXInstances
+import com.example.uai.shared.streaming.OpenRouterBestFreeRoutingStateStore
+import com.example.uai.shared.streaming.BingHtmlSearchProvider
+import com.example.uai.shared.streaming.BraveHtmlSearchProvider
+import com.example.uai.shared.streaming.DomainRoutingSearchProvider
+import com.example.uai.shared.streaming.DuckDuckGoHtmlSearchProvider
+import com.example.uai.shared.streaming.DuckDuckGoLiteSearchProvider
+import com.example.uai.shared.streaming.FallbackWebSearchProvider
+import com.example.uai.shared.streaming.HackerNewsProvider
+import com.example.uai.shared.streaming.MetaGerSearchProvider
+import com.example.uai.shared.streaming.NewsRssProvider
+import com.example.uai.shared.streaming.SearXSearchProvider
+import com.example.uai.shared.streaming.SearchPlanningService
+import com.example.uai.shared.streaming.ToolAwareAssistantRuntime
+import com.example.uai.shared.streaming.WebGateway
+import com.example.uai.shared.streaming.WebGatewaySearchToolExecutor
+import com.example.uai.shared.streaming.WebGroundingService
+import com.example.uai.shared.streaming.WikipediaProvider
+import com.example.uai.shared.streaming.YandexSearchProvider
+import com.example.uai.shared.streaming.AiProviderFactory
+import com.example.uai.shared.streaming.fetchAndCacheSearXInstances
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -87,7 +87,7 @@ class AppContainer(context: Context) {
         WebGroundingService(domainRouter, okHttpClient)
     }
 
-    val providerFactory: (com.example.uai.data.model.AgentConfig) -> com.example.uai.ai.AiProvider = { config ->
+    val providerFactory: (com.example.uai.data.model.AgentConfig) -> com.example.uai.shared.streaming.AiProvider = { config ->
         AiProviderFactory.create(
             config = config,
             client = okHttpClient,

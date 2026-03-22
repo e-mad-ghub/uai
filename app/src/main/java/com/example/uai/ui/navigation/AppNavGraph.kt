@@ -10,20 +10,20 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import com.example.uai.AppContainer
 import com.example.uai.FeatureFlags
-import com.example.uai.ui.agora.AgoraCreateScreen
-import com.example.uai.ui.agora.AgoraCreateViewModel
-import com.example.uai.ui.agora.AgoraDetailScreen
-import com.example.uai.ui.agora.AgoraDetailViewModel
-import com.example.uai.ui.agora.AgoraListScreen
-import com.example.uai.ui.agora.AgoraListViewModel
-import com.example.uai.ui.agents.AgentEditScreen
-import com.example.uai.ui.agents.AgentEditViewModel
-import com.example.uai.ui.agents.AgentsScreen
-import com.example.uai.ui.agents.AgentsViewModel
-import com.example.uai.ui.conversations.ConversationDetailScreen
-import com.example.uai.ui.conversations.ConversationDetailViewModel
-import com.example.uai.ui.settings.SettingsScreen
-import com.example.uai.ui.settings.SettingsViewModel
+import com.example.uai.feature.agora.AgoraCreateScreen
+import com.example.uai.feature.agora.AgoraCreateViewModel
+import com.example.uai.feature.agora.AgoraDetailScreen
+import com.example.uai.feature.agora.AgoraDetailViewModel
+import com.example.uai.feature.agora.AgoraListScreen
+import com.example.uai.feature.agora.AgoraListViewModel
+import com.example.uai.feature.agents.AgentEditScreen
+import com.example.uai.feature.agents.AgentEditViewModel
+import com.example.uai.feature.agents.AgentsScreen
+import com.example.uai.feature.agents.AgentsViewModel
+import com.example.uai.feature.conversations.ConversationDetailScreen
+import com.example.uai.feature.conversations.ConversationDetailViewModel
+import com.example.uai.feature.settings.SettingsScreen
+import com.example.uai.feature.settings.SettingsViewModel
 import java.util.UUID
 
 @Composable

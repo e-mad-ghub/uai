@@ -1,11 +1,11 @@
 package com.example.uai
 
-import com.example.uai.ai.ChatMessage
-import com.example.uai.ai.ConversationIntent
-import com.example.uai.ai.ConversationWorkingState
-import com.example.uai.ai.ImageAttachment
-import com.example.uai.ai.WebTurnMode
-import com.example.uai.ai.WebTurnPlanner
+import com.example.uai.shared.streaming.ChatMessage
+import com.example.uai.shared.streaming.ConversationIntent
+import com.example.uai.shared.streaming.ConversationWorkingState
+import com.example.uai.shared.streaming.ImageAttachment
+import com.example.uai.shared.streaming.WebTurnMode
+import com.example.uai.shared.streaming.WebTurnPlanner
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

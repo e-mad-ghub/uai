@@ -1,16 +1,16 @@
 package com.example.uai
 
-import com.example.uai.ai.AssistantToolRequest
-import com.example.uai.ai.ChatMessage
-import com.example.uai.ai.ImageAttachment
-import com.example.uai.ai.SearchToolExecutor
-import com.example.uai.ai.StreamChunk
-import com.example.uai.ai.ToolAwareAssistantRuntime
-import com.example.uai.ai.WebGroundingFact
-import com.example.uai.ai.WebGroundingResult
-import com.example.uai.ai.WebGroundingSource
-import com.example.uai.ai.classifyOpenRouterRequestBucket
-import com.example.uai.ai.parseAssistantToolRequest
+import com.example.uai.shared.streaming.AssistantToolRequest
+import com.example.uai.shared.streaming.ChatMessage
+import com.example.uai.shared.streaming.ImageAttachment
+import com.example.uai.shared.streaming.SearchToolExecutor
+import com.example.uai.shared.streaming.StreamChunk
+import com.example.uai.shared.streaming.ToolAwareAssistantRuntime
+import com.example.uai.shared.streaming.WebGroundingFact
+import com.example.uai.shared.streaming.WebGroundingResult
+import com.example.uai.shared.streaming.WebGroundingSource
+import com.example.uai.shared.streaming.classifyOpenRouterRequestBucket
+import com.example.uai.shared.streaming.parseAssistantToolRequest
 import com.example.uai.data.model.OpenRouterFreeRoutingBucket
 import com.example.uai.data.model.AgentConfig
 import kotlinx.coroutines.flow.Flow
@@ -111,7 +111,7 @@ class ToolAwareAssistantRuntimeTest {
         val runtime = ToolAwareAssistantRuntime(
             providerFactory = { config ->
                 receivedSystemPrompt = config.systemPrompt
-                object : com.example.uai.ai.AiProvider {
+                object : com.example.uai.shared.streaming.AiProvider {
                     override fun streamResponse(
                         messages: List<ChatMessage>,
                         config: AgentConfig
@@ -153,7 +153,7 @@ class ToolAwareAssistantRuntimeTest {
         val seenImageCounts = mutableListOf<Int>()
         val runtime = ToolAwareAssistantRuntime(
             providerFactory = {
-                object : com.example.uai.ai.AiProvider {
+                object : com.example.uai.shared.streaming.AiProvider {
                     private val callIndex = seenImageCounts.size
 
                     override fun streamResponse(
@@ -204,7 +204,10 @@ class ToolAwareAssistantRuntimeTest {
     }
 
     @Test
-    fun openRouterBucketStaysVisionWhenToolRoundAddsLaterUserMessage() {
+    fun openRouterBucketUsesGeneralWhenLastUserMessageIsToolResultNotImage() {
+        // The classifier only checks the *current* (last) user turn for images to avoid
+        // locking all tool-round follow-ups into VISION even when no image is in scope.
+        // A <tool_result> injected after an image turn therefore yields GENERAL, not VISION.
         val bucket = classifyOpenRouterRequestBucket(
             listOf(
                 ChatMessage(
@@ -223,12 +226,27 @@ class ToolAwareAssistantRuntimeTest {
             )
         )
 
+        assertEquals(OpenRouterFreeRoutingBucket.GENERAL, bucket)
+    }
+
+    @Test
+    fun openRouterBucketIsVisionWhenLastUserMessageContainsImage() {
+        val bucket = classifyOpenRouterRequestBucket(
+            listOf(
+                ChatMessage(
+                    role = "user",
+                    content = "What do you see in this image?",
+                    images = listOf(ImageAttachment("base64-image"))
+                )
+            )
+        )
+
         assertEquals(OpenRouterFreeRoutingBucket.VISION, bucket)
     }
 
     private class FakeProvider(
         private val chunks: List<StreamChunk>
-    ) : com.example.uai.ai.AiProvider {
+    ) : com.example.uai.shared.streaming.AiProvider {
         override fun streamResponse(
             messages: List<ChatMessage>,
             config: AgentConfig

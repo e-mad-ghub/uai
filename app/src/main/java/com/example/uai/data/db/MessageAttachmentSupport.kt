@@ -1,8 +1,8 @@
 package com.example.uai.data.db
 
-import com.example.uai.ai.ChatMessage
-import com.example.uai.ai.FileAttachmentContext
-import com.example.uai.ai.ImageAttachment
+import com.example.uai.shared.streaming.ChatMessage
+import com.example.uai.shared.streaming.FileAttachmentContext
+import com.example.uai.shared.streaming.ImageAttachment
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 

@@ -11,7 +11,7 @@ import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.graphics.ImageBitmap
-import com.example.uai.ui.chat.performScreenCapture
+import com.example.uai.shared.attachment.performScreenCapture
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 

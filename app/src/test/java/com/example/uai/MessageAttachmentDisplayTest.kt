@@ -1,12 +1,12 @@
 package com.example.uai
 
-import com.example.uai.ai.ChatMessage
-import com.example.uai.ai.FileAttachmentContext
-import com.example.uai.ai.contentWithFileContext
+import com.example.uai.shared.streaming.ChatMessage
+import com.example.uai.shared.streaming.FileAttachmentContext
+import com.example.uai.shared.streaming.contentWithFileContext
 import com.example.uai.data.db.MessageEntity
-import com.example.uai.ui.chat.buildCopyableMessageText
-import com.example.uai.ui.chat.buildQuotedReplyContext
-import com.example.uai.ui.chat.parseAttachedFileDisplay
+import com.example.uai.shared.chatui.buildCopyableMessageText
+import com.example.uai.shared.chatui.buildQuotedReplyContext
+import com.example.uai.shared.chatui.parseAttachedFileDisplay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

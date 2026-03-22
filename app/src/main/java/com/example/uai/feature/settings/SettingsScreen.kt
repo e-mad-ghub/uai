@@ -1,0 +1,529 @@
+package com.example.uai.feature.settings
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BubbleChart
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Screenshot
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.uai.R
+import com.example.uai.data.model.AppColorTheme
+import com.example.uai.feature.bubble.FloatingBubbleService
+import com.example.uai.feature.bubble.MiniChatScreenshotAccessibilityService
+import com.example.uai.design.components.ProductPill
+import com.example.uai.design.components.ProductScreenIntro
+import com.example.uai.design.components.ProductTopBarTitle
+import com.example.uai.design.theme.lightScheme
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    viewModel: SettingsViewModel,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val bubbleEnabled by viewModel.bubbleEnabled.collectAsStateWithLifecycle()
+    val colorTheme by viewModel.colorTheme.collectAsStateWithLifecycle()
+    val currentBubbleEnabled by rememberUpdatedState(bubbleEnabled)
+    val appVersionName = remember(context) { resolveAppVersionName(context) }
+
+    var hasOverlayPermission by remember {
+        mutableStateOf(Settings.canDrawOverlays(context))
+    }
+    var isScreenshotAccessibilityEnabled by remember {
+        mutableStateOf(
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                MiniChatScreenshotAccessibilityService.isEnabled(context)
+        )
+    }
+    var pendingEnableMiniChat by rememberSaveable { mutableStateOf(false) }
+    var showOverlayPermissionCallout by rememberSaveable { mutableStateOf(false) }
+    val isMiniChatConfigured = bubbleEnabled
+    val isMiniChatActive = bubbleEnabled && hasOverlayPermission
+    val showOverlayPermissionCard = !hasOverlayPermission &&
+        (showOverlayPermissionCallout || isMiniChatConfigured)
+    val showMiniChatScreenshotsCard =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+    val miniChatStatusLabel = stringResource(
+        when {
+            isMiniChatActive -> R.string.mini_chat_status_active
+            isMiniChatConfigured -> R.string.mini_chat_status_needs_permission
+            else -> R.string.mini_chat_status_off
+        }
+    )
+    val miniChatStateDescription = stringResource(
+        when {
+            isMiniChatActive -> R.string.mini_chat_active
+            isMiniChatConfigured -> R.string.mini_chat_needs_permission
+            else -> R.string.mini_chat_inactive
+        }
+    )
+
+    fun openOverlaySettings() {
+        context.startActivity(
+            Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}")
+            )
+        )
+    }
+
+    DisposableEffect(lifecycleOwner, context, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val previousOverlayPermission = hasOverlayPermission
+                val overlayPermissionGranted = Settings.canDrawOverlays(context)
+                hasOverlayPermission = overlayPermissionGranted
+                isScreenshotAccessibilityEnabled =
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                        MiniChatScreenshotAccessibilityService.isEnabled(context)
+
+                if (overlayPermissionGranted) {
+                    if (currentBubbleEnabled) {
+                        FloatingBubbleService.startService(context)
+                    }
+                    pendingEnableMiniChat = false
+                    showOverlayPermissionCallout = false
+                }
+
+                // Prevent the UI from showing the mini chat as enabled when Android permission
+                // was revoked outside the app.
+                if (!overlayPermissionGranted && previousOverlayPermission && currentBubbleEnabled) {
+                    pendingEnableMiniChat = false
+                    showOverlayPermissionCallout = true
+                    FloatingBubbleService.stopService(context)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            TopAppBar(
+                title = {
+                    ProductTopBarTitle(
+                        title = stringResource(R.string.settings_title),
+                        subtitle = stringResource(R.string.screen_settings_subtitle)
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back)
+                        )
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            ProductScreenIntro(
+                eyebrow = stringResource(R.string.settings_title),
+                title = stringResource(R.string.settings_hero_title),
+                body = stringResource(R.string.settings_hero_body)
+            )
+
+            SettingsSectionHeader(title = stringResource(R.string.settings_section_mini_chat))
+
+            ElevatedCard {
+                Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    ListItem(
+                        leadingContent = { Icon(Icons.Default.BubbleChart, contentDescription = null) },
+                        headlineContent = { Text(stringResource(R.string.feature_mini_chat)) },
+                        supportingContent = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ProductPill(
+                                        label = miniChatStatusLabel,
+                                        emphasized = isMiniChatConfigured
+                                    )
+                                }
+                                Text(
+                                    stringResource(
+                                        if (isMiniChatConfigured && !hasOverlayPermission) {
+                                            R.string.mini_chat_enabled_waiting_for_permission
+                                        } else {
+                                            R.string.mini_chat_description
+                                        }
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = bubbleEnabled,
+                                onCheckedChange = { enabled ->
+                                    viewModel.setBubbleEnabled(enabled)
+                                    if (enabled) {
+                                        if (!hasOverlayPermission) {
+                                            pendingEnableMiniChat = true
+                                            showOverlayPermissionCallout = true
+                                            openOverlaySettings()
+                                        } else {
+                                            pendingEnableMiniChat = false
+                                            showOverlayPermissionCallout = false
+                                            FloatingBubbleService.startService(context)
+                                        }
+                                    } else {
+                                        pendingEnableMiniChat = false
+                                        showOverlayPermissionCallout = false
+                                        FloatingBubbleService.stopService(context)
+                                    }
+                                },
+                                modifier = Modifier.semantics {
+                                    contentDescription = context.getString(R.string.feature_mini_chat)
+                                    stateDescription = miniChatStateDescription
+                                }
+                            )
+                        }
+                    )
+
+                    if (showOverlayPermissionCard) {
+                        HorizontalDivider()
+                        MiniChatHelperItem(
+                            icon = { Icon(Icons.Default.Security, contentDescription = null) },
+                            title = stringResource(R.string.overlay_permission_required),
+                            status = stringResource(R.string.mini_chat_screenshots_status_needs_setup),
+                            body = stringResource(
+                                if (isMiniChatConfigured) {
+                                    R.string.mini_chat_permission_needed_message
+                                } else {
+                                    R.string.overlay_permission_message
+                                }
+                            ),
+                            emphasized = false,
+                            actionLabel = stringResource(R.string.action_allow_display_over_other_apps),
+                            onAction = ::openOverlaySettings
+                        )
+                    }
+
+                    if (showMiniChatScreenshotsCard) {
+                        HorizontalDivider()
+                        MiniChatHelperItem(
+                            icon = { Icon(Icons.Default.Screenshot, contentDescription = null) },
+                            title = stringResource(R.string.mini_chat_screenshots_title),
+                            status = stringResource(
+                                if (isScreenshotAccessibilityEnabled) {
+                                    R.string.mini_chat_screenshots_status_enabled
+                                } else {
+                                    R.string.mini_chat_screenshots_status_needs_setup
+                                }
+                            ),
+                            body = stringResource(
+                                if (isScreenshotAccessibilityEnabled) {
+                                    R.string.mini_chat_screenshots_enabled_body
+                                } else {
+                                    R.string.mini_chat_screenshots_disabled_body
+                                }
+                            ),
+                            emphasized = isScreenshotAccessibilityEnabled,
+                            actionLabel = stringResource(
+                                if (isScreenshotAccessibilityEnabled) {
+                                    R.string.action_manage_screenshot_helper
+                                } else {
+                                    R.string.action_set_up_screenshots
+                                }
+                            ),
+                            onAction = {
+                                MiniChatScreenshotAccessibilityService.openSettings(context)
+                            }
+                        )
+                    }
+                }
+            }
+            HorizontalDivider()
+
+            SettingsSectionHeader(title = stringResource(R.string.settings_section_appearance))
+
+            ElevatedCard {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.settings_color_theme),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ProductPill(
+                            label = stringResource(R.string.settings_current_theme_label, colorTheme.displayName),
+                            emphasized = true
+                        )
+                    }
+                    Text(
+                        stringResource(R.string.settings_color_theme_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier
+                            .horizontalScroll(rememberScrollState())
+                            .selectableGroup(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        AppColorTheme.entries.forEach { theme ->
+                            ThemeCard(
+                                theme = theme,
+                                isSelected = theme == colorTheme,
+                                onClick = { viewModel.setColorTheme(theme) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider()
+
+            SettingsSectionHeader(title = stringResource(R.string.settings_section_about))
+            ElevatedCard {
+                Text(
+                    stringResource(R.string.settings_version, appVersionName),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MiniChatHelperItem(
+    icon: @Composable () -> Unit,
+    title: String,
+    status: String,
+    body: String,
+    emphasized: Boolean,
+    actionLabel: String,
+    onAction: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 56.dp, end = 16.dp, top = 10.dp, bottom = 14.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.64f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                CompositionLocalProvider(
+                    LocalContentColor provides MaterialTheme.colorScheme.onPrimaryContainer
+                ) {
+                    icon()
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    ProductPill(
+                        label = status,
+                        emphasized = emphasized
+                    )
+                }
+                Text(
+                    text = body,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(
+                    onClick = onAction,
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text(actionLabel)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeCard(theme: AppColorTheme, isSelected: Boolean, onClick: () -> Unit) {
+    val themeDescription = stringResource(R.string.settings_theme_option, theme.displayName)
+    val selectionState = stringResource(
+        if (isSelected) R.string.selected else R.string.not_selected
+    )
+    val previewScheme = remember(theme) { theme.lightScheme() }
+
+    OutlinedCard(
+        onClick = onClick,
+        border = if (isSelected)
+            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        else
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.38f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        ),
+        modifier = Modifier
+            .width(92.dp)
+            .semantics(mergeDescendants = true) {
+                role = Role.RadioButton
+                selected = isSelected
+                contentDescription = themeDescription
+                stateDescription = selectionState
+            }
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            horizontalAlignment = Alignment.Start,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                previewScheme.primary,
+                                previewScheme.secondary,
+                                previewScheme.background
+                            )
+                        )
+                    )
+            ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(previewScheme.surfaceVariant)
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    theme.displayName,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isSelected) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+            Text(
+                style = MaterialTheme.typography.labelSmall,
+                text = stringResource(
+                    if (theme == AppColorTheme.DEFAULT) {
+                        R.string.settings_theme_default_label
+                    } else {
+                        R.string.settings_theme_optional_label
+                    }
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsSectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.semantics { heading() }
+    )
+}
+
+private fun resolveAppVersionName(context: Context): String {
+    val versionName = runCatching {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName
+    }.getOrNull()
+
+    return versionName?.takeIf { it.isNotBlank() }
+        ?: context.getString(R.string.settings_version_unknown)
+}

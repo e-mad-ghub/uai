@@ -1,14 +1,14 @@
 package com.example.uai
 
-import com.example.uai.ai.AiProvider
-import com.example.uai.ai.ChatMessage
-import com.example.uai.ai.ImageAttachment
-import com.example.uai.ai.SearchPlanningService
-import com.example.uai.ai.StreamChunk
-import com.example.uai.ai.WebGateway
-import com.example.uai.ai.WebGroundingService
-import com.example.uai.ai.WebGroundingSource
-import com.example.uai.ai.WebSearchProvider
+import com.example.uai.shared.streaming.AiProvider
+import com.example.uai.shared.streaming.ChatMessage
+import com.example.uai.shared.streaming.ImageAttachment
+import com.example.uai.shared.streaming.SearchPlanningService
+import com.example.uai.shared.streaming.StreamChunk
+import com.example.uai.shared.streaming.WebGateway
+import com.example.uai.shared.streaming.WebGroundingService
+import com.example.uai.shared.streaming.WebGroundingSource
+import com.example.uai.shared.streaming.WebSearchProvider
 import com.example.uai.data.model.AgentConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow

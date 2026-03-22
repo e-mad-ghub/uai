@@ -1,6 +1,6 @@
 package com.example.uai
 
-import com.example.uai.ui.agora.extractAgentScopedGroundingText
+import com.example.uai.feature.agora.extractAgentScopedGroundingText
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

@@ -912,48 +912,26 @@ class FloatingBubbleService : Service() {
     /**
      * Hit-test screen coordinates against each menu item's centre.
      * Returns the matching [QuickMenuItemId] constant, or null if none is close enough.
-     * Coordinates match [bubbleParams.x/y] which use the same Gravity.TOP|START origin.
+     * Delegates to [hitTestQuickMenuItemPure] which is unit-tested.
      */
     private fun hitTestQuickMenuItem(rawX: Float, rawY: Float): String? {
         val dm = resources.displayMetrics
         val density = dm.density
         val bubbleSizePx = 64 * density
-        val iconSizePx   = QUICK_MENU_ACTION_ICON_SIZE_DP * density
-        val gapPx        = QUICK_MENU_ACTION_GAP_DP * density
-        val screenWidth  = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+        val screenWidth = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             windowManager.currentWindowMetrics.bounds.width().toFloat()
         else dm.widthPixels.toFloat()
-
-        val cx = quickMenuBubbleX + bubbleSizePx / 2f
-        val cy = quickMenuBubbleY + bubbleSizePx / 2f
-        val onRight = cx > screenWidth / 2f
-        val half  = iconSizePx / 2f
-        val hit   = iconSizePx * 0.75f   // generous hit radius
-
-        data class IC(val id: String, val x: Float, val y: Float)
-        val items = buildList {
-            // Top: Open App
-            add(IC(QuickMenuItemId.OPEN_APP, cx, cy - bubbleSizePx / 2f - half - gapPx))
-            // Side: More Details
-            val mdX = if (onRight) cx - bubbleSizePx / 2f - half - gapPx
-                      else         cx + bubbleSizePx / 2f + gapPx + half
-            add(IC(QuickMenuItemId.MORE_DETAILS, mdX, cy))
-            // Side: Translate
-            val trX = if (onRight) cx - bubbleSizePx / 2f - iconSizePx * 1.5f - gapPx * 2.5f
-                      else         cx + bubbleSizePx / 2f + iconSizePx * 1.5f + gapPx * 2.5f
-            add(IC(QuickMenuItemId.TRANSLATE, trX, cy))
-            // Bottom: Slot 1 (always present)
-            val s1y = cy + bubbleSizePx / 2f + gapPx + half
-            add(IC(QuickMenuItemId.SLOT1, cx, s1y))
-            // Bottom: Slot 2 (only if slot 1 has a real action)
-            if (quickActions.isNotEmpty()) {
-                add(IC(QuickMenuItemId.SLOT2, cx, s1y + iconSizePx + gapPx))
-            }
-        }
-        return items.firstOrNull { (_, ix, iy) ->
-            val dx = rawX - ix; val dy = rawY - iy
-            dx * dx + dy * dy <= hit * hit
-        }?.id
+        return hitTestQuickMenuItemPure(
+            rawX          = rawX,
+            rawY          = rawY,
+            bubbleCenterX = quickMenuBubbleX + bubbleSizePx / 2f,
+            bubbleCenterY = quickMenuBubbleY + bubbleSizePx / 2f,
+            bubbleSizePx  = bubbleSizePx,
+            iconSizePx    = QUICK_MENU_ACTION_ICON_SIZE_DP * density,
+            gapPx         = QUICK_MENU_ACTION_GAP_DP * density,
+            screenWidthPx = screenWidth,
+            hasSlot2      = quickActions.size >= 2,
+        )
     }
 
     /** Triggered when the user releases the finger over a specific item (press-and-slide gesture). */

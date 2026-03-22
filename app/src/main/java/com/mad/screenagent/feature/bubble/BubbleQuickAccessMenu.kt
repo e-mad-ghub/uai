@@ -73,6 +73,57 @@ object QuickMenuItemId {
 internal const val QUICK_MENU_ACTION_ICON_SIZE_DP = 44
 internal const val QUICK_MENU_ACTION_GAP_DP       = 8
 
+// ── Hit-testing (extracted for testability) ───────────────────────────────────
+
+/**
+ * Maps a raw screen coordinate to a [QuickMenuItemId], or null if the finger is
+ * not close enough to any item.
+ *
+ * All parameters are in the same unit (pixels).  Pass [density] = 1f and use
+ * dp values directly when writing unit tests.
+ *
+ * @param bubbleCenterX  Centre X of the floating bubble.
+ * @param bubbleCenterY  Centre Y of the floating bubble.
+ * @param bubbleSizePx   Diameter of the bubble in px.
+ * @param iconSizePx     Diameter of each action icon in px.
+ * @param gapPx          Gap between bubble edge and first icon in px.
+ * @param screenWidthPx  Full screen width in px (used to decide left/right side).
+ * @param hasSlot2       Whether a second custom-action slot should be included.
+ */
+internal fun hitTestQuickMenuItemPure(
+    rawX: Float,
+    rawY: Float,
+    bubbleCenterX: Float,
+    bubbleCenterY: Float,
+    bubbleSizePx: Float,
+    iconSizePx: Float,
+    gapPx: Float,
+    screenWidthPx: Float,
+    hasSlot2: Boolean,
+): String? {
+    val onRight = bubbleCenterX > screenWidthPx / 2f
+    val half    = iconSizePx / 2f
+    val hitR    = iconSizePx * 0.75f
+
+    data class IC(val id: String, val x: Float, val y: Float)
+    val items = buildList<IC> {
+        add(IC(QuickMenuItemId.OPEN_APP, bubbleCenterX, bubbleCenterY - bubbleSizePx / 2f - half - gapPx))
+        val mdX = if (onRight) bubbleCenterX - bubbleSizePx / 2f - half - gapPx
+                  else         bubbleCenterX + bubbleSizePx / 2f + gapPx + half
+        add(IC(QuickMenuItemId.MORE_DETAILS, mdX, bubbleCenterY))
+        val trX = if (onRight) bubbleCenterX - bubbleSizePx / 2f - iconSizePx * 1.5f - gapPx * 2.5f
+                  else         bubbleCenterX + bubbleSizePx / 2f + iconSizePx * 1.5f + gapPx * 2.5f
+        add(IC(QuickMenuItemId.TRANSLATE, trX, bubbleCenterY))
+        val s1y = bubbleCenterY + bubbleSizePx / 2f + gapPx + half
+        add(IC(QuickMenuItemId.SLOT1, bubbleCenterX, s1y))
+        if (hasSlot2) add(IC(QuickMenuItemId.SLOT2, bubbleCenterX, s1y + iconSizePx + gapPx))
+    }
+    return items.firstOrNull { (_, ix, iy) ->
+        val dx = rawX - ix; val dy = rawY - iy
+        dx * dx + dy * dy <= hitR * hitR
+    }?.id
+}
+
 // ── Icon mapping ──────────────────────────────────────────────────────────────
 
 @Composable

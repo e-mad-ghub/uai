@@ -65,7 +65,7 @@ build_release_apk() {
     printf '   \033[33m%s\033[0m\n' "$SCRIPT_DIR/$RELEASE_APK"
 }
 
-APP_ID="com.example.uai"
+APP_ID="com.mad.screenagent"
 
 adb_uninstall_if_signature_mismatch() {
     local apk="$1"

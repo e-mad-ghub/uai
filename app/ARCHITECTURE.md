@@ -47,7 +47,7 @@ A feature never imports from another feature.
 ## Package Structure
 
 ```
-com.example.uai/
+com.mad.screenagent/
 ├── app/                        # Shell only — wiring, DI root, entry point
 │   ├── UaiApplication.kt
 │   ├── AppContainer.kt

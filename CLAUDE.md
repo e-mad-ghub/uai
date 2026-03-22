@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./gradlew test
 
 # Run a single test class
-./gradlew test --tests "com.example.uai.ExampleUnitTest"
+./gradlew test --tests "com.mad.screenagent.ExampleUnitTest"
 
 # Run instrumented tests (requires running emulator/device)
 ./gradlew connectedAndroidTest
@@ -33,7 +33,7 @@ Single-module Android app (`app/`) — Jetpack Compose + Material3, min SDK 24, 
 ### Package Structure
 
 ```
-com.example.uai/
+com.mad.screenagent/
 ├── UaiApplication.kt          # App class; creates AppContainer, notification channel
 ├── AppContainer.kt            # Manual DI: OkHttpClient, Room DB, DataStore, repos
 ├── MainActivity.kt            # Entry point; bottom nav (Chats/Agents/Settings)

@@ -67,15 +67,41 @@ build_release_apk() {
 
 APP_ID="com.mad.screenagent"
 
+select_device() {
+    # Returns the serial to use in ADB_DEVICE (exported)
+    local devices
+    mapfile -t devices < <(adb devices | awk 'NR>1 && $2=="device" {print $1}')
+    if [[ ${#devices[@]} -eq 0 ]]; then
+        err "No adb devices connected."
+        exit 1
+    elif [[ ${#devices[@]} -eq 1 ]]; then
+        ADB_DEVICE="${devices[0]}"
+    else
+        bold "  Multiple devices connected:"
+        for i in "${!devices[@]}"; do
+            printf "    %d) %s\n" "$((i+1))" "${devices[$i]}"
+        done
+        printf "\n  Choose device [1-%d]: " "${#devices[@]}"
+        read -r dev_choice
+        echo
+        if [[ "$dev_choice" -lt 1 || "$dev_choice" -gt "${#devices[@]}" ]] 2>/dev/null; then
+            err "Invalid choice: $dev_choice"
+            exit 1
+        fi
+        ADB_DEVICE="${devices[$((dev_choice-1))]}"
+    fi
+    info "Using device: $ADB_DEVICE"
+}
+
 adb_uninstall_if_signature_mismatch() {
     local apk="$1"
     # Try install; if it fails with signature mismatch, uninstall and retry
     local output
-    if ! output=$(adb install -r "$apk" 2>&1); then
+    if ! output=$(adb -s "$ADB_DEVICE" install -r "$apk" 2>&1); then
         if echo "$output" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
             info "Signature mismatch — uninstalling existing app first…"
-            adb uninstall "$APP_ID" || true
-            adb install "$apk"
+            adb -s "$ADB_DEVICE" uninstall "$APP_ID" || true
+            adb -s "$ADB_DEVICE" install "$apk"
         else
             echo "$output" >&2
             return 1
@@ -88,6 +114,7 @@ install_debug_apk() {
         info "Debug APK not found — building first…"
         build_debug_apk
     fi
+    select_device
     info "Installing debug APK…"
     adb_uninstall_if_signature_mismatch "$DEBUG_APK"
     ok "Installed debug APK"
@@ -98,6 +125,7 @@ install_release_apk() {
         info "Release APK not found — building first…"
         build_release_apk
     fi
+    select_device
     info "Installing release APK…"
     adb_uninstall_if_signature_mismatch "$RELEASE_APK"
     ok "Installed release APK"

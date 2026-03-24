@@ -36,7 +36,6 @@ fun QuickActionsScreen(
 ) {
     val bubbleEnabled by viewModel.bubbleEnabled.collectAsStateWithLifecycle()
     val quickActions by viewModel.quickActions.collectAsStateWithLifecycle()
-    val agents by viewModel.agents.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -78,7 +77,6 @@ fun QuickActionsScreen(
             QuickActionsSection(
                 bubbleEnabled = bubbleEnabled,
                 quickActions = quickActions,
-                agents = agents,
                 onDisabledTap = {
                     coroutineScope.launch {
                         snackbarHostState.showSnackbar("Enable the floating bubble to configure quick actions.")

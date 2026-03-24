@@ -115,8 +115,8 @@ class QuickMenuHitTestTest {
     }
 
     @Test
-    fun slot2_notHit_whenHasSlot2IsFalse() {
-        // Same coordinate but slot 2 not registered — should return null
+    fun slot2_notHit_whenNoSlotConfigured() {
+        // hasSlot2=false means no slot1 either (empty quick actions) — slot2 not in hit targets
         assertNull(hitRight(832f, 546f, hasSlot2 = false))
     }
 

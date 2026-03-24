@@ -28,7 +28,6 @@ enum class QuickActionIconKey(val displayName: String) {
  * @param name              Display label shown in settings and as the radial-menu tooltip.
  * @param prompt            Implicit prompt prepended to the screenshot (or sent alone when [takeScreenshot] is false).
  * @param iconKey           Which icon to show in the radial menu.
- * @param assignedAgentId   Agent to use for this action; null = use last active / default agent.
  * @param takeScreenshot    Whether to capture a screenshot before sending.
  * @param conversationName  Name of the dedicated conversation. Defaults to "[name]-Session".
  *                          The service looks for an existing conversation with this exact name;
@@ -40,7 +39,6 @@ data class QuickActionConfig(
     val name: String = "",
     val prompt: String = "",
     val iconKey: QuickActionIconKey = QuickActionIconKey.BOLT,
-    val assignedAgentId: String? = null,
     val takeScreenshot: Boolean = true,
     val conversationName: String = "",
 ) {

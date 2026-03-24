@@ -536,7 +536,6 @@ private fun ThemeCard(theme: AppColorTheme, isSelected: Boolean, onClick: () -> 
 internal fun QuickActionsSection(
     bubbleEnabled: Boolean,
     quickActions: List<QuickActionConfig>,
-    agents: List<AgentConfig>,
     onDisabledTap: () -> Unit,
     onSaveActions: (List<QuickActionConfig>) -> Unit,
 ) {
@@ -579,7 +578,6 @@ internal fun QuickActionsSection(
                         HorizontalDivider()
                         QuickActionEditor(
                             action = QuickActionConfig(),
-                            agents = agents,
                             onSave = { newAction ->
                                 val list = quickActions.toMutableList()
                                 while (list.size <= slotIndex) list.add(QuickActionConfig())
@@ -633,7 +631,6 @@ internal fun QuickActionsSection(
                         HorizontalDivider()
                         QuickActionEditor(
                             action = action,
-                            agents = agents,
                             onSave = { updated ->
                                 val list = quickActions.toMutableList()
                                 list[slotIndex] = updated
@@ -653,7 +650,6 @@ internal fun QuickActionsSection(
 @Composable
 private fun QuickActionEditor(
     action: QuickActionConfig,
-    agents: List<AgentConfig>,
     onSave: (QuickActionConfig) -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -662,8 +658,6 @@ private fun QuickActionEditor(
     var selectedIcon by rememberSaveable { mutableStateOf(action.iconKey) }
     var takeScreenshot by rememberSaveable { mutableStateOf(action.takeScreenshot) }
     var conversationName by rememberSaveable { mutableStateOf(action.conversationName) }
-    var assignedAgentId by rememberSaveable { mutableStateOf(action.assignedAgentId) }
-    var agentDropdownExpanded by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -721,44 +715,6 @@ private fun QuickActionEditor(
             }
         }
 
-        // Agent picker
-        if (agents.isNotEmpty()) {
-            Box {
-                OutlinedTextField(
-                    value = agents.firstOrNull { it.id == assignedAgentId }?.name ?: "Default Agent",
-                    onValueChange = {},
-                    label = { Text("Assigned Agent") },
-                    readOnly = true,
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { agentDropdownExpanded = true },
-                    trailingIcon = {
-                        Icon(
-                            if (agentDropdownExpanded) Icons.Default.KeyboardArrowUp
-                            else Icons.Default.KeyboardArrowDown,
-                            contentDescription = null
-                        )
-                    }
-                )
-                DropdownMenu(
-                    expanded = agentDropdownExpanded,
-                    onDismissRequest = { agentDropdownExpanded = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Default Agent") },
-                        onClick = { assignedAgentId = null; agentDropdownExpanded = false }
-                    )
-                    agents.forEach { agent ->
-                        DropdownMenuItem(
-                            text = { Text(agent.name) },
-                            onClick = { assignedAgentId = agent.id; agentDropdownExpanded = false }
-                        )
-                    }
-                }
-            }
-        }
-
         // Screenshot toggle
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -803,7 +759,6 @@ private fun QuickActionEditor(
                             iconKey = selectedIcon,
                             takeScreenshot = takeScreenshot,
                             conversationName = conversationName.trim(),
-                            assignedAgentId = assignedAgentId
                         )
                     )
                 },

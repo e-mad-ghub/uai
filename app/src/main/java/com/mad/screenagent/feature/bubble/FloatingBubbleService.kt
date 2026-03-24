@@ -641,7 +641,7 @@ class FloatingBubbleService : Service() {
                             if (!it.isAttachedToWindow) windowManager.addView(it, dismissZoneParams)
                         }
                     }
-                    if (isDragging) {
+                    if (isDragging && !longPressConsumed) {
                         val dm = resources.displayMetrics
                         val sizePx = (64 * dm.density).toInt()
                         val realHeight = getRealScreenHeight()
@@ -904,6 +904,12 @@ class FloatingBubbleService : Service() {
     private fun dismissQuickAccessMenu() {
         isQuickMenuVisible = false
         quickMenuHoveredItem = null
+        // Snap bubble back to the position it had when the menu was opened
+        if (::bubbleParams.isInitialized) {
+            bubbleParams.x = quickMenuBubbleX
+            bubbleParams.y = quickMenuBubbleY
+            bubbleView?.let { runCatching { windowManager.updateViewLayout(it, bubbleParams) } }
+        }
         removeSafely(quickMenuView, immediate = true)
         quickMenuView?.disposeComposition()
         quickMenuView = null
@@ -930,7 +936,7 @@ class FloatingBubbleService : Service() {
             iconSizePx    = QUICK_MENU_ACTION_ICON_SIZE_DP * density,
             gapPx         = QUICK_MENU_ACTION_GAP_DP * density,
             screenWidthPx = screenWidth,
-            hasSlot2      = quickActions.size >= 2,
+            hasSlot2      = quickActions.isNotEmpty(),
         )
     }
 
@@ -1050,23 +1056,7 @@ class FloatingBubbleService : Service() {
         serviceScope.launch {
             val container = (application as UaiApplication).container
 
-            // Resolve agent: assigned → default → any
-            val assignedAgent = action.assignedAgentId?.let { id ->
-                allAgents.firstOrNull { it.id == id }
-            }
-            val agent = if (assignedAgent == null) {
-                if (action.assignedAgentId != null) {
-                    // Agent was deleted
-                    Toast.makeText(
-                        applicationContext,
-                        "Assigned assistant not found. Using default assistant.",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-                fallbackAgentForCurrentContext()
-            } else {
-                assignedAgent
-            }
+            val agent = fallbackAgentForCurrentContext()
 
             if (agent == null) {
                 miniChatErrorMessage = "No assistant configured. Please add an assistant in settings."

@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mad.screenagent.data.model.QuickActionConfig
 import com.mad.screenagent.data.model.QuickActionIconKey
+import kotlin.math.sqrt
 
 // ── Item IDs (shared with FloatingBubbleService for gesture hit-testing) ─────
 
@@ -72,6 +73,9 @@ object QuickMenuItemId {
 
 internal const val QUICK_MENU_ACTION_ICON_SIZE_DP = 44
 internal const val QUICK_MENU_ACTION_GAP_DP       = 8
+
+// sin(45°) = √2/2 — side items fan out along a 45° diagonal from vertical.
+private val SIN45 = (sqrt(2.0) / 2.0).toFloat()
 
 // ── Hit-testing (extracted for testability) ───────────────────────────────────
 
@@ -105,18 +109,27 @@ internal fun hitTestQuickMenuItemPure(
     val half    = iconSizePx / 2f
     val hitR    = iconSizePx * 0.75f
 
+    // Side items (MORE_DETAILS, TRANSLATE) are on a 45° diagonal from vertical,
+    // going downward toward the screen centre.
+    val sin45   = SIN45
+    val dirX    = if (onRight) -sin45 else sin45
+    val step    = iconSizePx + gapPx
+    val sideBaseDist = bubbleSizePx / 2f + gapPx + half  // bubble edge → first side icon centre
+
     data class IC(val id: String, val x: Float, val y: Float)
     val items = buildList<IC> {
         add(IC(QuickMenuItemId.OPEN_APP, bubbleCenterX, bubbleCenterY - bubbleSizePx / 2f - half - gapPx))
-        val mdX = if (onRight) bubbleCenterX - bubbleSizePx / 2f - half - gapPx
-                  else         bubbleCenterX + bubbleSizePx / 2f + gapPx + half
-        add(IC(QuickMenuItemId.MORE_DETAILS, mdX, bubbleCenterY))
-        val trX = if (onRight) bubbleCenterX - bubbleSizePx / 2f - iconSizePx * 1.5f - gapPx * 2.5f
-                  else         bubbleCenterX + bubbleSizePx / 2f + iconSizePx * 1.5f + gapPx * 2.5f
-        add(IC(QuickMenuItemId.TRANSLATE, trX, bubbleCenterY))
-        val s1y = bubbleCenterY + bubbleSizePx / 2f + gapPx + half
-        add(IC(QuickMenuItemId.SLOT1, bubbleCenterX, s1y))
-        if (hasSlot2) add(IC(QuickMenuItemId.SLOT2, bubbleCenterX, s1y + iconSizePx + gapPx))
+        // Custom action slots on the 45° diagonal
+        val s1Dist = sideBaseDist
+        add(IC(QuickMenuItemId.SLOT1, bubbleCenterX + dirX * s1Dist, bubbleCenterY + sin45 * s1Dist))
+        if (hasSlot2) {
+            val s2Dist = sideBaseDist + step
+            add(IC(QuickMenuItemId.SLOT2, bubbleCenterX + dirX * s2Dist, bubbleCenterY + sin45 * s2Dist))
+        }
+        // More Details and Translate on the bottom vertical line
+        val bottomY = bubbleCenterY + bubbleSizePx / 2f + gapPx + half
+        add(IC(QuickMenuItemId.MORE_DETAILS, bubbleCenterX, bottomY))
+        add(IC(QuickMenuItemId.TRANSLATE, bubbleCenterX, bottomY + iconSizePx + gapPx))
     }
     return items.firstOrNull { (_, ix, iy) ->
         val dx = rawX - ix; val dy = rawY - iy
@@ -208,133 +221,125 @@ fun BubbleQuickAccessMenu(
             onClick = onOpenApp
         )
 
-        // ── SIDE: More Details (closer to bubble) ──────────────────────────
-        val moreDetsOffsetX = if (bubbleOnRight)
-            bubbleCenterXDp - bubbleSizeDp / 2 - QUICK_MENU_ACTION_ICON_SIZE_DP.dp - QUICK_MENU_ACTION_GAP_DP.dp
-        else
-            bubbleCenterXDp + bubbleSizeDp / 2 + QUICK_MENU_ACTION_GAP_DP.dp
+        // ── DIAGONAL: Custom action slots — 45° from bubble ───────────────
+        val sideDir: Float = if (bubbleOnRight) -SIN45 else SIN45
+        val iconDp         = QUICK_MENU_ACTION_ICON_SIZE_DP.dp
+        val gapDp          = QUICK_MENU_ACTION_GAP_DP.dp
+        val sideBase       = bubbleSizeDp / 2 + gapDp + iconDp / 2
+        val sideStep       = iconDp + gapDp
 
-        QuickAccessItem(
-            icon       = Icons.Outlined.FindInPage,
-            label      = "More Details",
-            labelSide  = LabelSide.ABOVE,
-            animDelay  = 30,
-            visible    = visible,
-            isHovered  = hoveredItemId == QuickMenuItemId.MORE_DETAILS,
-            modifier   = Modifier.offset {
-                IntOffset(
-                    x = moreDetsOffsetX.roundToPx(),
-                    y = (bubbleCenterYDp - QUICK_MENU_ACTION_ICON_SIZE_DP.dp / 2).roundToPx()
-                )
-            },
-            onClick = onMoreDetails
-        )
-
-        // ── SIDE: Translate (one step farther from bubble) ─────────────────
-        val translateOffsetX = if (bubbleOnRight)
-            bubbleCenterXDp - bubbleSizeDp / 2 - (QUICK_MENU_ACTION_ICON_SIZE_DP * 2 + QUICK_MENU_ACTION_GAP_DP * 2.5f).dp
-        else
-            bubbleCenterXDp + bubbleSizeDp / 2 + (QUICK_MENU_ACTION_ICON_SIZE_DP + QUICK_MENU_ACTION_GAP_DP * 2.5f).dp
-
-        QuickAccessItem(
-            icon       = Icons.Outlined.Translate,
-            label      = "Translate",
-            labelSide  = LabelSide.ABOVE,
-            animDelay  = 60,
-            visible    = visible,
-            isHovered  = hoveredItemId == QuickMenuItemId.TRANSLATE,
-            modifier   = Modifier.offset {
-                IntOffset(
-                    x = translateOffsetX.roundToPx(),
-                    y = (bubbleCenterYDp - QUICK_MENU_ACTION_ICON_SIZE_DP.dp / 2).roundToPx()
-                )
-            },
-            onClick = onTranslate
-        )
-
-        // ── BOTTOM: Custom action slots ────────────────────────────────────
         val slot1Action = quickActions.getOrNull(0)
         val slot2Action = quickActions.getOrNull(1)
-        val slot1Y = bubbleCenterYDp + bubbleSizeDp / 2 + QUICK_MENU_ACTION_GAP_DP.dp
 
         if (slot1Action != null) {
             QuickAccessItem(
-                icon       = quickActionIconVector(slot1Action.iconKey),
-                label      = slot1Action.name,
-                labelSide  = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
-                animDelay  = 30,
-                visible    = visible,
-                isHovered  = hoveredItemId == QuickMenuItemId.SLOT1,
-                modifier   = Modifier.offset {
-                    IntOffset(
-                        x = (bubbleCenterXDp - QUICK_MENU_ACTION_ICON_SIZE_DP.dp / 2).roundToPx(),
-                        y = slot1Y.roundToPx()
-                    )
+                icon      = quickActionIconVector(slot1Action.iconKey),
+                label     = slot1Action.name,
+                labelSide = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
+                animDelay = 30,
+                visible   = visible,
+                isHovered = hoveredItemId == QuickMenuItemId.SLOT1,
+                modifier  = Modifier.offset {
+                    val cx = bubbleCenterXDp + sideBase * sideDir
+                    val cy = bubbleCenterYDp + sideBase * SIN45
+                    IntOffset(x = (cx - iconDp / 2).roundToPx(), y = (cy - iconDp / 2).roundToPx())
                 },
                 onClick = { onCustomAction(slot1Action) }
             )
         } else {
             QuickAccessItem(
-                icon       = Icons.Outlined.Add,
-                label      = "Create Action",
-                labelSide  = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
-                animDelay  = 30,
-                visible    = visible,
-                isHovered  = hoveredItemId == QuickMenuItemId.SLOT1,
+                icon          = Icons.Outlined.Add,
+                label         = "Create Action",
+                labelSide     = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
+                animDelay     = 30,
+                visible       = visible,
+                isHovered     = hoveredItemId == QuickMenuItemId.SLOT1,
                 isPlaceholder = true,
-                modifier   = Modifier.offset {
-                    IntOffset(
-                        x = (bubbleCenterXDp - QUICK_MENU_ACTION_ICON_SIZE_DP.dp / 2).roundToPx(),
-                        y = slot1Y.roundToPx()
-                    )
+                modifier      = Modifier.offset {
+                    val cx = bubbleCenterXDp + sideBase * sideDir
+                    val cy = bubbleCenterYDp + sideBase * SIN45
+                    IntOffset(x = (cx - iconDp / 2).roundToPx(), y = (cy - iconDp / 2).roundToPx())
                 },
                 onClick = onCreateAction
             )
         }
 
         if (slot1Action != null) {
-            val slot2Y = slot1Y + QUICK_MENU_ACTION_ICON_SIZE_DP.dp + QUICK_MENU_ACTION_GAP_DP.dp
+            val dist2 = sideBase + sideStep
             if (slot2Action != null) {
                 QuickAccessItem(
-                    icon       = quickActionIconVector(slot2Action.iconKey),
-                    label      = slot2Action.name,
-                    labelSide  = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
-                    animDelay  = 60,
-                    visible    = visible,
-                    isHovered  = hoveredItemId == QuickMenuItemId.SLOT2,
-                    modifier   = Modifier.offset {
-                        IntOffset(
-                            x = (bubbleCenterXDp - QUICK_MENU_ACTION_ICON_SIZE_DP.dp / 2).roundToPx(),
-                            y = slot2Y.roundToPx()
-                        )
+                    icon      = quickActionIconVector(slot2Action.iconKey),
+                    label     = slot2Action.name,
+                    labelSide = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
+                    animDelay = 60,
+                    visible   = visible,
+                    isHovered = hoveredItemId == QuickMenuItemId.SLOT2,
+                    modifier  = Modifier.offset {
+                        val cx = bubbleCenterXDp + dist2 * sideDir
+                        val cy = bubbleCenterYDp + dist2 * SIN45
+                        IntOffset(x = (cx - iconDp / 2).roundToPx(), y = (cy - iconDp / 2).roundToPx())
                     },
                     onClick = { onCustomAction(slot2Action) }
                 )
             } else {
                 QuickAccessItem(
-                    icon       = Icons.Outlined.Add,
-                    label      = "Create Action",
-                    labelSide  = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
-                    animDelay  = 60,
-                    visible    = visible,
-                    isHovered  = hoveredItemId == QuickMenuItemId.SLOT2,
+                    icon          = Icons.Outlined.Add,
+                    label         = "Create Action",
+                    labelSide     = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
+                    animDelay     = 60,
+                    visible       = visible,
+                    isHovered     = hoveredItemId == QuickMenuItemId.SLOT2,
                     isPlaceholder = true,
-                    modifier   = Modifier.offset {
-                        IntOffset(
-                            x = (bubbleCenterXDp - QUICK_MENU_ACTION_ICON_SIZE_DP.dp / 2).roundToPx(),
-                            y = slot2Y.roundToPx()
-                        )
+                    modifier      = Modifier.offset {
+                        val cx = bubbleCenterXDp + dist2 * sideDir
+                        val cy = bubbleCenterYDp + dist2 * SIN45
+                        IntOffset(x = (cx - iconDp / 2).roundToPx(), y = (cy - iconDp / 2).roundToPx())
                     },
                     onClick = onCreateAction
                 )
             }
         }
+
+        // ── BOTTOM: More Details & Translate ──────────────────────────────
+        val bottomY = bubbleCenterYDp + bubbleSizeDp / 2 + gapDp
+
+        QuickAccessItem(
+            icon      = Icons.Outlined.FindInPage,
+            label     = "More Details",
+            labelSide = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
+            animDelay = 30,
+            visible   = visible,
+            isHovered = hoveredItemId == QuickMenuItemId.MORE_DETAILS,
+            modifier  = Modifier.offset {
+                IntOffset(
+                    x = (bubbleCenterXDp - iconDp / 2).roundToPx(),
+                    y = bottomY.roundToPx()
+                )
+            },
+            onClick = onMoreDetails
+        )
+
+        QuickAccessItem(
+            icon      = Icons.Outlined.Translate,
+            label     = "Translate",
+            labelSide = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
+            animDelay = 60,
+            visible   = visible,
+            isHovered = hoveredItemId == QuickMenuItemId.TRANSLATE,
+            modifier  = Modifier.offset {
+                IntOffset(
+                    x = (bubbleCenterXDp - iconDp / 2).roundToPx(),
+                    y = (bottomY + iconDp + gapDp).roundToPx()
+                )
+            },
+            onClick = onTranslate
+        )
     }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-private enum class LabelSide { LEFT, RIGHT, ABOVE }
+private enum class LabelSide { LEFT, RIGHT }
 
 @Composable
 private fun QuickAccessItem(
@@ -417,11 +422,6 @@ private fun QuickAccessItem(
                     .requiredSize(0.dp)
                     .offset(x = QUICK_MENU_ACTION_GAP_DP.dp)
                     .wrapContentSize(Alignment.CenterStart, unbounded = true)
-                LabelSide.ABOVE -> Modifier
-                    .align(Alignment.TopCenter)
-                    .requiredSize(0.dp)
-                    .offset(y = -QUICK_MENU_ACTION_GAP_DP.dp)
-                    .wrapContentSize(Alignment.BottomCenter, unbounded = true)
             }
 
             Surface(

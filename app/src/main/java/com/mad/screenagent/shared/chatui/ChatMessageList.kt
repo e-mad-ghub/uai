@@ -28,6 +28,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
@@ -114,12 +116,19 @@ fun rememberChatMessageListBehavior(
         lastSeenMessageId = latestMessage.id
     }
 
-    // Bug Fix 1: Force scroll to bottom when triggered externally (custom action / built-in action).
-    // Re-enables auto-scroll so the arriving streaming response is followed automatically.
+    // Bug Fix 1: Force scroll to bottom when triggered externally (custom action).
+    // sendMessage() is fire-and-forget (non-suspend), so the trigger fires before messages
+    // arrive in the list and before the panel has even finished its first layout pass.
+    // snapshotFlow waits until the LazyColumn actually has laid-out items, then scrolls.
     LaunchedEffect(scrollToBottomTrigger) {
-        if (scrollToBottomTrigger > 0 && messages.isNotEmpty()) {
+        if (scrollToBottomTrigger > 0) {
             autoScrollEnabled = true
-            listState.animateScrollToItem(messages.lastIndex)
+            // Wait until at least one item is visible in the list. This correctly handles:
+            //  • panel just opened (no layout pass yet)
+            //  • conversation switch (messages still loading from DB flow)
+            snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .filter { it > 0 }
+                .first()
             listState.scrollToConversationEnd()
         }
     }

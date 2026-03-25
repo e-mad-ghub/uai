@@ -41,8 +41,25 @@ data class QuickActionConfig(
     val iconKey: QuickActionIconKey = QuickActionIconKey.BOLT,
     val takeScreenshot: Boolean = true,
     val conversationName: String = "",
+    // Feature 2: Optional dedicated assistant for this action.
+    // null = use the currently active agent (default behaviour).
+    // If the referenced agent is later deleted the service falls back to the active agent.
+    val agentId: String? = null,
+    // Explicit slot position (0–3).  null = legacy/unassigned — forSlot() falls back to list index.
+    // Gson deserialises missing fields as null for nullable types, so old data is backward-compatible.
+    val slotIndex: Int? = null,
 ) {
     /** Effective conversation name: user-set value or auto-derived from action name. */
     fun effectiveConversationName(): String =
         conversationName.trim().ifBlank { "${name.trim()}-Session" }
 }
+
+/**
+ * Returns the [QuickActionConfig] assigned to [slot] (0–3), or null if that slot is empty.
+ *
+ * New data: matched by [QuickActionConfig.slotIndex].
+ * Legacy data (all slotIndex == null): falls back to list position for backward compatibility.
+ */
+fun List<QuickActionConfig>.forSlot(slot: Int): QuickActionConfig? =
+    firstOrNull { it.slotIndex == slot }
+        ?: if (all { it.slotIndex == null }) getOrNull(slot) else null

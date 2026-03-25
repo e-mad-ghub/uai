@@ -225,7 +225,14 @@ class AppPreferences(context: Context) {
     val quickActionsFlow: Flow<List<QuickActionConfig>> = store.data.map { prefs ->
         val json = prefs[Keys.QUICK_ACTIONS_JSON] ?: return@map emptyList()
         val type = object : com.google.gson.reflect.TypeToken<List<QuickActionConfig>>() {}.type
-        gson.fromJson(json, type) ?: emptyList()
+        val actions: List<QuickActionConfig> = gson.fromJson(json, type) ?: emptyList()
+        // Migrate legacy actions that pre-date the slotIndex field: assign their current
+        // list position as an explicit slot so deleting one never shifts the others.
+        if (actions.any { it.slotIndex == null }) {
+            actions.mapIndexed { i, a -> if (a.slotIndex == null) a.copy(slotIndex = i) else a }
+        } else {
+            actions
+        }
     }
 
     suspend fun saveQuickActions(actions: List<QuickActionConfig>) {

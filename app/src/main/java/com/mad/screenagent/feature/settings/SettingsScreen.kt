@@ -42,11 +42,15 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.Canvas
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import kotlin.math.sqrt
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -62,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.QuickActionConfig
 import com.mad.screenagent.data.model.QuickActionIconKey
+import com.mad.screenagent.data.model.forSlot
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -536,16 +541,22 @@ private fun ThemeCard(theme: AppColorTheme, isSelected: Boolean, onClick: () -> 
 internal fun QuickActionsSection(
     bubbleEnabled: Boolean,
     quickActions: List<QuickActionConfig>,
+    // Feature 2: agent list for the per-action agent picker.
+    agents: List<AgentConfig> = emptyList(),
     onDisabledTap: () -> Unit,
     onSaveActions: (List<QuickActionConfig>) -> Unit,
 ) {
     val contentAlpha = if (bubbleEnabled) 1f else 0.38f
-    // Editing state: index 0 or 1 being edited, null = none
+    // Always read the *current* quickActions inside lambdas — avoids stale-closure
+    // bugs where an onSave lambda captured an earlier (possibly empty) snapshot.
+    val currentQuickActions by rememberUpdatedState(quickActions)
+    // Editing state: slot index (0–3) currently being edited, null = none
     var editingSlot by rememberSaveable { mutableStateOf<Int?>(null) }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        repeat(2) { slotIndex ->
-            val action = quickActions.getOrNull(slotIndex)
+        // Feature 3: 4 configurable slots replace the former hardcoded More Details / Translate.
+        repeat(4) { slotIndex ->
+            val action = quickActions.forSlot(slotIndex)
             val isEditing = editingSlot == slotIndex
 
             ElevatedCard(
@@ -557,13 +568,15 @@ internal fun QuickActionsSection(
                     // Empty slot → "Add Action" row + optional inline editor
                     ListItem(
                         leadingContent = {
-                            Icon(Icons.Default.Add, contentDescription = null,
-                                tint = if (bubbleEnabled) MaterialTheme.colorScheme.primary
-                                       else MaterialTheme.colorScheme.onSurfaceVariant)
+                            QuickActionPositionDiagram(
+                                slotIndex = slotIndex,
+                                modifier = Modifier.size(40.dp)
+                            )
                         },
                         headlineContent = {
                             Text(
-                                "Add Quick Action ${slotIndex + 1}",
+                                // Number removed — position is already shown by the diagram.
+                                "Add Quick Action",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = if (bubbleEnabled) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.onSurfaceVariant
@@ -578,24 +591,29 @@ internal fun QuickActionsSection(
                         HorizontalDivider()
                         QuickActionEditor(
                             action = QuickActionConfig(),
+                            agents = agents,
                             onSave = { newAction ->
-                                val list = quickActions.toMutableList()
-                                while (list.size <= slotIndex) list.add(QuickActionConfig())
-                                list[slotIndex] = newAction
-                                onSaveActions(list)
+                                // Remove any existing action for this slot by id (handles both
+                                // new data with explicit slotIndex and legacy data where
+                                // slotIndex is null — filtering by id is always reliable).
+                                val existing = currentQuickActions.forSlot(slotIndex)
+                                val updated = currentQuickActions
+                                    .filter { it.id != existing?.id }
+                                    .toMutableList()
+                                    .also { it.add(newAction.copy(slotIndex = slotIndex)) }
+                                onSaveActions(updated)
                                 editingSlot = null
                             },
                             onCancel = { editingSlot = null }
                         )
                     }
                 } else {
-                    // Existing action → summary row + optional inline editor
+                    // Existing action → tap row to expand/collapse editor inline
                     ListItem(
                         leadingContent = {
-                            Icon(
-                                quickActionIconForKey(action.iconKey),
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
+                            QuickActionPositionDiagram(
+                                slotIndex = slotIndex,
+                                modifier = Modifier.size(40.dp)
                             )
                         },
                         headlineContent = { Text(action.name.ifBlank { "Unnamed Action" }) },
@@ -607,23 +625,19 @@ internal fun QuickActionsSection(
                             )
                         },
                         trailingContent = {
-                            Row {
-                                IconButton(onClick = {
-                                    if (!bubbleEnabled) { onDisabledTap(); return@IconButton }
-                                    editingSlot = if (isEditing) null else slotIndex
-                                }) {
-                                    Icon(Icons.Outlined.Edit, contentDescription = "Edit")
-                                }
-                                IconButton(onClick = {
-                                    if (!bubbleEnabled) { onDisabledTap(); return@IconButton }
-                                    val updated = quickActions.toMutableList().also { it.removeAt(slotIndex) }
-                                    onSaveActions(updated)
-                                    if (editingSlot == slotIndex) editingSlot = null
-                                }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Delete",
-                                        tint = MaterialTheme.colorScheme.error)
-                                }
+                            IconButton(onClick = {
+                                if (!bubbleEnabled) { onDisabledTap(); return@IconButton }
+                                val updated = currentQuickActions.filter { it.id != action.id }
+                                onSaveActions(updated)
+                                if (editingSlot == slotIndex) editingSlot = null
+                            }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete",
+                                    tint = MaterialTheme.colorScheme.error)
                             }
+                        },
+                        modifier = Modifier.clickable(enabled = true) {
+                            if (!bubbleEnabled) { onDisabledTap(); return@clickable }
+                            editingSlot = if (isEditing) null else slotIndex
                         }
                     )
 
@@ -631,9 +645,13 @@ internal fun QuickActionsSection(
                         HorizontalDivider()
                         QuickActionEditor(
                             action = action,
+                            agents = agents,
                             onSave = { updated ->
-                                val list = quickActions.toMutableList()
-                                list[slotIndex] = updated
+                                // Replace by id — safe for legacy data (same reason as delete).
+                                val list = currentQuickActions
+                                    .filter { it.id != action.id }
+                                    .toMutableList()
+                                    .also { it.add(updated.copy(slotIndex = slotIndex)) }
                                 onSaveActions(list)
                                 editingSlot = null
                             },
@@ -647,9 +665,12 @@ internal fun QuickActionsSection(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QuickActionEditor(
     action: QuickActionConfig,
+    // Feature 2: list of available agents for per-action agent selection.
+    agents: List<AgentConfig> = emptyList(),
     onSave: (QuickActionConfig) -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -658,6 +679,9 @@ private fun QuickActionEditor(
     var selectedIcon by rememberSaveable { mutableStateOf(action.iconKey) }
     var takeScreenshot by rememberSaveable { mutableStateOf(action.takeScreenshot) }
     var conversationName by rememberSaveable { mutableStateOf(action.conversationName) }
+    // Feature 2: null = "Use Active Agent" (default); non-null = dedicated agent id.
+    var selectedAgentId by rememberSaveable { mutableStateOf(action.agentId) }
+    var agentDropdownExpanded by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -744,6 +768,42 @@ private fun QuickActionEditor(
             modifier = Modifier.fillMaxWidth()
         )
 
+        // Feature 2: agent picker — "Use Active Agent" or a specific assistant
+        if (agents.isNotEmpty()) {
+            Text("Starting Assistant", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val selectedAgent = agents.firstOrNull { it.id == selectedAgentId }
+            ExposedDropdownMenuBox(
+                expanded = agentDropdownExpanded,
+                onExpandedChange = { agentDropdownExpanded = it }
+            ) {
+                OutlinedTextField(
+                    value = selectedAgent?.name ?: "Use Active Agent",
+                    onValueChange = {},
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = agentDropdownExpanded) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                )
+                ExposedDropdownMenu(
+                    expanded = agentDropdownExpanded,
+                    onDismissRequest = { agentDropdownExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Use Active Agent") },
+                        onClick = { selectedAgentId = null; agentDropdownExpanded = false }
+                    )
+                    agents.forEach { agent ->
+                        DropdownMenuItem(
+                            text = { Text(agent.name) },
+                            onClick = { selectedAgentId = agent.id; agentDropdownExpanded = false }
+                        )
+                    }
+                }
+            }
+        }
+
         // Save / Cancel
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -759,11 +819,71 @@ private fun QuickActionEditor(
                             iconKey = selectedIcon,
                             takeScreenshot = takeScreenshot,
                             conversationName = conversationName.trim(),
+                            // Feature 2: save the selected agent id (null = use active agent).
+                            agentId = selectedAgentId,
                         )
                     )
                 },
                 enabled = name.isNotBlank() && prompt.isNotBlank()
             ) { Text("Save") }
+        }
+    }
+}
+
+/**
+ * Feature 3: mini dot diagram that shows the position of [slotIndex] in the quick-access menu,
+ * relative to the floating bubble. Assumes bubble is on the right side (canonical view).
+ *
+ * Slot layout (fill order):
+ *   SLOT1 — diagonal-0 (lower-left of bubble, closest)
+ *   SLOT2 — bottom-0   (directly below bubble, closest)
+ *   SLOT3 — diagonal-1 (lower-left, farther)
+ *   SLOT4 — bottom-1   (directly below, farther)
+ */
+@Composable
+private fun QuickActionPositionDiagram(slotIndex: Int, modifier: Modifier = Modifier) {
+    val primary   = MaterialTheme.colorScheme.primary
+    val outline   = MaterialTheme.colorScheme.outlineVariant
+    val surface   = MaterialTheme.colorScheme.surfaceVariant
+    val sin45     = (sqrt(2.0) / 2.0).toFloat()
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val cx = w / 2f
+        val cy = h / 2f
+
+        val buR  = w * 0.13f        // bubble radius
+        val dotR = w * 0.07f        // inactive dot radius
+        val actR = w * 0.10f        // active (highlighted) dot radius
+        val dist1 = buR + w * 0.12f + dotR   // distance centre-to-dot for closest items
+        val dist3 = dist1 + dotR * 2f + w * 0.06f  // farther diagonal distance
+
+        // Positions of all 5 interactive dots (OPEN_APP + SLOT1–SLOT4)
+        // Assumes bubble is on the right → diagonal goes lower-left
+        val openAppPos  = Offset(cx, cy - dist1)
+        val slot1Pos    = Offset(cx - sin45 * dist1,  cy + sin45 * dist1)
+        val slot2Pos    = Offset(cx,                  cy + dist1)
+        val slot3Pos    = Offset(cx - sin45 * dist3,  cy + sin45 * dist3)
+        val slot4Pos    = Offset(cx,                  cy + dist3)
+
+        val slotPositions = listOf(slot1Pos, slot2Pos, slot3Pos, slot4Pos)
+
+        // Bubble circle
+        drawCircle(color = surface,   radius = buR, center = Offset(cx, cy))
+        drawCircle(color = outline,   radius = buR, center = Offset(cx, cy),
+            style = Stroke(width = 1.5f))
+
+        // Open App dot (always dim — not a configurable slot)
+        drawCircle(color = outline, radius = dotR, center = openAppPos)
+
+        // Slot dots — highlight the current slot
+        slotPositions.forEachIndexed { i, pos ->
+            if (i == slotIndex) {
+                drawCircle(color = primary, radius = actR, center = pos)
+            } else {
+                drawCircle(color = outline, radius = dotR, center = pos)
+            }
         }
     }
 }

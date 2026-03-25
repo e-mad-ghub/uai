@@ -54,7 +54,13 @@ class ChatMessageListBehavior internal constructor(
 )
 
 @Composable
-fun rememberChatMessageListBehavior(messages: List<MessageEntity>): ChatMessageListBehavior {
+fun rememberChatMessageListBehavior(
+    messages: List<MessageEntity>,
+    // Bug Fix 1: Incrementing this from outside (e.g. after a custom action sends a message)
+    // forces an unconditional scroll to the bottom and re-enables auto-scroll, regardless of
+    // whether the user had previously scrolled up.
+    scrollToBottomTrigger: Int = 0,
+): ChatMessageListBehavior {
     val listState = rememberSaveable(saver = LazyListState.Saver) {
         LazyListState()
     }
@@ -106,6 +112,16 @@ fun rememberChatMessageListBehavior(messages: List<MessageEntity>): ChatMessageL
         }
 
         lastSeenMessageId = latestMessage.id
+    }
+
+    // Bug Fix 1: Force scroll to bottom when triggered externally (custom action / built-in action).
+    // Re-enables auto-scroll so the arriving streaming response is followed automatically.
+    LaunchedEffect(scrollToBottomTrigger) {
+        if (scrollToBottomTrigger > 0 && messages.isNotEmpty()) {
+            autoScrollEnabled = true
+            listState.animateScrollToItem(messages.lastIndex)
+            listState.scrollToConversationEnd()
+        }
     }
 
     LaunchedEffect(messages.size) {

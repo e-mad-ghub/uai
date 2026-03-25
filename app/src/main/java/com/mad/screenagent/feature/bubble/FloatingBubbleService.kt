@@ -57,6 +57,7 @@ import com.mad.screenagent.MainActivity
 import com.mad.screenagent.R
 import com.mad.screenagent.UaiApplication
 import com.mad.screenagent.data.model.QuickActionConfig
+import com.mad.screenagent.data.model.forSlot
 import com.mad.screenagent.shared.streaming.AssistantStreamingSession
 import com.mad.screenagent.shared.streaming.FileAttachmentContext
 import com.mad.screenagent.shared.streaming.ImageAttachment
@@ -156,6 +157,9 @@ class FloatingBubbleService : Service() {
 
     // Quick access menu state
     private var quickActions by mutableStateOf<List<QuickActionConfig>>(emptyList())
+    // Bug Fix 1: incrementing this forces the chat panel to scroll to the latest message,
+    // re-enabling auto-scroll even if the user had previously scrolled up.
+    private var chatScrollToBottomTrigger by mutableStateOf(0)
     private var isQuickMenuVisible by mutableStateOf(false)
     private var quickMenuBubbleX by mutableStateOf(0)
     private var quickMenuBubbleY by mutableStateOf(0)
@@ -857,20 +861,6 @@ class FloatingBubbleService : Service() {
                             dismissQuickAccessMenu()
                             openAppFromQuickMenu()
                         },
-                        onMoreDetails = {
-                            dismissQuickAccessMenu()
-                            triggerBuiltInQuickAction(
-                                actionName = "More Details",
-                                prompt = "Please analyze this screenshot and provide more details about what you see."
-                            )
-                        },
-                        onTranslate = {
-                            dismissQuickAccessMenu()
-                            triggerBuiltInQuickAction(
-                                actionName = "Translate",
-                                prompt = "Please translate all text visible in this screenshot to English."
-                            )
-                        },
                         onCustomAction = { action ->
                             dismissQuickAccessMenu()
                             triggerCustomQuickAction(action)
@@ -936,7 +926,6 @@ class FloatingBubbleService : Service() {
             iconSizePx    = QUICK_MENU_ACTION_ICON_SIZE_DP * density,
             gapPx         = QUICK_MENU_ACTION_GAP_DP * density,
             screenWidthPx = screenWidth,
-            hasSlot2      = quickActions.isNotEmpty(),
         )
     }
 
@@ -946,25 +935,26 @@ class FloatingBubbleService : Service() {
         scheduleBubbleIdleFade()
         when (itemId) {
             QuickMenuItemId.OPEN_APP -> openAppFromQuickMenu()
-            QuickMenuItemId.MORE_DETAILS -> triggerBuiltInQuickAction(
-                "More Details",
-                "Please analyze this screenshot and provide more details about what you see."
-            )
-            QuickMenuItemId.TRANSLATE -> triggerBuiltInQuickAction(
-                "Translate",
-                "Please translate all text visible in this screenshot to English."
-            )
+            // Feature 3: 4 configurable slots — look up by explicit slotIndex (forSlot).
+            // Pressing a "+" placeholder navigates to settings so the user can add an action.
             QuickMenuItemId.SLOT1 -> {
-                val action = quickActions.getOrNull(0)
+                val action = quickActions.forSlot(0)
                 if (action == null) { navigateToQuickActionsSettings(); return }
                 triggerCustomQuickAction(action)
             }
             QuickMenuItemId.SLOT2 -> {
-                val action = quickActions.getOrNull(1)
-                if (action == null) {
-                    if (quickActions.isNotEmpty()) navigateToQuickActionsSettings()
-                    return
-                }
+                val action = quickActions.forSlot(1)
+                if (action == null) { navigateToQuickActionsSettings(); return }
+                triggerCustomQuickAction(action)
+            }
+            QuickMenuItemId.SLOT3 -> {
+                val action = quickActions.forSlot(2)
+                if (action == null) { navigateToQuickActionsSettings(); return }
+                triggerCustomQuickAction(action)
+            }
+            QuickMenuItemId.SLOT4 -> {
+                val action = quickActions.forSlot(3)
+                if (action == null) { navigateToQuickActionsSettings(); return }
                 triggerCustomQuickAction(action)
             }
         }
@@ -986,69 +976,6 @@ class FloatingBubbleService : Service() {
     }
 
     /**
-     * Handles "More Details" and "Translate" built-in quick actions.
-     * 1. Takes a screenshot.
-     * 2. Finds or creates a conversation named [actionName].
-     * 3. Sends screenshot + [prompt] to that conversation.
-     * 4. Opens the chat panel showing streaming response.
-     */
-    private fun triggerBuiltInQuickAction(actionName: String, prompt: String) {
-        if (overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
-        serviceScope.launch {
-            val screenshotBase64 = captureScreenshotSuspend() ?: run {
-                if (MiniChatScreenshotAccessibilityService.isAvailable()) {
-                    miniChatErrorMessage = "Screenshot capture failed. The current screen may be protected."
-                } else {
-                    showMiniChatScreenshotHint(getString(R.string.mini_chat_screenshot_accessibility_hint))
-                }
-                showChatPanel()
-                return@launch
-            }
-
-            val container = (application as UaiApplication).container
-            val conversationName = "$actionName-Session"
-
-            // Find or create dedicated conversation
-            val existingConv = allConversations.firstOrNull {
-                !it.isAgora && it.title == conversationName
-            }
-            val agent = fallbackAgentForCurrentContext()
-            val targetConv = existingConv ?: run {
-                if (agent == null) {
-                    miniChatErrorMessage = "No assistant configured. Please add an assistant in settings."
-                    showChatPanel()
-                    return@launch
-                }
-                val newConv = ConversationEntity(
-                    id = UUID.randomUUID().toString(),
-                    title = conversationName,
-                    agentId = agent.id,
-                    agentName = agent.name,
-                    createdAt = System.currentTimeMillis(),
-                    updatedAt = System.currentTimeMillis()
-                )
-                container.conversationRepository.upsertConversation(newConv)
-                newConv
-            }
-
-            // Switch to that conversation and open the panel before sending
-            prefersDraftConversation = false
-            switchConversation(targetConv.id, force = true)
-            showChatPanel()
-
-            // Save attachment and send
-            val persistedUri = withContext(Dispatchers.IO) {
-                persistImageAttachment(applicationContext, screenshotBase64)
-            }
-            pendingImages.add(Triple(screenshotBase64, null, persistedUri))
-            sendMessage(prompt)
-
-            // Persist last active conversation
-            container.agentRepository.saveLastActiveBubbleConversationId(targetConv.id)
-        }
-    }
-
-    /**
      * Handles user-configured custom quick actions.
      */
     private fun triggerCustomQuickAction(action: QuickActionConfig) {
@@ -1056,7 +983,11 @@ class FloatingBubbleService : Service() {
         serviceScope.launch {
             val container = (application as UaiApplication).container
 
-            val agent = fallbackAgentForCurrentContext()
+            // Feature 2: use the action's dedicated agent if set and still exists;
+            // fall back to the currently active agent otherwise.
+            val agent = action.agentId
+                ?.let { id -> allAgents.firstOrNull { it.id == id } }
+                ?: fallbackAgentForCurrentContext()
 
             if (agent == null) {
                 miniChatErrorMessage = "No assistant configured. Please add an assistant in settings."
@@ -1107,6 +1038,8 @@ class FloatingBubbleService : Service() {
                 pendingImages.add(Triple(screenshotBase64, null, persistedUri))
             }
             sendMessage(action.prompt)
+            // Bug Fix 1: force the chat panel to scroll to the new message.
+            chatScrollToBottomTrigger++
             container.agentRepository.saveLastActiveBubbleConversationId(targetConv.id)
         }
     }
@@ -1260,7 +1193,9 @@ class FloatingBubbleService : Service() {
                         screenshotHintMessage = miniChatScreenshotHintMessage,
                         errorHintMessage = miniChatErrorMessage,
                         onDismissError = { miniChatErrorMessage = null },
-                        loadingStatusText = onlineSearchStatusMessage
+                        loadingStatusText = onlineSearchStatusMessage,
+                        // Bug Fix 1: force scroll to bottom when a custom action sends a message.
+                        scrollToBottomTrigger = chatScrollToBottomTrigger,
                     )
                 }
             }

@@ -43,7 +43,8 @@ class OverlayBubblePositioningTest {
             bounds = bounds
         )
 
-        assertEquals(0 to 96, clamped)
+        // minY now includes radial menu top padding (72dp @ density=1f) above status bar
+        assertEquals(0 to 168, clamped)
     }
 
     @Test
@@ -62,7 +63,8 @@ class OverlayBubblePositioningTest {
             bounds = bounds
         )
 
-        assertEquals(320 to 1852, clamped)
+        // maxY now reserves radial menu bottom padding (144dp @ density=1f) for custom action slots
+        assertEquals(320 to 1708, clamped)
     }
 
     @Test
@@ -77,6 +79,7 @@ class OverlayBubblePositioningTest {
 
         val defaultPosition = defaultOverlayBubblePosition(bounds)
 
-        assertEquals(904 to 974, defaultPosition)
+        // Default Y is midpoint of new safe zone (minY=168, maxY=1708) / 2 = 938
+        assertEquals(904 to 938, defaultPosition)
     }
 }

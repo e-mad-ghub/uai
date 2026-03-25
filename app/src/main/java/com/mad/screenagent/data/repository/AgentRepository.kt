@@ -2,6 +2,7 @@ package com.mad.screenagent.data.repository
 
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AppColorTheme
+import com.mad.screenagent.data.model.QuickActionConfig
 import com.mad.screenagent.data.prefs.AppPreferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -75,4 +76,19 @@ class AgentRepository(private val prefs: AppPreferences) {
             prefs.saveAgentList(current)
         }
     }
+
+    // ----- Quick Actions -----
+
+    val quickActionsFlow: Flow<List<QuickActionConfig>> = prefs.quickActionsFlow
+
+    suspend fun saveQuickActions(actions: List<QuickActionConfig>) =
+        prefs.saveQuickActions(actions)
+
+    // ----- Last active bubble conversation -----
+
+    val lastActiveBubbleConversationIdFlow: Flow<String?> =
+        prefs.lastActiveBubbleConversationIdFlow
+
+    suspend fun saveLastActiveBubbleConversationId(id: String?) =
+        prefs.saveLastActiveBubbleConversationId(id)
 }

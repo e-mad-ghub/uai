@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
@@ -48,6 +49,7 @@ class MainActivity : ComponentActivity() {
     // Set via onCreate/onNewIntent; consumed once by LaunchedEffect to navigate
     private var pendingOpenConversationId by mutableStateOf<String?>(null)
     private var pendingOpenAgoraId by mutableStateOf<String?>(null)
+    private var pendingOpenQuickActions by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -98,6 +100,15 @@ class MainActivity : ComponentActivity() {
                     .collectAsStateWithLifecycle(emptyList())
                 val activeAgent by container.agentRepository.activeAgentFlow
                     .collectAsState(null)
+                val bubbleEnabled by container.agentRepository.bubbleEnabledFlow
+                    .collectAsState(true)
+
+                LaunchedEffect(pendingOpenQuickActions) {
+                    if (pendingOpenQuickActions) {
+                        navController.navigate(Routes.QUICK_ACTIONS) { launchSingleTop = true }
+                        pendingOpenQuickActions = false
+                    }
+                }
 
                 val currentEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = currentEntry?.destination?.route
@@ -247,6 +258,42 @@ class MainActivity : ComponentActivity() {
                             )
 
                             NavigationDrawerItem(
+                                icon = {
+                                    Icon(
+                                        Icons.Default.Bolt,
+                                        contentDescription = null,
+                                        tint = if (bubbleEnabled)
+                                            androidx.compose.ui.graphics.Color.Unspecified
+                                        else
+                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        "Quick Actions",
+                                        color = if (bubbleEnabled)
+                                            androidx.compose.ui.graphics.Color.Unspecified
+                                        else
+                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    )
+                                },
+                                selected = currentRoute == Routes.QUICK_ACTIONS,
+                                onClick = {
+                                    if (!bubbleEnabled) {
+                                        android.widget.Toast.makeText(
+                                            this@MainActivity,
+                                            "Enable the floating bubble to configure quick actions.",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else {
+                                        closeDrawer()
+                                        navController.navigate(Routes.QUICK_ACTIONS) { launchSingleTop = true }
+                                    }
+                                },
+                                modifier = Modifier.padding(horizontal = 8.dp)
+                            )
+
+                            NavigationDrawerItem(
                                 icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                                 label = { Text(stringResource(R.string.settings_title)) },
                                 selected = currentRoute == Routes.SETTINGS,
@@ -282,6 +329,9 @@ class MainActivity : ComponentActivity() {
             "com.mad.screenagent.OPEN_CONVERSATION" -> {
                 FloatingBubbleService.suppressForForegroundApp(this)
                 intent.getStringExtra("conversationId")?.let { pendingOpenConversationId = it }
+            }
+            FloatingBubbleService.ACTION_OPEN_QUICK_ACTIONS_SETTINGS -> {
+                pendingOpenQuickActions = true
             }
         }
     }

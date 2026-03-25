@@ -22,6 +22,7 @@ import com.mad.screenagent.feature.agents.AgentsScreen
 import com.mad.screenagent.feature.agents.AgentsViewModel
 import com.mad.screenagent.feature.conversations.ConversationDetailScreen
 import com.mad.screenagent.feature.conversations.ConversationDetailViewModel
+import com.mad.screenagent.feature.settings.QuickActionsScreen
 import com.mad.screenagent.feature.settings.SettingsScreen
 import com.mad.screenagent.feature.settings.SettingsViewModel
 import java.util.UUID
@@ -126,6 +127,16 @@ fun AppNavGraph(
                 )
             )
             AgentEditScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Routes.QUICK_ACTIONS) {
+            val vm: SettingsViewModel = viewModel(
+                factory = SettingsViewModel.Factory(container.agentRepository)
+            )
+            QuickActionsScreen(
                 viewModel = vm,
                 onBack = { navController.popBackStack() }
             )

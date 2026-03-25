@@ -5,6 +5,7 @@ object Routes {
     const val CONVERSATION_DETAIL = "conversation/{conversationId}"
     const val AGENTS = "agents"
     const val AGENT_EDIT = "agent_edit?agentId={agentId}&duplicateFromId={duplicateFromId}"
+    const val QUICK_ACTIONS = "quick_actions"
     const val SETTINGS = "settings"
     const val AGORA_LIST = "agora"
     const val AGORA_CREATE = "agora/create"

@@ -1924,6 +1924,7 @@ class FloatingBubbleService : Service() {
         isLoading = false
         onlineSearchStatusMessage = null
         currentSession?.markStopped()
+        scheduleBubbleIdleFade()
     }
 
     private fun sendMessage(text: String) {
@@ -2165,6 +2166,7 @@ class FloatingBubbleService : Service() {
                     currentSession = null
                     onlineSearchStatusMessage = null
                     isLoading = false
+                    scheduleBubbleIdleFade()
                 }
             }
         }
@@ -2265,6 +2267,7 @@ class FloatingBubbleService : Service() {
         bubbleIdleJob?.cancel()
         bubbleIdleJob = null
         if (overlaySurfaceState != OverlaySurfaceState.BubbleVisible || isAppUiVisible) return
+        if (isLoading) return
         bubbleView?.takeIf { it.isAttachedToWindow } ?: return
         bubbleIdleJob = serviceScope.launch {
             delay(BUBBLE_IDLE_DELAY_MS)

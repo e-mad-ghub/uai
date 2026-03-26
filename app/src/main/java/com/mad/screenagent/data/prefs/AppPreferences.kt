@@ -166,7 +166,7 @@ class AppPreferences(context: Context) {
         }
     }
 
-    suspend fun getBubblePosition(isWideMode: Boolean): Pair<Int, Int>? {
+    suspend fun getBubblePositionForMode(isWideMode: Boolean): Pair<Int, Int>? {
         val prefs = store.data.first()
         val xKey = if (isWideMode) Keys.BUBBLE_POS_WIDE_X else Keys.BUBBLE_POS_PORTRAIT_X
         val yKey = if (isWideMode) Keys.BUBBLE_POS_WIDE_Y else Keys.BUBBLE_POS_PORTRAIT_Y
@@ -175,7 +175,11 @@ class AppPreferences(context: Context) {
         if (modeX != null && modeY != null) {
             return modeX to modeY
         }
+        return null
+    }
 
+    suspend fun getLegacyBubblePosition(): Pair<Int, Int>? {
+        val prefs = store.data.first()
         val legacyX = prefs[Keys.BUBBLE_POS_X]
         val legacyY = prefs[Keys.BUBBLE_POS_Y]
         return if (legacyX != null && legacyY != null) {

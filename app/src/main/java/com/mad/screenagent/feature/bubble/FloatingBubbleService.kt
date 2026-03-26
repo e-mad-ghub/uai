@@ -25,6 +25,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.InputMethodManager
@@ -120,6 +121,13 @@ class FloatingBubbleService : Service() {
         Wide
     }
 
+    private data class OverlaySafeInsets(
+        val left: Int,
+        val top: Int,
+        val right: Int,
+        val bottom: Int
+    )
+
     private data class PendingAssistantRepairToast(
         val conversationId: String,
         val message: String
@@ -198,7 +206,10 @@ class FloatingBubbleService : Service() {
     private var externalFlowGeneration = 0L
     private var repairInFlightKey: String? = null
     private var lastAssistantRepairNotificationKey: String? = null
+    private var bubbleSnapAnimator: ValueAnimator? = null
     private var bubbleAlphaAnimator: ValueAnimator? = null
+    private var portraitBubblePositionCache: Pair<Int, Int>? = null
+    private var wideBubblePositionCache: Pair<Int, Int>? = null
     // Track which theme was applied when the bubble was last composed, so we can
     // force a setContent() refresh if the theme changed while the bubble was hidden.
     private var bubbleLastColorTheme: AppColorTheme? = null
@@ -328,7 +339,11 @@ class FloatingBubbleService : Service() {
             val previousMode = currentBubbleLayoutMode
             val newMode = detectBubbleLayoutMode()
             if (previousMode != newMode) {
-                saveBubblePositionForMode(previousMode)
+                persistBubblePositionForMode(
+                    x = bubbleParams.x,
+                    y = bubbleParams.y,
+                    mode = previousMode
+                )
                 currentBubbleLayoutMode = newMode
                 restoreBubblePositionForCurrentLayout(seedDefaultIfMissing = true)
             } else {
@@ -646,15 +661,11 @@ class FloatingBubbleService : Service() {
                         }
                     }
                     if (isDragging && !longPressConsumed) {
-                        val dm = resources.displayMetrics
-                        val sizePx = (64 * dm.density).toInt()
-                        val realHeight = getRealScreenHeight()
-                        val navBarHeight = realHeight - dm.heightPixels
-                        val statusBarHeight = getStatusBarHeight()
+                        val dragBounds = currentBubbleDragBounds()
                         bubbleParams.x = (initialX + dx).toInt()
-                            .coerceIn(0, dm.widthPixels - sizePx)
+                            .coerceIn(dragBounds.minX, dragBounds.maxX)
                         bubbleParams.y = (initialY + dy).toInt()
-                            .coerceIn(statusBarHeight, dm.heightPixels - sizePx - navBarHeight)
+                            .coerceIn(dragBounds.minY, dragBounds.maxY)
                         windowManager.updateViewLayout(view, bubbleParams)
                         isDismissTargetActive = isOverDismissZone()
                     }
@@ -712,19 +723,9 @@ class FloatingBubbleService : Service() {
      * vertically into the safe zone that leaves room for the radial menu icons.
      */
     private fun snapToValidZone() {
-        val dm = resources.displayMetrics
-        val sizePx = (64 * dm.density).toInt()
-        val screenWidth = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            windowManager.currentWindowMetrics.bounds.width()
-        } else { dm.widthPixels }
-        val bounds = calculateOverlayBubbleBounds(
-            screenWidth = screenWidth,
-            screenHeight = dm.heightPixels,
-            realHeight = getRealScreenHeight(),
-            statusBarHeight = getStatusBarHeight(),
-            bubbleSize = sizePx,
-            density = dm.density
-        )
+        val sizePx = currentBubbleSizePx()
+        val screenWidth = currentOverlayScreenWidth()
+        val bounds = currentBubbleBounds()
         val (targetX, targetY) = snapOverlayBubblePosition(
             x = bubbleParams.x,
             y = bubbleParams.y,
@@ -734,7 +735,8 @@ class FloatingBubbleService : Service() {
         )
         val startX = bubbleParams.x
         val startY = bubbleParams.y
-        ValueAnimator.ofFloat(0f, 1f).apply {
+        bubbleSnapAnimator?.cancel()
+        bubbleSnapAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = 280L
             interpolator = DecelerateInterpolator()
             addUpdateListener { animator ->
@@ -745,8 +747,15 @@ class FloatingBubbleService : Service() {
             }
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
+                    bubbleSnapAnimator = null
                     saveBubblePosition()
                     scheduleBubbleIdleFade()
+                }
+
+                override fun onAnimationCancel(animation: Animator) {
+                    if (bubbleSnapAnimator === animation) {
+                        bubbleSnapAnimator = null
+                    }
                 }
             })
             start()
@@ -1460,6 +1469,8 @@ class FloatingBubbleService : Service() {
     private fun hideBubbleWindow(immediate: Boolean = true) {
         bubbleIdleJob?.cancel()
         bubbleIdleJob = null
+        bubbleSnapAnimator?.cancel()
+        bubbleSnapAnimator = null
         bubbleAlphaAnimator?.cancel()
         bubbleAlphaAnimator = null
         removeSafely(bubbleView, immediate = immediate)
@@ -1549,7 +1560,10 @@ class FloatingBubbleService : Service() {
             showChatPanel()
             return
         }
-        ensureBubbleVisible()
+        serviceScope.launch {
+            restoreBubblePositionForCurrentLayout(seedDefaultIfMissing = true)
+            ensureBubbleVisible()
+        }
     }
 
     private fun registerSystemDialogReceiver() {
@@ -2190,53 +2204,151 @@ class FloatingBubbleService : Service() {
     }
 
     private fun detectBubbleLayoutMode(): BubbleLayoutMode {
-        val width = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val width = currentOverlayScreenWidth()
+        val height = currentOverlayScreenHeight()
+        return if (width > height) BubbleLayoutMode.Wide else BubbleLayoutMode.Portrait
+    }
+
+    private fun currentBubbleSizePx(): Int =
+        (64 * resources.displayMetrics.density).toInt()
+
+    private fun currentOverlayScreenWidth(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             windowManager.currentWindowMetrics.bounds.width()
         } else {
             resources.displayMetrics.widthPixels
         }
-        val height = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+
+    private fun currentOverlayScreenHeight(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             windowManager.currentWindowMetrics.bounds.height()
         } else {
-            getRealScreenHeight()
+            resources.displayMetrics.heightPixels
         }
-        return if (width > height) BubbleLayoutMode.Wide else BubbleLayoutMode.Portrait
+
+    private fun currentOverlaySafeInsets(): OverlaySafeInsets {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val insets = windowManager.currentWindowMetrics.windowInsets
+                .getInsetsIgnoringVisibility(
+                    WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+                )
+            return OverlaySafeInsets(
+                left = insets.left,
+                top = insets.top,
+                right = insets.right,
+                bottom = insets.bottom
+            )
+        }
+
+        val dm = resources.displayMetrics
+        return OverlaySafeInsets(
+            left = 0,
+            top = getStatusBarHeight().coerceAtLeast(0),
+            right = 0,
+            bottom = (getRealScreenHeight() - dm.heightPixels).coerceAtLeast(0)
+        )
     }
 
     private fun currentBubbleBounds(): OverlayBubbleBounds {
         val dm = resources.displayMetrics
-        val bubbleSize = (64 * dm.density).toInt()
-        val screenWidth = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            windowManager.currentWindowMetrics.bounds.width()
-        } else {
-            dm.widthPixels
-        }
+        val safeInsets = currentOverlaySafeInsets()
         return calculateOverlayBubbleBounds(
-            screenWidth = screenWidth,
-            screenHeight = dm.heightPixels,
-            realHeight = getRealScreenHeight(),
-            statusBarHeight = getStatusBarHeight(),
-            bubbleSize = bubbleSize,
-            density = dm.density
+            screenWidth = currentOverlayScreenWidth(),
+            screenHeight = currentOverlayScreenHeight(),
+            bubbleSize = currentBubbleSizePx(),
+            density = dm.density,
+            leftInset = safeInsets.left,
+            topInset = safeInsets.top,
+            rightInset = safeInsets.right,
+            bottomInset = safeInsets.bottom
         )
     }
 
-    private fun defaultBubblePositionForCurrentLayout(): Pair<Int, Int> {
-        return defaultOverlayBubblePosition(currentBubbleBounds())
+    private fun currentBubbleDragBounds(): OverlayBubbleBounds {
+        val bubbleSize = currentBubbleSizePx()
+        val safeInsets = currentOverlaySafeInsets()
+        return OverlayBubbleBounds(
+            minX = safeInsets.left,
+            maxX = (currentOverlayScreenWidth() - safeInsets.right - bubbleSize)
+                .coerceAtLeast(safeInsets.left),
+            minY = safeInsets.top.coerceAtLeast(0),
+            maxY = (currentOverlayScreenHeight() - safeInsets.bottom - bubbleSize)
+                .coerceAtLeast(safeInsets.top)
+        )
+    }
+
+    private fun cachedBubblePositionFor(mode: BubbleLayoutMode): Pair<Int, Int>? {
+        return when (mode) {
+            BubbleLayoutMode.Portrait -> portraitBubblePositionCache
+            BubbleLayoutMode.Wide -> wideBubblePositionCache
+        }
+    }
+
+    private fun rememberBubblePositionForMode(
+        x: Int,
+        y: Int,
+        mode: BubbleLayoutMode
+    ) {
+        when (mode) {
+            BubbleLayoutMode.Portrait -> portraitBubblePositionCache = x to y
+            BubbleLayoutMode.Wide -> wideBubblePositionCache = x to y
+        }
     }
 
     private suspend fun restoreBubblePositionForCurrentLayout(seedDefaultIfMissing: Boolean) {
         val prefs = (application as UaiApplication).container.preferences
-        val saved = prefs.getBubblePosition(
-            isWideMode = currentBubbleLayoutMode == BubbleLayoutMode.Wide
-        )
-        val target = saved ?: defaultBubblePositionForCurrentLayout()
+        val isWideMode = currentBubbleLayoutMode == BubbleLayoutMode.Wide
+        val cachedForMode = cachedBubblePositionFor(currentBubbleLayoutMode)
+        val savedForMode = prefs.getBubblePositionForMode(isWideMode = isWideMode)
+        val legacySaved = prefs.getLegacyBubblePosition()
+        val bounds = currentBubbleBounds()
+        val target = when {
+            cachedForMode != null -> restoreSavedOverlayBubblePosition(
+                x = cachedForMode.first,
+                y = cachedForMode.second,
+                bounds = bounds
+            )
+            savedForMode != null -> restoreSavedOverlayBubblePosition(
+                x = savedForMode.first,
+                y = savedForMode.second,
+                bounds = bounds
+            )
+            legacySaved != null -> projectLegacyOverlayBubblePosition(
+                legacyX = legacySaved.first,
+                legacyY = legacySaved.second,
+                bounds = bounds
+            )
+            else -> defaultOverlayBubblePosition(bounds)
+        }
         bubbleParams.x = target.first
         bubbleParams.y = target.second
+        rememberBubblePositionForMode(
+            x = bubbleParams.x,
+            y = bubbleParams.y,
+            mode = currentBubbleLayoutMode
+        )
         clampBubblePositionToDisplay(saveIfChanged = false)
-        if (saved == null && seedDefaultIfMissing) {
-            saveBubblePositionForMode(currentBubbleLayoutMode)
+        if (savedForMode == null && seedDefaultIfMissing) {
+            persistBubblePositionForMode(
+                x = bubbleParams.x,
+                y = bubbleParams.y,
+                mode = currentBubbleLayoutMode
+            )
         }
+    }
+
+    private suspend fun persistBubblePositionForMode(
+        x: Int,
+        y: Int,
+        mode: BubbleLayoutMode
+    ) {
+        rememberBubblePositionForMode(x = x, y = y, mode = mode)
+        (application as UaiApplication).container.preferences
+            .saveBubblePositionForMode(
+                x = x,
+                y = y,
+                isWideMode = mode == BubbleLayoutMode.Wide
+            )
     }
 
     private fun clampBubblePositionToDisplay(saveIfChanged: Boolean) {
@@ -2313,19 +2425,6 @@ class FloatingBubbleService : Service() {
         }
     }
 
-    private fun saveBubblePositionForMode(mode: BubbleLayoutMode) {
-        val x = bubbleParams.x
-        val y = bubbleParams.y
-        serviceScope.launch {
-            (application as UaiApplication).container.preferences
-                .saveBubblePositionForMode(
-                    x = x,
-                    y = y,
-                    isWideMode = mode == BubbleLayoutMode.Wide
-                )
-        }
-    }
-
     private fun attachLifecycleOwners(view: View) {
         view.setViewTreeLifecycleOwner(lifecycleOwner)
         view.setViewTreeViewModelStoreOwner(lifecycleOwner)
@@ -2351,6 +2450,7 @@ class FloatingBubbleService : Service() {
             "UAI_OVERLAY",
             "forceHideOverlayWindows reason=$reason panelAttached=${chatPanelContainer?.isAttachedToWindow == true} bubbleAttached=${bubbleView?.isAttachedToWindow == true} state=$overlaySurfaceState"
         )
+        persistCurrentBubblePositionAsync()
         dismissQuickAccessMenu()
         removeSafely(dismissZoneView, immediate = true)
         isDismissTargetActive = false
@@ -2372,13 +2472,29 @@ class FloatingBubbleService : Service() {
     private fun saveBubblePosition() {
         val x = bubbleParams.x
         val y = bubbleParams.y
+        val mode = currentBubbleLayoutMode
+        rememberBubblePositionForMode(x = x, y = y, mode = mode)
         serviceScope.launch {
-            (application as UaiApplication).container.preferences
-                .saveBubblePositionForMode(
-                    x = x,
-                    y = y,
-                    isWideMode = currentBubbleLayoutMode == BubbleLayoutMode.Wide
-                )
+            persistBubblePositionForMode(
+                x = x,
+                y = y,
+                mode = mode
+            )
+        }
+    }
+
+    private fun persistCurrentBubblePositionAsync() {
+        if (!::bubbleParams.isInitialized) return
+        val x = bubbleParams.x
+        val y = bubbleParams.y
+        val mode = currentBubbleLayoutMode
+        rememberBubblePositionForMode(x = x, y = y, mode = mode)
+        serviceScope.launch {
+            persistBubblePositionForMode(
+                x = x,
+                y = y,
+                mode = mode
+            )
         }
     }
 

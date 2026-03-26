@@ -257,7 +257,10 @@ fun ConversationDetailScreen(
         )
     }
 
-    val messageListBehavior = rememberChatMessageListBehavior(messages)
+    val messageListBehavior = rememberChatMessageListBehavior(
+        messages = messages,
+        conversationKey = conversation?.id
+    )
 
     Scaffold(
         modifier = modifier,

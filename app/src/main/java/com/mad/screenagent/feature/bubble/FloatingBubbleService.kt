@@ -1039,9 +1039,7 @@ class FloatingBubbleService : Service() {
                 }
                 pendingImages.add(Triple(screenshotBase64, null, persistedUri))
             }
-            sendMessage(action.prompt)
-            // Bug Fix 1: force the chat panel to scroll to the new message.
-            chatScrollToBottomTrigger++
+            sendMessage(action.prompt, forceScrollToLatest = true)
             container.agentRepository.saveLastActiveBubbleConversationId(targetConv.id)
         }
     }
@@ -1136,6 +1134,7 @@ class FloatingBubbleService : Service() {
                     } ?: androidx.compose.ui.graphics.Color.Unspecified
                     ChatPanel(
                         messages = displayMessages,
+                        conversationKey = currentConversationId,
                         inputText = inputText,
                         isLoading = isLoading,
                         agentName = bubbleAgent?.name ?: "Select assistant",
@@ -1934,7 +1933,10 @@ class FloatingBubbleService : Service() {
         scheduleBubbleIdleFade()
     }
 
-    private fun sendMessage(text: String) {
+    private fun sendMessage(
+        text: String,
+        forceScrollToLatest: Boolean = false
+    ) {
         val agent = selectedAgentForCurrentContext()
         val imageList = pendingImages.toList()
         val attachedFile = pendingFileText?.let {
@@ -2052,6 +2054,9 @@ class FloatingBubbleService : Service() {
                 )
                 container.conversationRepository.insertMessage(assistantMsg)
                 chatMessages.add(assistantMsg)
+                if (forceScrollToLatest) {
+                    chatScrollToBottomTrigger++
+                }
                 session = AssistantStreamingSession(messageId)
                 session!!.start(serviceScope)
                 currentSession = session

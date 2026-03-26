@@ -65,6 +65,7 @@ import com.mad.screenagent.design.components.ProductInputHintStrip
 @Composable
 fun ChatPanel(
     messages: List<MessageEntity>,
+    conversationKey: String?,
     inputText: String,
     isLoading: Boolean,
     agentName: String,
@@ -104,7 +105,11 @@ fun ChatPanel(
     modifier: Modifier = Modifier
 ) {
     val configuration = LocalConfiguration.current
-    val messageListBehavior = rememberChatMessageListBehavior(messages, scrollToBottomTrigger)
+    val messageListBehavior = rememberChatMessageListBehavior(
+        messages = messages,
+        conversationKey = conversationKey,
+        scrollToBottomTrigger = scrollToBottomTrigger
+    )
     val maxMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(280.dp, 560.dp)
     var renderedScreenshotHint by remember { mutableStateOf<String?>(null) }
 

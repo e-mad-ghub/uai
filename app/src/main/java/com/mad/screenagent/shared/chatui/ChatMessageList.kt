@@ -55,15 +55,28 @@ class ChatMessageListBehavior internal constructor(
     internal val nestedScrollConnection: NestedScrollConnection
 )
 
+private data class VisibleItemLayoutSnapshot(
+    val index: Int,
+    val offset: Int,
+    val size: Int
+)
+
+private data class ChatListLayoutSnapshot(
+    val viewportHeight: Int,
+    val visibleItems: List<VisibleItemLayoutSnapshot>
+)
+
 @Composable
 fun rememberChatMessageListBehavior(
     messages: List<MessageEntity>,
+    conversationKey: String? = messages.firstOrNull()?.conversationId
+        ?: messages.lastOrNull()?.conversationId,
     // Bug Fix 1: Incrementing this from outside (e.g. after a custom action sends a message)
     // forces an unconditional scroll to the bottom and re-enables auto-scroll, regardless of
     // whether the user had previously scrolled up.
     scrollToBottomTrigger: Int = 0,
 ): ChatMessageListBehavior {
-    val listState = rememberSaveable(saver = LazyListState.Saver) {
+    val listState = rememberSaveable(conversationKey, saver = LazyListState.Saver) {
         LazyListState()
     }
     val isAtBottom by remember(listState) {
@@ -72,10 +85,9 @@ fun rememberChatMessageListBehavior(
         }
     }
 
-    var autoScrollEnabled by rememberSaveable { mutableStateOf(true) }
-    var lastSeenConversationId by rememberSaveable { mutableStateOf<String?>(null) }
-    var lastSeenMessageId by rememberSaveable { mutableStateOf<String?>(null) }
-    var lastViewportHeight by rememberSaveable { mutableStateOf<Int?>(null) }
+    var autoScrollEnabled by rememberSaveable(conversationKey) { mutableStateOf(true) }
+    var lastSeenMessageId by rememberSaveable(conversationKey) { mutableStateOf<String?>(null) }
+    var lastLayoutSnapshot by remember(conversationKey) { mutableStateOf<ChatListLayoutSnapshot?>(null) }
     val nestedScrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -88,6 +100,7 @@ fun rememberChatMessageListBehavior(
     }
 
     val latestMessage = messages.lastOrNull()
+    val latestMessages by rememberUpdatedState(messages)
 
     LaunchedEffect(isAtBottom, listState.isScrollInProgress) {
         if (isAtBottom && !listState.isScrollInProgress) {
@@ -95,47 +108,47 @@ fun rememberChatMessageListBehavior(
         }
     }
 
-    LaunchedEffect(latestMessage?.id) {
-        val currentConversationId = latestMessage?.conversationId
-        if (currentConversationId == null) {
-            lastSeenConversationId = null
+    LaunchedEffect(conversationKey, latestMessage?.id) {
+        val currentLatestMessage = latestMessage
+        val currentLatestMessageId = currentLatestMessage?.id
+        if (currentLatestMessageId == null) {
             lastSeenMessageId = null
             return@LaunchedEffect
         }
 
-        if (lastSeenConversationId != currentConversationId) {
-            lastSeenConversationId = currentConversationId
-            lastSeenMessageId = latestMessage.id
+        if (lastSeenMessageId == null) {
+            lastSeenMessageId = currentLatestMessageId
+            if (autoScrollEnabled) {
+                listState.scrollToConversationEnd()
+            }
             return@LaunchedEffect
         }
 
-        if (latestMessage.id != lastSeenMessageId && latestMessage.role == "user") {
-            autoScrollEnabled = true
+        if (currentLatestMessageId != lastSeenMessageId) {
+            if (currentLatestMessage.role == "user") {
+                autoScrollEnabled = true
+            }
+            if (autoScrollEnabled) {
+                listState.scrollToConversationEnd()
+            }
         }
 
-        lastSeenMessageId = latestMessage.id
+        lastSeenMessageId = currentLatestMessageId
     }
 
     // Bug Fix 1: Force scroll to bottom when triggered externally (custom action).
-    // sendMessage() is fire-and-forget (non-suspend), so the trigger fires before messages
-    // arrive in the list and before the panel has even finished its first layout pass.
-    // snapshotFlow waits until the LazyColumn actually has laid-out items, then scrolls.
-    LaunchedEffect(scrollToBottomTrigger) {
+    // Wait for the actual conversation rows to be present and laid out before scrolling.
+    LaunchedEffect(scrollToBottomTrigger, conversationKey) {
         if (scrollToBottomTrigger > 0) {
             autoScrollEnabled = true
-            // Wait until at least one item is visible in the list. This correctly handles:
-            //  • panel just opened (no layout pass yet)
-            //  • conversation switch (messages still loading from DB flow)
             snapshotFlow { listState.layoutInfo.totalItemsCount }
-                .filter { it > 0 }
+                .filter {
+                    val currentMessages = latestMessages
+                    currentMessages.isNotEmpty() &&
+                        listState.layoutInfo.visibleItemsInfo.isNotEmpty() &&
+                        it >= currentMessages.size
+                }
                 .first()
-            listState.scrollToConversationEnd()
-        }
-    }
-
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty() && autoScrollEnabled) {
-            listState.animateScrollToItem(messages.lastIndex)
             listState.scrollToConversationEnd()
         }
     }
@@ -152,14 +165,23 @@ fun rememberChatMessageListBehavior(
     val hasMessages by rememberUpdatedState(messages.isNotEmpty())
     LaunchedEffect(listState) {
         snapshotFlow {
-            listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-        }.collect { viewportHeight ->
-            val previousViewportHeight = lastViewportHeight
-            lastViewportHeight = viewportHeight
+            ChatListLayoutSnapshot(
+                viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset,
+                visibleItems = listState.layoutInfo.visibleItemsInfo.map { item ->
+                    VisibleItemLayoutSnapshot(
+                        index = item.index,
+                        offset = item.offset,
+                        size = item.size
+                    )
+                }
+            )
+        }.collect { layoutSnapshot ->
+            val previousLayoutSnapshot = lastLayoutSnapshot
+            lastLayoutSnapshot = layoutSnapshot
 
-            if (previousViewportHeight == null) return@collect
+            if (previousLayoutSnapshot == null) return@collect
 
-            val viewportDelta = viewportHeight - previousViewportHeight
+            val viewportDelta = layoutSnapshot.viewportHeight - previousLayoutSnapshot.viewportHeight
             when {
                 hasMessages && (latestAutoScrollEnabled || latestIsAtBottom) -> {
                     listState.scrollToConversationEnd()

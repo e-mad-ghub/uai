@@ -121,13 +121,6 @@ class FloatingBubbleService : Service() {
         Wide
     }
 
-    private data class OverlaySafeInsets(
-        val left: Int,
-        val top: Int,
-        val right: Int,
-        val bottom: Int
-    )
-
     private data class PendingAssistantRepairToast(
         val conversationId: String,
         val message: String
@@ -2241,11 +2234,18 @@ class FloatingBubbleService : Service() {
         }
 
         val dm = resources.displayMetrics
-        return OverlaySafeInsets(
-            left = 0,
-            top = getStatusBarHeight().coerceAtLeast(0),
-            right = 0,
-            bottom = (getRealScreenHeight() - dm.heightPixels).coerceAtLeast(0)
+        val pt = Point()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealSize(pt)
+        @Suppress("DEPRECATION")
+        val rotation = windowManager.defaultDisplay.rotation
+        return calculateLegacyOverlaySafeInsets(
+            screenWidth = dm.widthPixels,
+            screenHeight = dm.heightPixels,
+            realWidth = pt.x,
+            realHeight = pt.y,
+            rotation = rotation,
+            statusBarHeight = getStatusBarHeight()
         )
     }
 

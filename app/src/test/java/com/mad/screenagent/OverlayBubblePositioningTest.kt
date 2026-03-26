@@ -1,5 +1,7 @@
 package com.mad.screenagent
 
+import android.view.Surface
+import com.mad.screenagent.feature.bubble.calculateLegacyOverlaySafeInsets
 import com.mad.screenagent.feature.bubble.calculateOverlayBubbleBounds
 import com.mad.screenagent.feature.bubble.clampOverlayBubblePosition
 import com.mad.screenagent.feature.bubble.defaultOverlayBubblePosition
@@ -125,6 +127,40 @@ class OverlayBubblePositioningTest {
         assertEquals(84, bounds.minX)
         assertEquals(2132, bounds.maxX)
         assertEquals(bounds.maxX to 420, clamped)
+    }
+
+    @Test
+    fun legacyLandscapeInsets_placeSideNavOnRightForRotation90() {
+        val insets = calculateLegacyOverlaySafeInsets(
+            screenWidth = 2160,
+            screenHeight = 1080,
+            realWidth = 2280,
+            realHeight = 1080,
+            rotation = Surface.ROTATION_90,
+            statusBarHeight = 24
+        )
+
+        assertEquals(0, insets.left)
+        assertEquals(24, insets.top)
+        assertEquals(120, insets.right)
+        assertEquals(0, insets.bottom)
+    }
+
+    @Test
+    fun legacyLandscapeInsets_placeSideNavOnLeftForRotation270() {
+        val insets = calculateLegacyOverlaySafeInsets(
+            screenWidth = 2160,
+            screenHeight = 1080,
+            realWidth = 2280,
+            realHeight = 1080,
+            rotation = Surface.ROTATION_270,
+            statusBarHeight = 24
+        )
+
+        assertEquals(120, insets.left)
+        assertEquals(24, insets.top)
+        assertEquals(0, insets.right)
+        assertEquals(0, insets.bottom)
     }
 
     @Test

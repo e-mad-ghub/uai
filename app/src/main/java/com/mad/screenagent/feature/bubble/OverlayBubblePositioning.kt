@@ -1,10 +1,19 @@
 package com.mad.screenagent.feature.bubble
 
+import android.view.Surface
+
 internal data class OverlayBubbleBounds(
     val minX: Int,
     val maxX: Int,
     val minY: Int,
     val maxY: Int
+)
+
+internal data class OverlaySafeInsets(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int
 )
 
 /**
@@ -36,6 +45,35 @@ internal fun calculateOverlayBubbleBounds(
         maxX = maxX,
         minY = minY,
         maxY = maxY
+    )
+}
+
+internal fun calculateLegacyOverlaySafeInsets(
+    screenWidth: Int,
+    screenHeight: Int,
+    realWidth: Int,
+    realHeight: Int,
+    rotation: Int,
+    statusBarHeight: Int
+): OverlaySafeInsets {
+    val horizontalInset = (realWidth - screenWidth).coerceAtLeast(0)
+    val bottomInset = (realHeight - screenHeight).coerceAtLeast(0)
+    val leftInset = when {
+        horizontalInset == 0 -> 0
+        rotation == Surface.ROTATION_270 -> horizontalInset
+        else -> 0
+    }
+    val rightInset = when {
+        horizontalInset == 0 -> 0
+        rotation == Surface.ROTATION_90 -> horizontalInset
+        rotation == Surface.ROTATION_270 -> 0
+        else -> horizontalInset
+    }
+    return OverlaySafeInsets(
+        left = leftInset,
+        top = statusBarHeight.coerceAtLeast(0),
+        right = rightInset,
+        bottom = bottomInset
     )
 }
 

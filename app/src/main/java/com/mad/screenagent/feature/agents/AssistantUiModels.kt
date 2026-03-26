@@ -174,11 +174,11 @@ fun providerUiInfo(provider: AiProviderType): ProviderUiInfo = when (provider) {
     AiProviderType.CUSTOM -> ProviderUiInfo(
         provider = provider,
         label = "Custom",
-        description = "For Grok, NVIDIA, and other compatible providers.",
-        apiKeyHint = "Paste the API key for Grok, NVIDIA, or another compatible provider.",
+        description = "For Groq, Grok, NVIDIA, and other compatible providers.",
+        apiKeyHint = "Paste the API key for Groq, Grok, NVIDIA, or another compatible provider.",
         apiKeyPlaceholder = "Paste API key",
         apiKeyCalloutTitle = "Custom provider setup",
-        apiKeyCalloutBody = "Choose a preset or enter a manual base URL for Grok, NVIDIA, or another compatible provider."
+        apiKeyCalloutBody = "Choose a preset or enter a manual base URL for Groq, Grok, NVIDIA, or another compatible provider."
     )
 }
 

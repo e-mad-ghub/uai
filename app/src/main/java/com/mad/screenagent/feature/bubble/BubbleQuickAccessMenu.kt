@@ -23,7 +23,6 @@ import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.FindInPage
 import androidx.compose.material.icons.outlined.FlashOn
 import androidx.compose.material.icons.outlined.Launch
 import androidx.compose.material.icons.outlined.Psychology
@@ -31,7 +30,6 @@ import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.Summarize
-import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
@@ -57,16 +56,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mad.screenagent.data.model.QuickActionConfig
 import com.mad.screenagent.data.model.QuickActionIconKey
+import com.mad.screenagent.data.model.forSlot
 import kotlin.math.sqrt
 
 // ── Item IDs (shared with FloatingBubbleService for gesture hit-testing) ─────
 
 object QuickMenuItemId {
-    const val OPEN_APP     = "open_app"
-    const val MORE_DETAILS = "more_details"
-    const val TRANSLATE    = "translate"
-    const val SLOT1        = "slot1"
-    const val SLOT2        = "slot2"
+    const val OPEN_APP = "open_app"
+    // Feature 3: 4 custom-action slots replace the former hardcoded More Details / Translate.
+    // Fill order (closest-first, diagonal priority): SLOT1 → SLOT2 → SLOT3 → SLOT4.
+    const val SLOT1    = "slot1"   // Diagonal pos 0 (closest, diagonal)
+    const val SLOT2    = "slot2"   // Bottom  pos 0 (closest, below)
+    const val SLOT3    = "slot3"   // Diagonal pos 1 (farther, diagonal)
+    const val SLOT4    = "slot4"   // Bottom  pos 1 (farther, below)
 }
 
 // ── Sizing constants (internal so FloatingBubbleService can hit-test) ─────────
@@ -92,7 +94,6 @@ private val SIN45 = (sqrt(2.0) / 2.0).toFloat()
  * @param iconSizePx     Diameter of each action icon in px.
  * @param gapPx          Gap between bubble edge and first icon in px.
  * @param screenWidthPx  Full screen width in px (used to decide left/right side).
- * @param hasSlot2       Whether a second custom-action slot should be included.
  */
 internal fun hitTestQuickMenuItemPure(
     rawX: Float,
@@ -103,34 +104,25 @@ internal fun hitTestQuickMenuItemPure(
     iconSizePx: Float,
     gapPx: Float,
     screenWidthPx: Float,
-    hasSlot2: Boolean,
 ): String? {
-    val onRight = bubbleCenterX > screenWidthPx / 2f
-    val half    = iconSizePx / 2f
-    val hitR    = iconSizePx * 0.75f
+    val onRight  = bubbleCenterX > screenWidthPx / 2f
+    val half     = iconSizePx / 2f
+    val hitR     = iconSizePx * 0.75f
+    val sin45    = SIN45
+    val dirX     = if (onRight) -sin45 else sin45
+    val step     = iconSizePx + gapPx
+    val sideBase = bubbleSizePx / 2f + gapPx + half  // bubble edge → first diagonal icon centre
+    val bottomY  = bubbleCenterY + bubbleSizePx / 2f + gapPx + half
 
-    // Side items (MORE_DETAILS, TRANSLATE) are on a 45° diagonal from vertical,
-    // going downward toward the screen centre.
-    val sin45   = SIN45
-    val dirX    = if (onRight) -sin45 else sin45
-    val step    = iconSizePx + gapPx
-    val sideBaseDist = bubbleSizePx / 2f + gapPx + half  // bubble edge → first side icon centre
-
+    // Feature 3: all 4 slots are always visible (empty ones show a "+" placeholder).
     data class IC(val id: String, val x: Float, val y: Float)
-    val items = buildList<IC> {
-        add(IC(QuickMenuItemId.OPEN_APP, bubbleCenterX, bubbleCenterY - bubbleSizePx / 2f - half - gapPx))
-        // Custom action slots on the 45° diagonal
-        val s1Dist = sideBaseDist
-        add(IC(QuickMenuItemId.SLOT1, bubbleCenterX + dirX * s1Dist, bubbleCenterY + sin45 * s1Dist))
-        if (hasSlot2) {
-            val s2Dist = sideBaseDist + step
-            add(IC(QuickMenuItemId.SLOT2, bubbleCenterX + dirX * s2Dist, bubbleCenterY + sin45 * s2Dist))
-        }
-        // More Details and Translate on the bottom vertical line
-        val bottomY = bubbleCenterY + bubbleSizePx / 2f + gapPx + half
-        add(IC(QuickMenuItemId.MORE_DETAILS, bubbleCenterX, bottomY))
-        add(IC(QuickMenuItemId.TRANSLATE, bubbleCenterX, bottomY + iconSizePx + gapPx))
-    }
+    val items = listOf(
+        IC(QuickMenuItemId.OPEN_APP, bubbleCenterX, bubbleCenterY - bubbleSizePx / 2f - half - gapPx),
+        IC(QuickMenuItemId.SLOT1,    bubbleCenterX + dirX * sideBase,        bubbleCenterY + sin45 * sideBase),
+        IC(QuickMenuItemId.SLOT2,    bubbleCenterX,                          bottomY),
+        IC(QuickMenuItemId.SLOT3,    bubbleCenterX + dirX * (sideBase + step), bubbleCenterY + sin45 * (sideBase + step)),
+        IC(QuickMenuItemId.SLOT4,    bubbleCenterX,                          bottomY + iconSizePx + gapPx),
+    )
     return items.firstOrNull { (_, ix, iy) ->
         val dx = rawX - ix; val dy = rawY - iy
         dx * dx + dy * dy <= hitR * hitR
@@ -172,8 +164,6 @@ fun BubbleQuickAccessMenu(
     quickActions: List<QuickActionConfig>,
     hoveredItemId: String?,
     onOpenApp: () -> Unit,
-    onMoreDetails: () -> Unit,
-    onTranslate: () -> Unit,
     onCustomAction: (QuickActionConfig) -> Unit,
     onCreateAction: () -> Unit,
     onDismiss: () -> Unit,
@@ -221,118 +211,89 @@ fun BubbleQuickAccessMenu(
             onClick = onOpenApp
         )
 
-        // ── DIAGONAL: Custom action slots — 45° from bubble ───────────────
+        // ── Feature 3: 4 configurable action slots — all always visible ──────
+        // Empty slots show a "+" placeholder that opens settings to add an action.
+        // Lookup uses forSlot() which supports both new data (explicit slotIndex)
+        // and legacy data (list-position fallback).
         val sideDir: Float = if (bubbleOnRight) -SIN45 else SIN45
         val iconDp         = QUICK_MENU_ACTION_ICON_SIZE_DP.dp
         val gapDp          = QUICK_MENU_ACTION_GAP_DP.dp
         val sideBase       = bubbleSizeDp / 2 + gapDp + iconDp / 2
         val sideStep       = iconDp + gapDp
 
-        val slot1Action = quickActions.getOrNull(0)
-        val slot2Action = quickActions.getOrNull(1)
-
-        if (slot1Action != null) {
-            QuickAccessItem(
-                icon      = quickActionIconVector(slot1Action.iconKey),
-                label     = slot1Action.name,
-                labelSide = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
-                animDelay = 30,
-                visible   = visible,
-                isHovered = hoveredItemId == QuickMenuItemId.SLOT1,
-                modifier  = Modifier.offset {
-                    val cx = bubbleCenterXDp + sideBase * sideDir
-                    val cy = bubbleCenterYDp + sideBase * SIN45
-                    IntOffset(x = (cx - iconDp / 2).roundToPx(), y = (cy - iconDp / 2).roundToPx())
-                },
-                onClick = { onCustomAction(slot1Action) }
-            )
-        } else {
-            QuickAccessItem(
-                icon          = Icons.Outlined.Add,
-                label         = "Create Action",
-                labelSide     = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
-                animDelay     = 30,
-                visible       = visible,
-                isHovered     = hoveredItemId == QuickMenuItemId.SLOT1,
-                isPlaceholder = true,
-                modifier      = Modifier.offset {
-                    val cx = bubbleCenterXDp + sideBase * sideDir
-                    val cy = bubbleCenterYDp + sideBase * SIN45
-                    IntOffset(x = (cx - iconDp / 2).roundToPx(), y = (cy - iconDp / 2).roundToPx())
-                },
-                onClick = onCreateAction
-            )
-        }
-
-        if (slot1Action != null) {
-            val dist2 = sideBase + sideStep
-            if (slot2Action != null) {
-                QuickAccessItem(
-                    icon      = quickActionIconVector(slot2Action.iconKey),
-                    label     = slot2Action.name,
-                    labelSide = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
-                    animDelay = 60,
-                    visible   = visible,
-                    isHovered = hoveredItemId == QuickMenuItemId.SLOT2,
-                    modifier  = Modifier.offset {
-                        val cx = bubbleCenterXDp + dist2 * sideDir
-                        val cy = bubbleCenterYDp + dist2 * SIN45
-                        IntOffset(x = (cx - iconDp / 2).roundToPx(), y = (cy - iconDp / 2).roundToPx())
-                    },
-                    onClick = { onCustomAction(slot2Action) }
-                )
-            } else {
-                QuickAccessItem(
-                    icon          = Icons.Outlined.Add,
-                    label         = "Create Action",
-                    labelSide     = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
-                    animDelay     = 60,
-                    visible       = visible,
-                    isHovered     = hoveredItemId == QuickMenuItemId.SLOT2,
-                    isPlaceholder = true,
-                    modifier      = Modifier.offset {
-                        val cx = bubbleCenterXDp + dist2 * sideDir
-                        val cy = bubbleCenterYDp + dist2 * SIN45
-                        IntOffset(x = (cx - iconDp / 2).roundToPx(), y = (cy - iconDp / 2).roundToPx())
-                    },
-                    onClick = onCreateAction
-                )
-            }
-        }
-
-        // ── BOTTOM: More Details & Translate ──────────────────────────────
-        val bottomY = bubbleCenterYDp + bubbleSizeDp / 2 + gapDp
-
+        // SLOT1 — diagonal pos 0
+        val slot1Action = quickActions.forSlot(0)
         QuickAccessItem(
-            icon      = Icons.Outlined.FindInPage,
-            label     = "More Details",
-            labelSide = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
-            animDelay = 30,
-            visible   = visible,
-            isHovered = hoveredItemId == QuickMenuItemId.MORE_DETAILS,
-            modifier  = Modifier.offset {
-                IntOffset(
-                    x = (bubbleCenterXDp - iconDp / 2).roundToPx(),
-                    y = bottomY.roundToPx()
-                )
+            icon          = if (slot1Action != null) quickActionIconVector(slot1Action.iconKey) else Icons.Outlined.Add,
+            label         = slot1Action?.name ?: "Add Action",
+            labelSide     = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
+            animDelay     = 30,
+            visible       = visible,
+            isHovered     = hoveredItemId == QuickMenuItemId.SLOT1,
+            isPlaceholder = slot1Action == null,
+            modifier      = Modifier.offset {
+                val cx = bubbleCenterXDp + sideBase * sideDir
+                val cy = bubbleCenterYDp + sideBase * SIN45
+                IntOffset(x = (cx - iconDp / 2).roundToPx(), y = (cy - iconDp / 2).roundToPx())
             },
-            onClick = onMoreDetails
+            onClick = if (slot1Action != null) ({ onCustomAction(slot1Action) }) else onCreateAction
         )
 
+        // SLOT2 — bottom pos 0
+        val slot2Action = quickActions.forSlot(1)
         QuickAccessItem(
-            icon      = Icons.Outlined.Translate,
-            label     = "Translate",
-            labelSide = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
-            animDelay = 60,
-            visible   = visible,
-            isHovered = hoveredItemId == QuickMenuItemId.TRANSLATE,
-            modifier  = Modifier.offset {
+            icon          = if (slot2Action != null) quickActionIconVector(slot2Action.iconKey) else Icons.Outlined.Add,
+            label         = slot2Action?.name ?: "Add Action",
+            labelSide     = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
+            animDelay     = 60,
+            visible       = visible,
+            isHovered     = hoveredItemId == QuickMenuItemId.SLOT2,
+            isPlaceholder = slot2Action == null,
+            modifier      = Modifier.offset {
                 IntOffset(
                     x = (bubbleCenterXDp - iconDp / 2).roundToPx(),
-                    y = (bottomY + iconDp + gapDp).roundToPx()
+                    y = (bubbleCenterYDp + bubbleSizeDp / 2 + gapDp).roundToPx()
                 )
             },
-            onClick = onTranslate
+            onClick = if (slot2Action != null) ({ onCustomAction(slot2Action) }) else onCreateAction
+        )
+
+        // SLOT3 — diagonal pos 1
+        val slot3Action = quickActions.forSlot(2)
+        val dist3 = sideBase + sideStep
+        QuickAccessItem(
+            icon          = if (slot3Action != null) quickActionIconVector(slot3Action.iconKey) else Icons.Outlined.Add,
+            label         = slot3Action?.name ?: "Add Action",
+            labelSide     = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
+            animDelay     = 90,
+            visible       = visible,
+            isHovered     = hoveredItemId == QuickMenuItemId.SLOT3,
+            isPlaceholder = slot3Action == null,
+            modifier      = Modifier.offset {
+                val cx = bubbleCenterXDp + dist3 * sideDir
+                val cy = bubbleCenterYDp + dist3 * SIN45
+                IntOffset(x = (cx - iconDp / 2).roundToPx(), y = (cy - iconDp / 2).roundToPx())
+            },
+            onClick = if (slot3Action != null) ({ onCustomAction(slot3Action) }) else onCreateAction
+        )
+
+        // SLOT4 — bottom pos 1
+        val slot4Action = quickActions.forSlot(3)
+        QuickAccessItem(
+            icon          = if (slot4Action != null) quickActionIconVector(slot4Action.iconKey) else Icons.Outlined.Add,
+            label         = slot4Action?.name ?: "Add Action",
+            labelSide     = if (bubbleOnRight) LabelSide.LEFT else LabelSide.RIGHT,
+            animDelay     = 120,
+            visible       = visible,
+            isHovered     = hoveredItemId == QuickMenuItemId.SLOT4,
+            isPlaceholder = slot4Action == null,
+            modifier      = Modifier.offset {
+                IntOffset(
+                    x = (bubbleCenterXDp - iconDp / 2).roundToPx(),
+                    y = (bubbleCenterYDp + bubbleSizeDp / 2 + gapDp + iconDp + gapDp).roundToPx()
+                )
+            },
+            onClick = if (slot4Action != null) ({ onCustomAction(slot4Action) }) else onCreateAction
         )
     }
 }
@@ -377,6 +338,7 @@ private fun QuickAccessItem(
 
     Box(
         modifier = modifier
+            .zIndex(if (isHovered) 1f else 0f)  // draw above siblings so label isn't covered
             .size(QUICK_MENU_ACTION_ICON_SIZE_DP.dp)
             .scale(scale)
             .alpha(alpha),

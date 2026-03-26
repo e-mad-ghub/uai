@@ -17,40 +17,42 @@ import org.junit.Test
  * Screen: 1080 × 2340, bubble at top-right (800, 400), size 64.
  * Bubble centre: (832, 432).
  *
- * MORE_DETAILS and TRANSLATE are on a 45° diagonal from vertical,
- * going downward toward the screen centre. OPEN_APP, SLOT1, SLOT2
- * retain their original above/below positions.
+ * All 4 slots are always present in the hit area (empty ones show a "+" placeholder).
+ * Slot layout:
+ *   SLOT1 — diagonal-0: 45° lower-inward from bubble (closest)
+ *   SLOT2 — bottom-0:   directly below bubble (closest)
+ *   SLOT3 — diagonal-1: 45° lower-inward (farther)
+ *   SLOT4 — bottom-1:   directly below bubble (farther)
  */
 class QuickMenuHitTestTest {
 
     // ── Shared fixture ────────────────────────────────────────────────────────
 
-    private val screenW     = 1080f
-    private val bubbleSize  = 64f
-    private val iconSize    = QUICK_MENU_ACTION_ICON_SIZE_DP.toFloat()   // 44
-    private val gap         = QUICK_MENU_ACTION_GAP_DP.toFloat()         // 8
-    private val half        = iconSize / 2f                              // 22
+    private val screenW    = 1080f
+    private val bubbleSize = 64f
+    private val iconSize   = QUICK_MENU_ACTION_ICON_SIZE_DP.toFloat()   // 44
+    private val gap        = QUICK_MENU_ACTION_GAP_DP.toFloat()         // 8
+    private val half       = iconSize / 2f                              // 22
 
     // Bubble on the RIGHT side of the screen
     private val cxRight = 832f   // 800 + 64/2
     private val cyRight = 432f   // 400 + 64/2
 
     // Bubble on the LEFT side of the screen
-    private val cxLeft  = 248f   // 216 + 64/2
-    private val cyLeft  = 432f
+    private val cxLeft = 248f    // 216 + 64/2
+    private val cyLeft = 432f
 
-    // Diagonal helpers for the side items (MORE_DETAILS, TRANSLATE)
-    private val sin45      = (kotlin.math.sqrt(2.0) / 2.0).toFloat()
-    private val sideBase   = bubbleSize / 2f + gap + half  // 62
-    private val sideStep   = iconSize + gap                // 52
+    private val sin45    = (kotlin.math.sqrt(2.0) / 2.0).toFloat()
+    private val sideBase = bubbleSize / 2f + gap + half  // 62
+    private val sideStep = iconSize + gap                // 52
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private fun hitRight(x: Float, y: Float, hasSlot2: Boolean = false) =
-        hitTestQuickMenuItemPure(x, y, cxRight, cyRight, bubbleSize, iconSize, gap, screenW, hasSlot2)
+    private fun hitRight(x: Float, y: Float) =
+        hitTestQuickMenuItemPure(x, y, cxRight, cyRight, bubbleSize, iconSize, gap, screenW)
 
-    private fun hitLeft(x: Float, y: Float, hasSlot2: Boolean = false) =
-        hitTestQuickMenuItemPure(x, y, cxLeft, cyLeft, bubbleSize, iconSize, gap, screenW, hasSlot2)
+    private fun hitLeft(x: Float, y: Float) =
+        hitTestQuickMenuItemPure(x, y, cxLeft, cyLeft, bubbleSize, iconSize, gap, screenW)
 
     // ── Open App (above bubble centre) ────────────────────────────────────────
 
@@ -77,65 +79,72 @@ class QuickMenuHitTestTest {
         assertNull(hitRight(832f + 40f, 370f))
     }
 
-    // ── Slot 1 (45° diagonal, index 0) ───────────────────────────────────────
+    // ── SLOT1 (diagonal-0) ────────────────────────────────────────────────────
     // dist = sideBase = 62
     // right: cx = 832 - sin45*62 ≈ 788.2, cy = 432 + sin45*62 ≈ 475.8
 
     @Test
-    fun slot1_centerHit() {
+    fun slot1_centerHit_bubbleOnRight() {
         val cx = cxRight - sin45 * sideBase
         val cy = cyRight + sin45 * sideBase
         assertEquals(QuickMenuItemId.SLOT1, hitRight(cx, cy))
     }
 
-    // ── Slot 2 (45° diagonal, index 1) ───────────────────────────────────────
+    @Test
+    fun slot1_centerHit_bubbleOnLeft() {
+        val cx = cxLeft + sin45 * sideBase
+        val cy = cyLeft + sin45 * sideBase
+        assertEquals(QuickMenuItemId.SLOT1, hitLeft(cx, cy))
+    }
+
+    // ── SLOT2 (bottom-0) ──────────────────────────────────────────────────────
+    // bottomY = cy + bubbleSize/2 + gap + half = 432 + 32 + 8 + 22 = 494
+
+    @Test
+    fun slot2_centerHit_bubbleOnRight() {
+        val bottomY = cyRight + bubbleSize / 2f + gap + half  // 494
+        assertEquals(QuickMenuItemId.SLOT2, hitRight(cxRight, bottomY))
+    }
+
+    @Test
+    fun slot2_centerHit_bubbleOnLeft() {
+        val bottomY = cyLeft + bubbleSize / 2f + gap + half
+        assertEquals(QuickMenuItemId.SLOT2, hitLeft(cxLeft, bottomY))
+    }
+
+    // ── SLOT3 (diagonal-1) ────────────────────────────────────────────────────
     // dist = sideBase + sideStep = 114
     // right: cx = 832 - sin45*114 ≈ 751.4, cy = 432 + sin45*114 ≈ 512.6
 
     @Test
-    fun slot2_centerHit_whenHasSlot2() {
+    fun slot3_centerHit_bubbleOnRight() {
         val dist = sideBase + sideStep
         val cx = cxRight - sin45 * dist
         val cy = cyRight + sin45 * dist
-        assertEquals(QuickMenuItemId.SLOT2, hitRight(cx, cy, hasSlot2 = true))
+        assertEquals(QuickMenuItemId.SLOT3, hitRight(cx, cy))
     }
 
     @Test
-    fun slot2_notHit_whenNoSlotConfigured() {
+    fun slot3_centerHit_bubbleOnLeft() {
         val dist = sideBase + sideStep
-        val cx = cxRight - sin45 * dist
-        val cy = cyRight + sin45 * dist
-        assertNull(hitRight(cx, cy, hasSlot2 = false))
+        val cx = cxLeft + sin45 * dist
+        val cy = cyLeft + sin45 * dist
+        assertEquals(QuickMenuItemId.SLOT3, hitLeft(cx, cy))
     }
 
-    // ── More Details (bottom vertical, position 0) ────────────────────────────
-    // bottomY = cy + bubbleSize/2 + gap + half = 432 + 32 + 8 + 22 = 494
+    // ── SLOT4 (bottom-1) ──────────────────────────────────────────────────────
+    // slot4Y = bottomY + iconSize + gap = 494 + 44 + 8 = 546
 
     @Test
-    fun moreDetails_centerHit_bubbleOnRight() {
-        val bottomY = cyRight + bubbleSize / 2f + gap + half  // 494
-        assertEquals(QuickMenuItemId.MORE_DETAILS, hitRight(cxRight, bottomY))
-    }
-
-    @Test
-    fun moreDetails_centerHit_bubbleOnLeft() {
-        val bottomY = cyLeft + bubbleSize / 2f + gap + half
-        assertEquals(QuickMenuItemId.MORE_DETAILS, hitLeft(cxLeft, bottomY))
-    }
-
-    // ── Translate (bottom vertical, position 1) ───────────────────────────────
-    // translateY = bottomY + iconSize + gap = 494 + 44 + 8 = 546
-
-    @Test
-    fun translate_centerHit_bubbleOnRight() {
-        val translateY = cyRight + bubbleSize / 2f + gap + half + iconSize + gap  // 546
-        assertEquals(QuickMenuItemId.TRANSLATE, hitRight(cxRight, translateY))
+    fun slot4_centerHit_bubbleOnRight() {
+        val slot4Y = cyRight + bubbleSize / 2f + gap + half + iconSize + gap  // 546
+        assertEquals(QuickMenuItemId.SLOT4, hitRight(cxRight, slot4Y))
     }
 
     @Test
-    fun translate_centerHit_bubbleOnLeft() {
-        val translateY = cyLeft + bubbleSize / 2f + gap + half + iconSize + gap
-        assertEquals(QuickMenuItemId.TRANSLATE, hitLeft(cxLeft, translateY))
+    fun slot4_centerHit_bubbleOnLeft() {
+        val slot4Y = cyLeft + bubbleSize / 2f + gap + half + iconSize + gap
+        assertEquals(QuickMenuItemId.SLOT4, hitLeft(cxLeft, slot4Y))
     }
 
     // ── Miss ──────────────────────────────────────────────────────────────────

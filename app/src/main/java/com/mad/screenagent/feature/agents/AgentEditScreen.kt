@@ -685,7 +685,7 @@ private fun ProviderCatalogStatusNote(
         )
         provider == AiProviderType.CUSTOM && !hasBaseUrl -> Pair(
             "Waiting for endpoint",
-            "Enter a base URL for Grok, NVIDIA, or another compatible provider before ScreenAgent can load its model list."
+            "Enter a base URL for Groq, Grok, NVIDIA, or another compatible provider before ScreenAgent can load its model list."
         )
         provider == AiProviderType.CUSTOM && hasApiKey -> Pair(
             "Manual model entry",
@@ -996,6 +996,7 @@ private fun CustomProviderPresetSelector(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             listOf(
+                CustomProviderPreset.GROQ,
                 CustomProviderPreset.GROK,
                 CustomProviderPreset.NVIDIA,
                 CustomProviderPreset.MANUAL
@@ -1016,13 +1017,15 @@ private fun CustomProviderPresetSelector(
 }
 
 private fun customProviderPresetDescription(preset: CustomProviderPreset): String = when (preset) {
-    CustomProviderPreset.MANUAL -> "Use Grok, NVIDIA, or another compatible provider by entering the endpoint manually."
+    CustomProviderPreset.MANUAL -> "Use Groq, Grok, NVIDIA, or another compatible provider by entering the endpoint manually."
+    CustomProviderPreset.GROQ -> "Prefills Groq's endpoint so you can connect Groq-hosted models with your own API key."
     CustomProviderPreset.GROK -> "Prefills xAI's endpoint so you can connect Grok with your own API key."
     CustomProviderPreset.NVIDIA -> "Prefills NVIDIA's endpoint so you can bring compatible NVIDIA-hosted models into ScreenAgent."
 }
 
 private fun customProviderBaseUrlHint(preset: CustomProviderPreset): String = when (preset) {
-    CustomProviderPreset.MANUAL -> "Enter the base URL for Grok, NVIDIA, or another compatible provider."
+    CustomProviderPreset.MANUAL -> "Enter the base URL for Groq, Grok, NVIDIA, or another compatible provider."
+    CustomProviderPreset.GROQ -> "Groq's endpoint is prefilled. You can still edit it if your account uses a different route."
     CustomProviderPreset.GROK -> "xAI's endpoint is prefilled. You can still edit it if your account uses a different route."
     CustomProviderPreset.NVIDIA -> "NVIDIA's endpoint is prefilled. You can still edit it if needed."
 }

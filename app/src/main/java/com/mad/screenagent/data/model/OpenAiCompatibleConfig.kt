@@ -10,6 +10,11 @@ enum class CustomProviderPreset(
         suggestedBaseUrl = "",
         description = "Use any OpenAI-compatible endpoint."
     ),
+    GROQ(
+        displayName = "Groq",
+        suggestedBaseUrl = "https://api.groq.com/openai/v1",
+        description = "Prefills Groq's OpenAI-compatible endpoint."
+    ),
     GROK(
         displayName = "Grok",
         suggestedBaseUrl = "https://api.x.ai/v1",
@@ -48,6 +53,10 @@ fun looksLikeVisionCapableOpenAiCompatibleModel(modelId: String): Boolean {
         normalized.contains("gpt-4.1") ||
         normalized.contains("chatgpt-4o") ||
         normalized.contains("grok-vision") ||
+        normalized.contains("llama-4-scout") ||
+        normalized.contains("llama-4-maverick") ||
+        normalized.contains("3.2-11b-vision") ||
+        normalized.contains("3.2-90b-vision") ||
         normalized.contains("vision") ||
         normalized.contains("-vl") ||
         normalized.contains("gemini") ||

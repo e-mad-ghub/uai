@@ -2,6 +2,7 @@ package com.mad.screenagent.shared.streaming
 
 import android.util.Log
 import com.mad.screenagent.data.model.AgentConfig
+import com.mad.screenagent.data.model.AiProviderType
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import kotlinx.coroutines.currentCoroutineContext
@@ -25,7 +26,7 @@ class OpenAiProvider(
     private val tag = "OpenAiProvider"
 
     override fun streamResponse(messages: List<ChatMessage>, config: AgentConfig): Flow<StreamChunk> =
-        if (config.nativeWebSearchEnabled) streamResponsesApi(messages, config)
+        if (shouldUseOpenAiResponsesApi(config)) streamResponsesApi(messages, config)
         else streamChatCompletions(messages, config)
 
     // Standard Chat Completions path (/v1/chat/completions)
@@ -165,7 +166,7 @@ class OpenAiProvider(
             ?: NativeWebSearchConfig.OPENAI_DEFAULT_TOOL_TYPE
 
         val input = messages.map { msg ->
-            mapOf("role" to msg.role, "content" to msg.contentWithFileContext())
+            mapOf("role" to msg.role, "content" to responsesApiInputContent(msg))
         }
         return gson.toJson(
             buildMap {
@@ -224,5 +225,29 @@ class OpenAiProvider(
                 else -> null
             }
         } catch (e: Exception) { Log.w(tag, "Failed to parse responses API SSE line", e); null }
+    }
+}
+
+internal fun shouldUseOpenAiResponsesApi(config: AgentConfig): Boolean =
+    config.provider == AiProviderType.OPENAI && config.nativeWebSearchEnabled
+
+internal fun responsesApiInputContent(message: ChatMessage): Any {
+    val textContent = message.contentWithFileContext()
+    return if (message.images.isNotEmpty()) {
+        buildList {
+            if (textContent.isNotBlank()) {
+                add(mapOf("type" to "input_text", "text" to textContent))
+            }
+            for (img in message.images) {
+                add(
+                    mapOf(
+                        "type" to "input_image",
+                        "image_url" to "data:${img.mimeType};base64,${img.base64}"
+                    )
+                )
+            }
+        }
+    } else {
+        textContent
     }
 }

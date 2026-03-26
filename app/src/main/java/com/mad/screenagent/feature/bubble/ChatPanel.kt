@@ -65,6 +65,7 @@ import com.mad.screenagent.design.components.ProductInputHintStrip
 @Composable
 fun ChatPanel(
     messages: List<MessageEntity>,
+    conversationKey: String?,
     inputText: String,
     isLoading: Boolean,
     agentName: String,
@@ -99,10 +100,16 @@ fun ChatPanel(
     errorHintMessage: String? = null,
     onDismissError: (() -> Unit)? = null,
     loadingStatusText: String? = null,
+    // Bug Fix 1: Increment this to force-scroll to the latest message (e.g. after a quick action).
+    scrollToBottomTrigger: Int = 0,
     modifier: Modifier = Modifier
 ) {
     val configuration = LocalConfiguration.current
-    val messageListBehavior = rememberChatMessageListBehavior(messages)
+    val messageListBehavior = rememberChatMessageListBehavior(
+        messages = messages,
+        conversationKey = conversationKey,
+        scrollToBottomTrigger = scrollToBottomTrigger
+    )
     val maxMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(280.dp, 560.dp)
     var renderedScreenshotHint by remember { mutableStateOf<String?>(null) }
 

@@ -36,6 +36,7 @@ fun QuickActionsScreen(
 ) {
     val bubbleEnabled by viewModel.bubbleEnabled.collectAsStateWithLifecycle()
     val quickActions by viewModel.quickActions.collectAsStateWithLifecycle()
+    val agents by viewModel.agents.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
@@ -70,13 +71,14 @@ fun QuickActionsScreen(
             ProductScreenIntro(
                 eyebrow = "Quick Actions",
                 title = "Bubble shortcuts",
-                body = "Configure up to 2 custom actions that appear when you long-press the floating bubble. " +
-                        "Built-in actions (More Details, Translate) are always available."
+                // Feature 3: all 4 slots are configurable; no hardcoded built-ins.
+                body = "Configure up to 4 custom actions that appear when you long-press the floating bubble."
             )
 
             QuickActionsSection(
                 bubbleEnabled = bubbleEnabled,
                 quickActions = quickActions,
+                agents = agents,
                 onDisabledTap = {
                     coroutineScope.launch {
                         snackbarHostState.showSnackbar("Enable the floating bubble to configure quick actions.")

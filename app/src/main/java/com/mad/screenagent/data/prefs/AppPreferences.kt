@@ -166,7 +166,7 @@ class AppPreferences(context: Context) {
         }
     }
 
-    suspend fun getBubblePosition(isWideMode: Boolean): Pair<Int, Int>? {
+    suspend fun getBubblePositionForMode(isWideMode: Boolean): Pair<Int, Int>? {
         val prefs = store.data.first()
         val xKey = if (isWideMode) Keys.BUBBLE_POS_WIDE_X else Keys.BUBBLE_POS_PORTRAIT_X
         val yKey = if (isWideMode) Keys.BUBBLE_POS_WIDE_Y else Keys.BUBBLE_POS_PORTRAIT_Y
@@ -175,7 +175,11 @@ class AppPreferences(context: Context) {
         if (modeX != null && modeY != null) {
             return modeX to modeY
         }
+        return null
+    }
 
+    suspend fun getLegacyBubblePosition(): Pair<Int, Int>? {
+        val prefs = store.data.first()
         val legacyX = prefs[Keys.BUBBLE_POS_X]
         val legacyY = prefs[Keys.BUBBLE_POS_Y]
         return if (legacyX != null && legacyY != null) {
@@ -225,7 +229,14 @@ class AppPreferences(context: Context) {
     val quickActionsFlow: Flow<List<QuickActionConfig>> = store.data.map { prefs ->
         val json = prefs[Keys.QUICK_ACTIONS_JSON] ?: return@map emptyList()
         val type = object : com.google.gson.reflect.TypeToken<List<QuickActionConfig>>() {}.type
-        gson.fromJson(json, type) ?: emptyList()
+        val actions: List<QuickActionConfig> = gson.fromJson(json, type) ?: emptyList()
+        // Migrate legacy actions that pre-date the slotIndex field: assign their current
+        // list position as an explicit slot so deleting one never shifts the others.
+        if (actions.any { it.slotIndex == null }) {
+            actions.mapIndexed { i, a -> if (a.slotIndex == null) a.copy(slotIndex = i) else a }
+        } else {
+            actions
+        }
     }
 
     suspend fun saveQuickActions(actions: List<QuickActionConfig>) {

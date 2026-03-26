@@ -166,7 +166,7 @@ class OpenAiProvider(
             ?: NativeWebSearchConfig.OPENAI_DEFAULT_TOOL_TYPE
 
         val input = messages.map { msg ->
-            mapOf("role" to msg.role, "content" to msg.contentWithFileContext())
+            mapOf("role" to msg.role, "content" to responsesApiInputContent(msg))
         }
         return gson.toJson(
             buildMap {
@@ -230,3 +230,24 @@ class OpenAiProvider(
 
 internal fun shouldUseOpenAiResponsesApi(config: AgentConfig): Boolean =
     config.provider == AiProviderType.OPENAI && config.nativeWebSearchEnabled
+
+internal fun responsesApiInputContent(message: ChatMessage): Any {
+    val textContent = message.contentWithFileContext()
+    return if (message.images.isNotEmpty()) {
+        buildList {
+            if (textContent.isNotBlank()) {
+                add(mapOf("type" to "input_text", "text" to textContent))
+            }
+            for (img in message.images) {
+                add(
+                    mapOf(
+                        "type" to "input_image",
+                        "image_url" to "data:${img.mimeType};base64,${img.base64}"
+                    )
+                )
+            }
+        }
+    } else {
+        textContent
+    }
+}

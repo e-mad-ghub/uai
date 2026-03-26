@@ -157,6 +157,16 @@ class AgentConfigVisionTest {
     }
 
     @Test
+    fun custom_groqLlama4ScoutModel_isVisionCapable() {
+        assertTrue(
+            agent(
+                AiProviderType.CUSTOM,
+                "meta-llama/llama-4-scout-17b-16e-instruct"
+            ).supportsVision
+        )
+    }
+
+    @Test
     fun custom_unknownModel_isNotVisionCapable() {
         assertFalse(agent(AiProviderType.CUSTOM, "my-custom-text-model").supportsVision)
     }

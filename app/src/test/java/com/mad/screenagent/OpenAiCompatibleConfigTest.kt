@@ -2,6 +2,7 @@ package com.mad.screenagent
 
 import com.mad.screenagent.data.model.buildOpenAiCompatibleChatCompletionsUrl
 import com.mad.screenagent.data.model.buildOpenAiCompatibleModelsUrl
+import com.mad.screenagent.data.model.CustomProviderPreset
 import com.mad.screenagent.data.model.looksLikeVisionCapableOpenAiCompatibleModel
 import com.mad.screenagent.data.model.normalizeOpenAiCompatibleBaseUrl
 import org.junit.Assert.assertEquals
@@ -78,6 +79,14 @@ class OpenAiCompatibleConfigTest {
     }
 
     @Test
+    fun groqPreset_usesGroqOpenAiCompatibleBaseUrl() {
+        assertEquals(
+            "https://api.groq.com/openai/v1",
+            CustomProviderPreset.GROQ.suggestedBaseUrl
+        )
+    }
+
+    @Test
     fun buildChatCompletionsUrl_normalizesInputFirst() {
         // If user pasted the full URL by mistake, builder should still work
         assertEquals(
@@ -108,6 +117,20 @@ class OpenAiCompatibleConfigTest {
     @Test
     fun visionDetection_grokVision_isVision() {
         assertTrue(looksLikeVisionCapableOpenAiCompatibleModel("grok-vision-beta"))
+    }
+
+    @Test
+    fun visionDetection_groqLlama4VisionModels_areVision() {
+        assertTrue(
+            looksLikeVisionCapableOpenAiCompatibleModel(
+                "meta-llama/llama-4-scout-17b-16e-instruct"
+            )
+        )
+        assertTrue(
+            looksLikeVisionCapableOpenAiCompatibleModel(
+                "meta-llama/llama-4-maverick-17b-128e-instruct"
+            )
+        )
     }
 
     @Test

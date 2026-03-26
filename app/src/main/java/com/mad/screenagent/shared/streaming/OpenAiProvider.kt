@@ -2,6 +2,7 @@ package com.mad.screenagent.shared.streaming
 
 import android.util.Log
 import com.mad.screenagent.data.model.AgentConfig
+import com.mad.screenagent.data.model.AiProviderType
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import kotlinx.coroutines.currentCoroutineContext
@@ -25,7 +26,7 @@ class OpenAiProvider(
     private val tag = "OpenAiProvider"
 
     override fun streamResponse(messages: List<ChatMessage>, config: AgentConfig): Flow<StreamChunk> =
-        if (config.nativeWebSearchEnabled) streamResponsesApi(messages, config)
+        if (shouldUseOpenAiResponsesApi(config)) streamResponsesApi(messages, config)
         else streamChatCompletions(messages, config)
 
     // Standard Chat Completions path (/v1/chat/completions)
@@ -226,3 +227,6 @@ class OpenAiProvider(
         } catch (e: Exception) { Log.w(tag, "Failed to parse responses API SSE line", e); null }
     }
 }
+
+internal fun shouldUseOpenAiResponsesApi(config: AgentConfig): Boolean =
+    config.provider == AiProviderType.OPENAI && config.nativeWebSearchEnabled

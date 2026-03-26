@@ -266,23 +266,11 @@ class AgentEditViewModel(
     fun switchProvider(provider: AiProviderType, defaultModel: String) {
         val current = _agent.value
         if (current.provider == provider) return
-        update {
-            copy(
-                provider = provider,
-                model = defaultModel,
-                apiKey = "",
-                customPreset = if (provider == AiProviderType.CUSTOM) {
-                    CustomProviderPreset.MANUAL
-                } else {
-                    customPreset
-                },
-                customBaseUrl = if (provider == AiProviderType.CUSTOM) {
-                    customBaseUrl
-                } else {
-                    ""
-                }
-            )
-        }
+        _agent.value = current
+            .forProviderSwitch(provider = provider, defaultModel = defaultModel)
+        _connectionTestState.value = ConnectionTestState.Idle
+        updateCurrentProviderModels(provider)
+        scheduleCurrentProviderModelRefresh(force = true)
     }
 
     fun applyCustomPreset(preset: CustomProviderPreset) {
@@ -659,9 +647,40 @@ private fun generateDuplicateName(sourceName: String, agents: List<AgentConfig>)
     }
 }
 
-private fun AgentConfig.normalizedForSave(): AgentConfig = copy(
-    name = name.trim(),
-    apiKey = apiKey.trim(),
-    model = model.trim(),
-    customBaseUrl = normalizeOpenAiCompatibleBaseUrl(customBaseUrl)
+internal fun supportsNativeWebSearch(provider: AiProviderType): Boolean =
+    provider == AiProviderType.OPENAI || provider == AiProviderType.ANTHROPIC
+
+internal fun AgentConfig.forProviderSwitch(
+    provider: AiProviderType,
+    defaultModel: String
+): AgentConfig = copy(
+    provider = provider,
+    model = defaultModel,
+    apiKey = "",
+    customPreset = if (provider == AiProviderType.CUSTOM) {
+        CustomProviderPreset.MANUAL
+    } else {
+        customPreset
+    },
+    customBaseUrl = if (provider == AiProviderType.CUSTOM) {
+        customBaseUrl
+    } else {
+        ""
+    },
+    nativeWebSearchEnabled = false,
+    nativeWebSearchToolType = null
 )
+
+private fun AgentConfig.normalizedForSave(): AgentConfig {
+    val sanitizedToolType = nativeWebSearchToolType
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+    return copy(
+        name = name.trim(),
+        apiKey = apiKey.trim(),
+        model = model.trim(),
+        customBaseUrl = normalizeOpenAiCompatibleBaseUrl(customBaseUrl),
+        nativeWebSearchEnabled = nativeWebSearchEnabled && supportsNativeWebSearch(provider),
+        nativeWebSearchToolType = if (supportsNativeWebSearch(provider)) sanitizedToolType else null
+    )
+}

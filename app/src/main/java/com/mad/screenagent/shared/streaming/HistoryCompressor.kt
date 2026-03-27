@@ -2,6 +2,9 @@ package com.mad.screenagent.shared.streaming
 
 /**
  * Compresses conversation history to avoid overloading model context windows.
+ * Attachment payloads are only retained on the current user turn. Older image/file/document
+ * payloads are stripped before tiering so follow-up turns do not keep resending the full
+ * attachment context and inflating prompt tokens.
  *
  * Three tiers (oldest → newest):
  *
@@ -21,8 +24,10 @@ fun compressHistory(
 ): List<ChatMessage> {
     if (messages.isEmpty()) return messages
 
-    val recentMessages = messages.takeLast(maxRecentMessages)
-    val afterRecent = messages.dropLast(maxRecentMessages)
+    val normalizedMessages = retainCurrentTurnAttachmentsOnly(messages)
+
+    val recentMessages = normalizedMessages.takeLast(maxRecentMessages)
+    val afterRecent = normalizedMessages.dropLast(maxRecentMessages)
 
     val midMessages = afterRecent.takeLast(maxMidMessages).map { msg ->
         msg.copy(images = emptyList(), fileAttachment = null, documentBase64 = null)
@@ -41,4 +46,20 @@ fun compressHistory(
     }
 
     return olderMessages + midMessages + recentMessages
+}
+
+private fun ChatMessage.withoutAttachmentContext(): ChatMessage =
+    copy(images = emptyList(), fileAttachment = null, documentBase64 = null)
+
+internal fun retainCurrentTurnAttachmentsOnly(messages: List<ChatMessage>): List<ChatMessage> {
+    if (messages.isEmpty()) return messages
+
+    val lastUserIndex = messages.indexOfLast { it.role == "user" }
+    val keepAttachmentsIndex = lastUserIndex.takeIf { index ->
+        index >= 0 && messages[index].hasDirectAttachmentContext()
+    }
+
+    return messages.mapIndexed { index, message ->
+        if (index == keepAttachmentsIndex) message else message.withoutAttachmentContext()
+    }
 }

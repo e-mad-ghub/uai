@@ -76,6 +76,7 @@ import com.mad.screenagent.data.model.AppColorTheme
 import com.mad.screenagent.ui.MediaPickerActivity
 import com.mad.screenagent.ui.OverlayScreenCaptureActivity
 import com.mad.screenagent.ui.OverlayScreenCaptureOutcome
+import com.mad.screenagent.shared.chatui.dedupeMessagesByIdKeepingLatest
 import com.mad.screenagent.shared.chatui.formatTokenCount
 import com.mad.screenagent.shared.attachment.persistImageAttachment
 import com.mad.screenagent.shared.attachment.FileAttachmentImportResult
@@ -419,6 +420,38 @@ class FloatingBubbleService : Service() {
         return fallbackAgentForCurrentContext()
     }
 
+    private fun replaceChatMessages(messages: List<MessageEntity>) {
+        chatMessages.clear()
+        chatMessages.addAll(dedupeMessagesByIdKeepingLatest(messages))
+    }
+
+    private fun upsertChatMessage(message: MessageEntity) {
+        val existingIndex = chatMessages.indexOfLast { it.id == message.id }
+        if (existingIndex >= 0) {
+            chatMessages[existingIndex] = message
+            for (index in chatMessages.lastIndex downTo 0) {
+                if (index != existingIndex && chatMessages[index].id == message.id) {
+                    chatMessages.removeAt(index)
+                }
+            }
+        } else {
+            chatMessages.add(message)
+        }
+    }
+
+    private fun applyCurrentConversationAgentSelectionLocally(agent: AgentConfig) {
+        val conversationId = currentConversationId ?: run {
+            draftAgentId = agent.id
+            return
+        }
+        allConversations = updateConversationAgentSelection(
+            conversations = allConversations,
+            conversationId = conversationId,
+            agent = agent
+        )
+        availableConversations = conversationsForOverlay()
+    }
+
     private fun queueOrShowAssistantRepairToast(conversationId: String, message: String) {
         val pendingToast = PendingAssistantRepairToast(conversationId, message)
         if (isChatPanelToastVisible() && currentConversationId == conversationId) {
@@ -563,8 +596,7 @@ class FloatingBubbleService : Service() {
         currentConversationMessagesJob = container.conversationRepository
             .getMessages(conversationId)
             .onEach { messages ->
-                chatMessages.clear()
-                chatMessages.addAll(messages)
+                replaceChatMessages(messages)
             }
             .catch {
                 currentConversationId = null
@@ -1120,8 +1152,8 @@ class FloatingBubbleService : Service() {
                     } ?: 0L
                     val bubbleTokenInfo = bubbleAgent?.let { a ->
                         when {
-                            a.tokenLimit != null -> "(${formatTokenCount(bubbleEffectiveUsed)}/${formatTokenCount(a.tokenLimit)})"
-                            bubbleEffectiveUsed > 0L -> "(${formatTokenCount(bubbleEffectiveUsed)} tokens)"
+                            a.tokenLimit != null -> "(${formatTokenCount(bubbleEffectiveUsed)}/${formatTokenCount(a.tokenLimit)} total)"
+                            bubbleEffectiveUsed > 0L -> "(${formatTokenCount(bubbleEffectiveUsed)} total)"
                             else -> null
                         }
                     }
@@ -1155,6 +1187,7 @@ class FloatingBubbleService : Service() {
                         onMinimize = ::dismissChatPanelAnimated,
                         onOpenInApp = ::openInApp,
                         onAgentSelect = { agent ->
+                            applyCurrentConversationAgentSelectionLocally(agent)
                             serviceScope.launch {
                                 val conversation = currentConversationEntity()
                                 if (conversation != null) {
@@ -1164,8 +1197,6 @@ class FloatingBubbleService : Service() {
                                             agentName = agent.name
                                         )
                                     )
-                                } else {
-                                    draftAgentId = agent.id
                                 }
                             }
                         },
@@ -1969,7 +2000,7 @@ class FloatingBubbleService : Service() {
                             createdAt = System.currentTimeMillis()
                         )
                         container.conversationRepository.insertMessage(limitMsg)
-                        chatMessages.add(limitMsg)
+                        upsertChatMessage(limitMsg)
                     }
                 }
                 return
@@ -1980,12 +2011,11 @@ class FloatingBubbleService : Service() {
         clearAttachment()
 
         val container = (application as UaiApplication).container
+        isLoading = true
+        inputText = ""
+        miniChatErrorMessage = null
 
         streamingJob = serviceScope.launch {
-            isLoading = true
-            inputText = ""
-            miniChatErrorMessage = null
-
             var convId: String? = null
             var assistantId: String? = null
             var accumulated = ""
@@ -2035,7 +2065,7 @@ class FloatingBubbleService : Service() {
                     attachedFileText = attachedFile?.extractedText
                 )
                 container.conversationRepository.insertMessage(userMsg)
-                chatMessages.add(userMsg)
+                upsertChatMessage(userMsg)
                 // Store in-memory thumbnails so the message bubble can display them
                 val thumbs = imageList.mapNotNull { it.second }
                 if (thumbs.isNotEmpty()) messageThumbnails[userMsg.id] = thumbs
@@ -2053,7 +2083,7 @@ class FloatingBubbleService : Service() {
                     agentName = agent.name
                 )
                 container.conversationRepository.insertMessage(assistantMsg)
-                chatMessages.add(assistantMsg)
+                upsertChatMessage(assistantMsg)
                 if (forceScrollToLatest) {
                     chatScrollToBottomTrigger++
                 }
@@ -2605,6 +2635,23 @@ class FloatingBubbleService : Service() {
 
         fun stopService(context: android.content.Context) {
             context.stopService(Intent(context, FloatingBubbleService::class.java))
+        }
+    }
+}
+
+internal fun updateConversationAgentSelection(
+    conversations: List<ConversationEntity>,
+    conversationId: String,
+    agent: AgentConfig
+): List<ConversationEntity> {
+    return conversations.map { conversation ->
+        if (!conversation.isAgora && conversation.id == conversationId) {
+            conversation.copy(
+                agentId = agent.id,
+                agentName = agent.name
+            )
+        } else {
+            conversation
         }
     }
 }

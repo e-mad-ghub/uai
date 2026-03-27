@@ -50,13 +50,29 @@ class OpenAiProvider(
                     emit(StreamChunk.Error(Exception("Empty response body")))
                     return@use
                 }
+                var usageTotals: OpenAiUsageTotals? = null
+                var completed = false
                 while (!source.exhausted()) {
                     currentCoroutineContext().ensureActive()
                     val line = source.readUtf8Line() ?: break
-                    parseChatCompletionsLine(line)?.let { emit(it) }
-                    if (line == "data: [DONE]") break
+                    parseChatCompletionsUsage(line)?.let { usage ->
+                        usageTotals = usageTotals?.mergeWith(usage) ?: usage
+                    }
+                    when (val chunk = parseChatCompletionsLine(line)) {
+                        is StreamChunk.Token -> emit(chunk)
+                        StreamChunk.Done -> {
+                            usageTotals?.toStreamChunk()?.let { emit(it) }
+                            emit(StreamChunk.Done)
+                            completed = true
+                            return@use
+                        }
+                        else -> Unit
+                    }
                 }
-                emit(StreamChunk.Done)
+                if (!completed) {
+                    usageTotals?.toStreamChunk()?.let { emit(it) }
+                    emit(StreamChunk.Done)
+                }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             call.cancel()
@@ -87,6 +103,8 @@ class OpenAiProvider(
                     emit(StreamChunk.Error(Exception("Empty response body")))
                     return@use
                 }
+                var usageTotals: OpenAiUsageTotals? = null
+                var completed = false
                 while (!source.exhausted()) {
                     currentCoroutineContext().ensureActive()
                     val line = source.readUtf8Line() ?: break
@@ -96,13 +114,12 @@ class OpenAiProvider(
                         try {
                             val obj = gson.fromJson(data, JsonObject::class.java)
                             if (obj?.get("type")?.asString == "response.completed") {
-                                val usageObj = obj.getAsJsonObject("response")?.getAsJsonObject("usage")
-                                if (usageObj != null) {
-                                    val input = usageObj.get("input_tokens")?.asInt ?: 0
-                                    val output = usageObj.get("output_tokens")?.asInt ?: 0
-                                    if (input > 0 || output > 0) emit(StreamChunk.Usage(input, output))
+                                parseResponsesApiUsage(line)?.let { usage ->
+                                    usageTotals = usageTotals?.mergeWith(usage) ?: usage
                                 }
+                                usageTotals?.toStreamChunk()?.let { emit(it) }
                                 emit(StreamChunk.Done)
+                                completed = true
                                 return@use
                             }
                         } catch (e: Exception) { Log.w(tag, "Failed to parse response.completed event", e) }
@@ -112,7 +129,10 @@ class OpenAiProvider(
                         if (chunk == StreamChunk.Done) return@use
                     }
                 }
-                emit(StreamChunk.Done)
+                if (!completed) {
+                    usageTotals?.toStreamChunk()?.let { emit(it) }
+                    emit(StreamChunk.Done)
+                }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             call.cancel()
@@ -187,13 +207,6 @@ class OpenAiProvider(
         if (data == "[DONE]") return StreamChunk.Done
         return try {
             val json = gson.fromJson(data, JsonObject::class.java)
-            // Usage chunk: choices is empty, usage field is present
-            val usageObj = json?.getAsJsonObject("usage")
-            if (usageObj != null) {
-                val input = usageObj.get("prompt_tokens")?.asInt ?: 0
-                val output = usageObj.get("completion_tokens")?.asInt ?: 0
-                if (input > 0 || output > 0) return StreamChunk.Usage(input, output)
-            }
             val content = json
                 ?.getAsJsonArray("choices")
                 ?.get(0)?.asJsonObject
@@ -225,6 +238,61 @@ class OpenAiProvider(
                 else -> null
             }
         } catch (e: Exception) { Log.w(tag, "Failed to parse responses API SSE line", e); null }
+    }
+}
+
+internal data class OpenAiUsageTotals(
+    val inputTokens: Int = 0,
+    val outputTokens: Int = 0
+) {
+    fun mergeWith(other: OpenAiUsageTotals?): OpenAiUsageTotals {
+        if (other == null) return this
+        return OpenAiUsageTotals(
+            inputTokens = maxOf(inputTokens, other.inputTokens),
+            outputTokens = maxOf(outputTokens, other.outputTokens)
+        )
+    }
+
+    fun toStreamChunk(): StreamChunk.Usage? =
+        if (inputTokens > 0 || outputTokens > 0) {
+            StreamChunk.Usage(inputTokens, outputTokens)
+        } else {
+            null
+        }
+}
+
+internal fun parseChatCompletionsUsage(line: String): OpenAiUsageTotals? {
+    if (!line.startsWith("data: ")) return null
+    val data = line.removePrefix("data: ").trim()
+    if (data == "[DONE]" || data.isBlank()) return null
+    return try {
+        val json = Gson().fromJson(data, JsonObject::class.java)
+        val usageObj = json?.getAsJsonObject("usage") ?: return null
+        OpenAiUsageTotals(
+            inputTokens = usageObj.get("prompt_tokens")?.asInt ?: 0,
+            outputTokens = usageObj.get("completion_tokens")?.asInt ?: 0
+        )
+    } catch (_: Exception) {
+        null
+    }
+}
+
+internal fun parseResponsesApiUsage(line: String): OpenAiUsageTotals? {
+    if (!line.startsWith("data: ")) return null
+    val data = line.removePrefix("data: ").trim()
+    if (data.isBlank()) return null
+    return try {
+        val obj = Gson().fromJson(data, JsonObject::class.java) ?: return null
+        if (obj.get("type")?.asString != "response.completed") return null
+        val usageObj = obj.getAsJsonObject("response")
+            ?.getAsJsonObject("usage")
+            ?: return null
+        OpenAiUsageTotals(
+            inputTokens = usageObj.get("input_tokens")?.asInt ?: 0,
+            outputTokens = usageObj.get("output_tokens")?.asInt ?: 0
+        )
+    } catch (_: Exception) {
+        null
     }
 }
 

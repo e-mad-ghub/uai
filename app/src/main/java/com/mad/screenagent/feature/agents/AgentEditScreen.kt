@@ -535,7 +535,7 @@ fun AgentEditScreen(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            "Used this month: ${formatTokenCount(effectiveUsed)} tokens",
+                                            "Used this month: ${formatTokenCount(effectiveUsed)} total tokens",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )

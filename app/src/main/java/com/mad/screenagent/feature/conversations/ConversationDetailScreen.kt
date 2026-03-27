@@ -287,8 +287,8 @@ fun ConversationDetailScreen(
                         val actionTokenText = activeAgent?.let { agent ->
                             val effectiveUsed = if (agent.tokenUsedMonth == actionMonth) agent.tokenUsed else 0L
                             when {
-                                agent.tokenLimit != null -> "(${formatTokenCount(effectiveUsed)}/${formatTokenCount(agent.tokenLimit)})"
-                                effectiveUsed > 0L -> "(${formatTokenCount(effectiveUsed)} tokens)"
+                                agent.tokenLimit != null -> "(${formatTokenCount(effectiveUsed)}/${formatTokenCount(agent.tokenLimit)} total)"
+                                effectiveUsed > 0L -> "(${formatTokenCount(effectiveUsed)} total)"
                                 else -> null
                             }
                         }
@@ -315,8 +315,8 @@ fun ConversationDetailScreen(
                                 agents.forEach { agent ->
                                     val dropdownUsed = if (agent.tokenUsedMonth == dropdownMonth) agent.tokenUsed else 0L
                                     val dropdownTokenText = when {
-                                        agent.tokenLimit != null -> "(${formatTokenCount(dropdownUsed)}/${formatTokenCount(agent.tokenLimit)})"
-                                        dropdownUsed > 0L -> "(${formatTokenCount(dropdownUsed)} tokens)"
+                                        agent.tokenLimit != null -> "(${formatTokenCount(dropdownUsed)}/${formatTokenCount(agent.tokenLimit)} total)"
+                                        dropdownUsed > 0L -> "(${formatTokenCount(dropdownUsed)} total)"
                                         else -> null
                                     }
                                     val dropdownTokenColor = when {

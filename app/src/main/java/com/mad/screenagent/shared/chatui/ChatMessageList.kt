@@ -40,6 +40,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.mad.screenagent.data.db.MessageEntity
 
+internal fun dedupeMessagesByIdKeepingLatest(messages: List<MessageEntity>): List<MessageEntity> =
+    messages.asReversed().distinctBy { it.id }.asReversed()
+
 private suspend fun LazyListState.scrollToConversationEnd() {
     scroll {
         while (scrollBy(10_000f) > 0f) {
@@ -76,6 +79,9 @@ fun rememberChatMessageListBehavior(
     // whether the user had previously scrolled up.
     scrollToBottomTrigger: Int = 0,
 ): ChatMessageListBehavior {
+    val stableMessages = remember(messages) {
+        dedupeMessagesByIdKeepingLatest(messages)
+    }
     val listState = rememberSaveable(conversationKey, saver = LazyListState.Saver) {
         LazyListState()
     }
@@ -99,8 +105,8 @@ fun rememberChatMessageListBehavior(
         }
     }
 
-    val latestMessage = messages.lastOrNull()
-    val latestMessages by rememberUpdatedState(messages)
+    val latestMessage = stableMessages.lastOrNull()
+    val latestMessages by rememberUpdatedState(stableMessages)
 
     LaunchedEffect(isAtBottom, listState.isScrollInProgress) {
         if (isAtBottom && !listState.isScrollInProgress) {
@@ -162,7 +168,7 @@ fun rememberChatMessageListBehavior(
 
     val latestAutoScrollEnabled by rememberUpdatedState(autoScrollEnabled)
     val latestIsAtBottom by rememberUpdatedState(isAtBottom)
-    val hasMessages by rememberUpdatedState(messages.isNotEmpty())
+    val hasMessages by rememberUpdatedState(stableMessages.isNotEmpty())
     LaunchedEffect(listState) {
         snapshotFlow {
             ChatListLayoutSnapshot(
@@ -222,13 +228,16 @@ fun ChatMessageList(
     overlayContent: (@Composable BoxScope.(isAtBottom: Boolean) -> Unit)? = null,
     replyActionForMessage: (MessageEntity) -> (() -> Unit)? = { null }
 ) {
+    val renderedMessages = remember(messages) {
+        dedupeMessagesByIdKeepingLatest(messages)
+    }
     // Used only for the bottom spinner row (single instance, shared status is fine there).
     val bottomSpinnerStatusText = rememberLoadingStatusLabel(
         isLoading = isLoading,
         baseStatusText = loadingStatusText
     )
-    val showAssistantNames = remember(messages) {
-        messages
+    val showAssistantNames = remember(renderedMessages) {
+        renderedMessages
             .asSequence()
             .filter { it.role == "assistant" }
             .map { it.agentName }
@@ -257,12 +266,12 @@ fun ChatMessageList(
             contentPadding = contentPadding,
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(verticalSpacing)
         ) {
-            if (messages.isEmpty() && emptyContent != null) {
+            if (renderedMessages.isEmpty() && emptyContent != null) {
                 item(contentType = "empty") { emptyContent() }
             }
 
             items(
-                items = messages,
+                items = renderedMessages,
                 key = { it.id },
                 contentType = { it.role }
             ) { message ->
@@ -282,7 +291,7 @@ fun ChatMessageList(
                 )
             }
 
-            if (isLoading && messages.lastOrNull()?.isStreaming != true) {
+            if (isLoading && renderedMessages.lastOrNull()?.isStreaming != true) {
                 item(contentType = "loading") {
                     Row(
                         modifier = Modifier.fillMaxWidth(),

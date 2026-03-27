@@ -372,9 +372,9 @@ private fun AgentItem(
                     val tokenLimit = agent.tokenLimit
                     if (tokenLimit != null || effectiveUsed > 0L) {
                         val usageText = if (tokenLimit != null) {
-                            "(${formatTokenCount(effectiveUsed)}/${formatTokenCount(tokenLimit)})"
+                            "(${formatTokenCount(effectiveUsed)}/${formatTokenCount(tokenLimit)} total)"
                         } else {
-                            "(${formatTokenCount(effectiveUsed)} tokens used)"
+                            "(${formatTokenCount(effectiveUsed)} total tokens)"
                         }
                         val usageColor = when {
                             tokenLimit != null && effectiveUsed >= tokenLimit * 0.85 -> Color(0xFFD32F2F)

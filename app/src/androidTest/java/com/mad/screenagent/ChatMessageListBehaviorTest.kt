@@ -13,12 +13,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.mad.screenagent.data.db.MessageEntity
 import com.mad.screenagent.shared.chatui.ChatMessageList
 import com.mad.screenagent.shared.chatui.rememberChatMessageListBehavior
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -148,6 +150,55 @@ class ChatMessageListBehaviorTest {
         }
 
         composeRule.waitUntil(timeoutMillis = 5_000L) { listState?.canScrollForward == false }
+    }
+
+    @Test
+    fun duplicateMessageIds_renderOnlyLatestCopy() {
+        val messages = mutableStateOf(
+            listOf(
+                MessageEntity(
+                    id = "dup-message",
+                    conversationId = "conversation-a",
+                    role = "user",
+                    content = "Old copy",
+                    createdAt = 1L
+                ),
+                MessageEntity(
+                    id = "dup-message",
+                    conversationId = "conversation-a",
+                    role = "user",
+                    content = "Latest copy",
+                    createdAt = 2L
+                ),
+                MessageEntity(
+                    id = "assistant-1",
+                    conversationId = "conversation-a",
+                    role = "assistant",
+                    content = "Assistant reply",
+                    createdAt = 3L
+                )
+            )
+        )
+
+        composeRule.setContent {
+            val behavior = rememberChatMessageListBehavior(
+                messages = messages.value,
+                conversationKey = "conversation-a"
+            )
+            MaterialTheme {
+                ChatMessageList(
+                    messages = messages.value,
+                    isLoading = false,
+                    behavior = behavior,
+                    modifier = Modifier.height(240.dp),
+                    messageThumbnails = emptyMap<String, List<ImageBitmap>>()
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        assertEquals(1, composeRule.onAllNodesWithText("Latest copy").fetchSemanticsNodes().size)
+        assertEquals(0, composeRule.onAllNodesWithText("Old copy").fetchSemanticsNodes().size)
     }
 
     private fun buildMessages(conversationId: String, count: Int): List<MessageEntity> {

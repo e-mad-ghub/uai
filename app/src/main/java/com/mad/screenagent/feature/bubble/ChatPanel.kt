@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.window.PopupProperties
 import com.mad.screenagent.design.components.BrandMarkIcon
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -182,7 +183,8 @@ fun ChatPanel(
                             }
                             DropdownMenu(
                                 expanded = conversationDropdownExpanded,
-                                onDismissRequest = { conversationDropdownExpanded = false }
+                                onDismissRequest = { conversationDropdownExpanded = false },
+                                properties = PopupProperties(focusable = false)
                             ) {
                                 conversations.forEach { conversation ->
                                     DropdownMenuItem(
@@ -255,7 +257,8 @@ fun ChatPanel(
                             } // end Column
                             DropdownMenu(
                                 expanded = agentDropdownExpanded,
-                                onDismissRequest = { agentDropdownExpanded = false }
+                                onDismissRequest = { agentDropdownExpanded = false },
+                                properties = PopupProperties(focusable = false)
                             ) {
                                 agents.forEach { agent ->
                                     DropdownMenuItem(
@@ -441,6 +444,7 @@ fun ChatPanel(
                             replyToMessage = null
                         },
                         disableScreenshotRipple = true,
+                        dropdownMenuFocusable = false,
                         sendEnabled = (inputText.isNotBlank() || hasAttachment) && hasSelectedAgent
                     ) {
                         val placeholder = when {
@@ -533,7 +537,8 @@ fun ChatPanel(
         // Anchored to the top of the panel (offset to sit just below the header).
         DropdownMenu(
             expanded = textToolbar.showMenu,
-            onDismissRequest = { textToolbar.hide() }
+            onDismissRequest = { textToolbar.hide() },
+            properties = PopupProperties(focusable = false)
         ) {
             textToolbar.copyAction?.let { copy ->
                 DropdownMenuItem(

@@ -78,6 +78,7 @@ class OpenAiProvider(
             call.cancel()
             throw e
         } catch (e: Exception) {
+            rethrowIfProviderFlowControl(e)
             emit(StreamChunk.Error(e))
         }
     }.flowOn(Dispatchers.IO)
@@ -138,6 +139,7 @@ class OpenAiProvider(
             call.cancel()
             throw e
         } catch (e: Exception) {
+            rethrowIfProviderFlowControl(e)
             emit(StreamChunk.Error(e))
         }
     }.flowOn(Dispatchers.IO)

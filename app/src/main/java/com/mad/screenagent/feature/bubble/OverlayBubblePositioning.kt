@@ -146,6 +146,25 @@ internal fun restoreSavedOverlayBubblePosition(
 }
 
 /**
+ * Resolves the bubble position when the overlay is being re-shown after a temporary detach.
+ * Prefer the remembered per-layout position over the current window params, because overlay
+ * recreation paths can briefly carry stale default coordinates such as the top-left origin.
+ */
+internal fun resolveOverlayBubbleResumePosition(
+    cachedPosition: Pair<Int, Int>?,
+    currentX: Int,
+    currentY: Int,
+    bounds: OverlayBubbleBounds
+): Pair<Int, Int> {
+    val resumeSource = cachedPosition ?: (currentX to currentY)
+    return restoreSavedOverlayBubblePosition(
+        x = resumeSource.first,
+        y = resumeSource.second,
+        bounds = bounds
+    )
+}
+
+/**
  * Projects a legacy single-layout save into the current mode. Older builds only stored one x/y
  * pair, so a previously right-snapped portrait bubble would otherwise land mid-screen in wide.
  * Treat any positive legacy x as a right-edge position.

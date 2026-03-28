@@ -103,6 +103,7 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
             call.cancel()
             throw e
         } catch (e: Exception) {
+            rethrowIfProviderFlowControl(e)
             emit(StreamChunk.Error(e))
         }
     }.flowOn(Dispatchers.IO)

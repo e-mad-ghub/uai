@@ -114,6 +114,38 @@ class WebGateway(
     private val sessionStore: ConversationContextStore = ConversationContextStore(),
     private val planner: WebTurnPlanner = WebTurnPlanner()
 ) {
+    private data class HeuristicResolution(
+        val previousSession: ConversationWorkingState?,
+        val plannedTurn: PlannedWebTurn
+    )
+
+    private suspend fun resolveHeuristicTurn(
+        conversationKey: String?,
+        messages: List<ChatMessage>
+    ): HeuristicResolution {
+        val previousSession = sessionStore.get(conversationKey)
+        return HeuristicResolution(
+            previousSession = previousSession,
+            plannedTurn = planner.planResolved(
+                conversationKey = conversationKey,
+                messages = messages,
+                sessionState = previousSession
+            )
+        )
+    }
+
+    suspend fun shouldPrepareTurn(
+        conversationKey: String?,
+        messages: List<ChatMessage>
+    ): Boolean {
+        val heuristic = resolveHeuristicTurn(
+            conversationKey = conversationKey,
+            messages = messages
+        )
+        val plan = heuristic.plannedTurn.plan
+        logGateway("precheck mode=${plan.mode} queries=${plan.queries.joinToString("|")}")
+        return plan.mode != WebTurnMode.NONE
+    }
 
     private fun inferIntentFromQueries(queries: List<String>): ConversationIntent {
         if (queries.isEmpty()) return ConversationIntent.NONE
@@ -174,12 +206,12 @@ class WebGateway(
         planningConfig: AgentConfig? = null,
         onStatusChanged: (String?) -> Unit = {}
     ): PreparedWebTurn {
-        val previousSession = sessionStore.get(conversationKey)
-        val heuristicTurn = planner.planResolved(
+        val heuristic = resolveHeuristicTurn(
             conversationKey = conversationKey,
-            messages = messages,
-            sessionState = previousSession
+            messages = messages
         )
+        val previousSession = heuristic.previousSession
+        val heuristicTurn = heuristic.plannedTurn
         logGateway("heuristic mode=${heuristicTurn.plan.mode} queries=${heuristicTurn.plan.queries.joinToString("|")}")
         val plannedSearches = if (planningConfig != null) {
             searchPlanningService?.planSearches(

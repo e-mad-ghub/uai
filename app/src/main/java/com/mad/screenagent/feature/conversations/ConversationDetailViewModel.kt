@@ -385,6 +385,24 @@ class ConversationDetailViewModel(
                 }
 
                 if (agent.hasInternetAccess) {
+                    val shouldPrepareWebTurn = webGateway.shouldPrepareTurn(
+                        conversationKey = conversationId,
+                        messages = history
+                    )
+
+                    if (!shouldPrepareWebTurn) {
+                        assistantRuntime
+                            .streamResponse(
+                                conversationKey = conversationId,
+                                messages = history,
+                                config = agent,
+                                onStatusChanged = { status -> _onlineSearchStatus.value = status }
+                            )
+                            .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
+                            .collect { chunk -> processChunk(chunk) }
+                        return@launch
+                    }
+
                     // Internet Service ON:
                     // Run web-search planning and the speculative main AI call concurrently.
                     // The speculative call uses the ungrounded history and buffers every chunk it

@@ -6,6 +6,7 @@ import com.mad.screenagent.feature.bubble.calculateOverlayBubbleBounds
 import com.mad.screenagent.feature.bubble.clampOverlayBubblePosition
 import com.mad.screenagent.feature.bubble.defaultOverlayBubblePosition
 import com.mad.screenagent.feature.bubble.projectLegacyOverlayBubblePosition
+import com.mad.screenagent.feature.bubble.resolveOverlayBubbleResumePosition
 import com.mad.screenagent.feature.bubble.restoreSavedOverlayBubblePosition
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -218,5 +219,25 @@ class OverlayBubblePositioningTest {
         )
 
         assertEquals(bounds.minX to 420, projected)
+    }
+
+    @Test
+    fun resumeBubblePosition_prefersCachedPositionOverStaleTopLeftWindowParams() {
+        val bounds = calculateOverlayBubbleBounds(
+            screenWidth = 1080,
+            screenHeight = 2094,
+            realHeight = 2160,
+            statusBarHeight = 96,
+            bubbleSize = 176
+        )
+
+        val resumed = resolveOverlayBubbleResumePosition(
+            cachedPosition = bounds.maxX to 640,
+            currentX = 0,
+            currentY = 0,
+            bounds = bounds
+        )
+
+        assertEquals(bounds.maxX to 640, resumed)
     }
 }

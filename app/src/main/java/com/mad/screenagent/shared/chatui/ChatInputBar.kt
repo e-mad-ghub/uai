@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.PopupProperties
 import com.mad.screenagent.data.db.MessageEntity
 
 /**
@@ -59,6 +60,7 @@ fun ChatInputBar(
     onStop: () -> Unit,
     onSend: () -> Unit,
     disableScreenshotRipple: Boolean = false,
+    dropdownMenuFocusable: Boolean = true,
     sendEnabled: Boolean = true,
     modifier: Modifier = Modifier,
     textFieldContent: @Composable RowScope.() -> Unit
@@ -262,7 +264,8 @@ fun ChatInputBar(
                     }
                     DropdownMenu(
                         expanded = attachMenuExpanded,
-                        onDismissRequest = { attachMenuExpanded = false }
+                        onDismissRequest = { attachMenuExpanded = false },
+                        properties = PopupProperties(focusable = dropdownMenuFocusable)
                     ) {
                         DropdownMenuItem(
                             text = { Text("Camera") },

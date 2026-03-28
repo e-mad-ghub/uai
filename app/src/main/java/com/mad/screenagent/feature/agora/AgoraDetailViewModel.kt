@@ -372,7 +372,12 @@ class AgoraDetailViewModel(
                                 message
                             }
                         }
-                        val groundedHistory = if (isSideAgentManagedOpenRouterFreeRoute(agent.model)) {
+                        val shouldPrepareWebTurn = isSideAgentManagedOpenRouterFreeRoute(agent.model) &&
+                            webGateway.shouldPrepareTurn(
+                                conversationKey = conversationId,
+                                messages = groundingSeedHistory
+                            )
+                        val groundedHistory = if (shouldPrepareWebTurn) {
                             webGateway.prepareTurn(
                                 conversationKey = conversationId,
                                 messages = groundingSeedHistory,

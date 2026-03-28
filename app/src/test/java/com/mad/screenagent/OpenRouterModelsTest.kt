@@ -79,6 +79,26 @@ class OpenRouterModelsTest {
     }
 
     @Test
+    fun preferredBestFreeModel_nowPrioritizesLowerLatencyGeneralFreeModels() {
+        val selected = preferredOpenRouterFastFreeModel(
+            fetchedOpenRouterModels = listOf(
+                "openai/gpt-oss-120b:free",
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "stepfun/step-3.5-flash:free",
+                "google/gemma-3-12b-it:free"
+            ),
+            freeModelIds = setOf(
+                "openai/gpt-oss-120b:free",
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "stepfun/step-3.5-flash:free",
+                "google/gemma-3-12b-it:free"
+            )
+        )
+
+        assertEquals("stepfun/step-3.5-flash:free", selected)
+    }
+
+    @Test
     fun defaultOpenRouterRecommendationStartsWithBestAvailableFreePath() {
         val fetchedModels = listOf(
             "google/gemma-3-12b-it:free",

@@ -4,9 +4,16 @@ import com.mad.screenagent.shared.streaming.ChatMessage
 import com.mad.screenagent.shared.streaming.ConversationIntent
 import com.mad.screenagent.shared.streaming.ConversationWorkingState
 import com.mad.screenagent.shared.streaming.ImageAttachment
+import com.mad.screenagent.shared.streaming.WebGateway
+import com.mad.screenagent.shared.streaming.WebGroundingService
+import com.mad.screenagent.shared.streaming.WebGroundingSource
+import com.mad.screenagent.shared.streaming.WebSearchProvider
 import com.mad.screenagent.shared.streaming.WebTurnMode
 import com.mad.screenagent.shared.streaming.WebTurnPlanner
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WebGatewayTest {
@@ -252,4 +259,72 @@ class WebGatewayTest {
         assertEquals(listOf("current time in Berlin"), plan.queries)
         assertEquals(ConversationIntent.CURRENT_TIME, plan.intent)
     }
+
+    @Test
+    fun shouldPrepareTurn_skipsLocalOnlyPrompt() = runBlocking {
+        val gateway = testGateway()
+
+        val shouldPrepare = gateway.shouldPrepareTurn(
+            conversationKey = "conv-1",
+            messages = listOf(
+                ChatMessage(role = "user", content = "summarize these notes into three bullets")
+            )
+        )
+
+        assertFalse(shouldPrepare)
+    }
+
+    @Test
+    fun shouldPrepareTurn_skipsAttachmentAnalysisPrompt() = runBlocking {
+        val gateway = testGateway()
+
+        val shouldPrepare = gateway.shouldPrepareTurn(
+            conversationKey = "conv-1",
+            messages = listOf(
+                ChatMessage(
+                    role = "user",
+                    content = "What do you see in this screenshot?",
+                    images = listOf(ImageAttachment("base64-image"))
+                )
+            )
+        )
+
+        assertFalse(shouldPrepare)
+    }
+
+    @Test
+    fun shouldPrepareTurn_usesStoredSessionContextForFreshFollowUp() = runBlocking {
+        val gateway = testGateway()
+        gateway.prepareTurn(
+            conversationKey = "conv-1",
+            messages = listOf(
+                ChatMessage(role = "user", content = "what is the latest NVIDIA stock price?")
+            )
+        )
+
+        val shouldPrepare = gateway.shouldPrepareTurn(
+            conversationKey = "conv-1",
+            messages = listOf(
+                ChatMessage(role = "user", content = "what about tesla?")
+            )
+        )
+
+        assertTrue(shouldPrepare)
+    }
+
+    private fun testGateway(): WebGateway =
+        WebGateway(
+            groundingService = WebGroundingService(
+                searchProvider = object : WebSearchProvider {
+                    override suspend fun search(query: String, maxResults: Int): List<WebGroundingSource> =
+                        listOf(
+                            WebGroundingSource(
+                                title = "Result for $query",
+                                url = "https://example.com/${query.hashCode()}",
+                                snippet = "Snippet for $query"
+                            )
+                        )
+                }
+            )
+        )
 }

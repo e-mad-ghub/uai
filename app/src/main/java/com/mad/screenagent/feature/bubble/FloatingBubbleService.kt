@@ -108,6 +108,27 @@ import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
 
+internal fun shouldMinimizeMiniChatOnWindowFocusLoss(
+    hadWindowFocus: Boolean,
+    hasWindowFocus: Boolean,
+    isPanelAttached: Boolean,
+    isAppUiVisible: Boolean,
+    isExternalFlow: Boolean,
+    isScreenshotCaptureInProgress: Boolean
+): Boolean {
+    return hadWindowFocus &&
+        !hasWindowFocus &&
+        isPanelAttached &&
+        !isAppUiVisible &&
+        !isExternalFlow &&
+        !isScreenshotCaptureInProgress
+}
+
+internal fun shouldDeferPanelRestoreAfterExternalFlow(
+    reopenPanel: Boolean,
+    isAppUiVisible: Boolean
+): Boolean = reopenPanel && isAppUiVisible
+
 class FloatingBubbleService : Service() {
 
     private enum class OverlaySurfaceState {
@@ -1239,6 +1260,29 @@ class FloatingBubbleService : Service() {
             private var touchDownRawY = 0f
             private var touchDownRawX = 0f
             private var isDragIntercepted = false
+            private var hasHadWindowFocus = false
+
+            override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+                super.onWindowFocusChanged(hasWindowFocus)
+                if (hasWindowFocus) {
+                    hasHadWindowFocus = true
+                    return
+                }
+                if (
+                    shouldMinimizeMiniChatOnWindowFocusLoss(
+                        hadWindowFocus = hasHadWindowFocus,
+                        hasWindowFocus = hasWindowFocus,
+                        isPanelAttached = isAttachedToWindow,
+                        isAppUiVisible = isAppUiVisible,
+                        isExternalFlow = overlaySurfaceState == OverlaySurfaceState.ExternalFlow,
+                        isScreenshotCaptureInProgress = isOverlayScreenshotCaptureInProgress
+                    )
+                ) {
+                    serviceScope.launch {
+                        minimizeChatPanelToBubble(immediate = true)
+                    }
+                }
+            }
 
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
@@ -1447,6 +1491,19 @@ class FloatingBubbleService : Service() {
             overlaySurfaceState = OverlaySurfaceState.AppForegroundSuppressed
             return
         }
+        val resumeTarget = resolveOverlayBubbleResumePosition(
+            cachedPosition = cachedBubblePositionFor(currentBubbleLayoutMode),
+            currentX = bubbleParams.x,
+            currentY = bubbleParams.y,
+            bounds = currentBubbleBounds()
+        )
+        bubbleParams.x = resumeTarget.first
+        bubbleParams.y = resumeTarget.second
+        rememberBubblePositionForMode(
+            x = bubbleParams.x,
+            y = bubbleParams.y,
+            mode = currentBubbleLayoutMode
+        )
         if (bubbleView == null) {
             setupBubble()
         } else if (colorTheme != bubbleLastColorTheme || isDarkMode != bubbleLastDarkMode) {
@@ -1556,6 +1613,10 @@ class FloatingBubbleService : Service() {
         )
 
         if (isAppUiVisible) {
+            pendingPanelShowAfterAppHidden = shouldDeferPanelRestoreAfterExternalFlow(
+                reopenPanel = reopenPanel,
+                isAppUiVisible = isAppUiVisible
+            )
             suppressOverlaysWhileAppVisible()
             return
         }
@@ -2117,11 +2178,17 @@ class FloatingBubbleService : Service() {
                         msg.toChatMessage()
                     }
                 })
-                val effectiveHistory = if (agent.hasInternetAccess) {
+                val resolvedAgent = container.resolveAgentConfig(agent)
+                val shouldPrepareWebTurn = resolvedAgent.hasInternetAccess &&
+                    container.webGateway.shouldPrepareTurn(
+                        conversationKey = activeConversationId,
+                        messages = history
+                    )
+                val effectiveHistory = if (shouldPrepareWebTurn) {
                     container.webGateway.prepareTurn(
                         conversationKey = activeConversationId,
                         messages = history,
-                        planningConfig = agent
+                        planningConfig = resolvedAgent
                     ) { status ->
                         onlineSearchStatusMessage = status
                     }.messages
@@ -2137,16 +2204,15 @@ class FloatingBubbleService : Service() {
                     )
                 }
 
-                val agent = container.resolveAgentConfig(agent)
-                val responseStream = if (agent.hasInternetAccess) {
+                val responseStream = if (resolvedAgent.hasInternetAccess) {
                     container.assistantRuntime.streamResponse(
                         conversationKey = activeConversationId,
                         messages = effectiveHistory,
-                        config = agent,
+                        config = resolvedAgent,
                         onStatusChanged = { status -> onlineSearchStatusMessage = status }
                     )
                 } else {
-                    container.providerFactory(agent).streamResponse(effectiveHistory, agent)
+                    container.providerFactory(resolvedAgent).streamResponse(effectiveHistory, resolvedAgent)
                 }
                 responseStream
                     .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
@@ -2156,7 +2222,7 @@ class FloatingBubbleService : Service() {
                         when (chunk) {
                             is StreamChunk.Token -> {
                                 accumulated += chunk.text
-                                val sanitized = if (agent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
+                                val sanitized = if (resolvedAgent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
                                 session?.onToken(sanitized)
                                 streamingWriter?.emitStreaming(sanitized)
                             }
@@ -2175,7 +2241,7 @@ class FloatingBubbleService : Service() {
                             }
                             is StreamChunk.Usage ->
                                 container.agentRepository.addTokenUsage(
-                                    agent.id,
+                                    resolvedAgent.id,
                                     (chunk.inputTokens + chunk.outputTokens).toLong()
                                 )
                             is StreamChunk.Done -> Unit

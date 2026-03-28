@@ -31,15 +31,15 @@ data class OpenRouterCatalog(
 )
 
 private val preferredOpenRouterGeneralFreeModels = listOf(
-    "openai/gpt-oss-120b:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "qwen/qwen3-next-80b-a3b-instruct:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
+    "stepfun/step-3.5-flash:free",
+    "nvidia/nemotron-nano-9b-v2:free",
+    "google/gemma-3-12b-it:free",
     "openai/gpt-oss-20b:free",
     "google/gemma-3-27b-it:free",
-    "google/gemma-3-12b-it:free",
-    "nvidia/nemotron-nano-9b-v2:free",
-    "stepfun/step-3.5-flash:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "openai/gpt-oss-120b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
     OPENROUTER_FREE_ROUTER_MODEL
 )
 

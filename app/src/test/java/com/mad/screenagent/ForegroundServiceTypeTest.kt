@@ -4,6 +4,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import com.mad.screenagent.feature.bubble.foregroundServiceTypeMaskForOverlayService
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ForegroundServiceTypeTest {
@@ -25,30 +26,26 @@ class ForegroundServiceTypeTest {
             includeMediaProjection = true
         )
 
-        assertEquals(
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
-            typeMask
-        )
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE, typeMask)
     }
 
     @Test
-    fun overlayService_keepsLegacyMediaProjectionTypeOnAndroid10WhenIdle() {
+    fun overlayService_doesNotClaimForegroundTypeOnAndroid10WhenIdle() {
         val typeMask = foregroundServiceTypeMaskForOverlayService(
             sdkInt = Build.VERSION_CODES.Q,
             includeMediaProjection = false
         )
 
-        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION, typeMask)
+        assertNull(typeMask)
     }
 
     @Test
-    fun overlayService_usesMediaProjectionTypeDuringLegacyCaptureOnAndroid10() {
+    fun overlayService_doesNotClaimMediaProjectionTypeDuringLegacyCaptureOnAndroid10() {
         val typeMask = foregroundServiceTypeMaskForOverlayService(
             sdkInt = Build.VERSION_CODES.Q,
             includeMediaProjection = true
         )
 
-        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION, typeMask)
+        assertNull(typeMask)
     }
 }

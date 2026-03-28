@@ -58,6 +58,7 @@
     <string name="mini_chat_screenshot_accessibility_description">Allows ScreenAgent to capture screenshots for the floating mini chat without reopening the overlay or asking for screen-recording permission on every shot.</string>
     <string name="mini_chat_screenshot_accessibility_hint">Direct screenshot capture needs Screenshot Helper. Set it up once in Mini Chat settings.</string>
     <string name="mini_chat_screenshot_accessibility_wait">ScreenAgent Screenshot Helper is turning on. Wait a moment and try the screenshot again.</string>
+    <string name="mini_chat_screenshot_requires_android_11">Mini Chat screenshot capture requires Android 11 or later.</string>
     <string name="mini_chat_screenshot_disclosure_title">Enable Screenshot Helper</string>
     <string name="mini_chat_screenshot_disclosure_body">ScreenAgent uses Android Accessibility only to capture a screenshot when you request it from Mini Chat.\n\nIt does not use Accessibility to continuously monitor your screen, read other apps, control your device, or stream activity in the background.\n\nThe screenshot is captured only so you can attach it to your chat and choose whether to send it to your selected AI model.\n\nThis feature is optional and can be turned off at any time.</string>
     <string name="mini_chat_screenshot_capture_error">Screenshot failed. %1$s</string>

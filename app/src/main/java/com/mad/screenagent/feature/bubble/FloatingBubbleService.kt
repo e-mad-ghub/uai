@@ -74,7 +74,6 @@ import com.mad.screenagent.data.model.hasInternetAccess
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AppColorTheme
 import com.mad.screenagent.ui.MediaPickerActivity
-import com.mad.screenagent.ui.OverlayScreenCaptureActivity
 import com.mad.screenagent.ui.OverlayScreenCaptureOutcome
 import com.mad.screenagent.shared.chatui.dedupeMessagesByIdKeepingLatest
 import com.mad.screenagent.shared.chatui.formatTokenCount
@@ -135,18 +134,9 @@ internal fun foregroundServiceTypeMaskForOverlayService(
 ): Int? {
     return when {
         sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
-            if (includeMediaProjection) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            }
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         }
-        sdkInt >= Build.VERSION_CODES.Q -> {
-            // Keep Android 10-13 on the legacy runtime mask to avoid changing the
-            // long-standing MediaProjection behavior on older devices.
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-        }
+        sdkInt >= Build.VERSION_CODES.Q -> null
         else -> null
     }
 }
@@ -358,7 +348,6 @@ class FloatingBubbleService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         MediaPickerActivity.clearCallbacks()
-        OverlayScreenCaptureActivity.clearPendingRequest()
         unregisterSystemDialogReceiver()
         lifecycleOwner.onDestroy()
         serviceScope.cancel()
@@ -1110,6 +1099,11 @@ class FloatingBubbleService : Service() {
             // Capture screenshot if required
             var screenshotBase64: String? = null
             if (action.takeScreenshot) {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                    miniChatErrorMessage = getString(R.string.mini_chat_screenshot_requires_android_11)
+                    showChatPanel()
+                    return@launch
+                }
                 screenshotBase64 = captureScreenshotSuspend() ?: run {
                     if (MiniChatScreenshotAccessibilityService.isAvailable()) {
                         miniChatErrorMessage = "Screenshot capture failed. The current screen may be protected."
@@ -1155,7 +1149,7 @@ class FloatingBubbleService : Service() {
     }
 
     /**
-     * Suspends until a screenshot is captured (accessibility or media projection path).
+     * Suspends until a screenshot is captured through the Accessibility helper.
      * Returns the base64-encoded image, or null if capture fails/is blocked.
      */
     private suspend fun captureScreenshotSuspend(): String? {
@@ -1173,8 +1167,7 @@ class FloatingBubbleService : Service() {
                 }
                 if (!started) cont.resume(null)
             } else {
-                // For pre-Android 11 we cannot easily suspend the MediaProjection flow here;
-                // return null to surface an appropriate error message.
+                // Legacy MediaProjection support is intentionally disabled for Play compliance.
                 cont.resume(null)
             }
         }
@@ -1866,7 +1859,7 @@ class FloatingBubbleService : Service() {
             launchAccessibilityScreenshotCapture()
             return
         }
-        launchMediaProjectionScreenshotCapture()
+        miniChatErrorMessage = getString(R.string.mini_chat_screenshot_requires_android_11)
     }
 
     private fun launchAccessibilityScreenshotCapture() {
@@ -1951,58 +1944,6 @@ class FloatingBubbleService : Service() {
                             R.string.mini_chat_screenshot_accessibility_hint
                         }
                     )
-                )
-            }
-        }
-    }
-
-    private fun launchMediaProjectionScreenshotCapture() {
-        if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
-        isOverlayScreenshotCaptureInProgress = true
-        promoteForegroundServiceForMediaProjectionIfNeeded()
-
-        val flowGeneration = suspendOverlaysForExternalFlow(reopenPanelOnReturn = true)
-
-        screenshotRestoreJob?.cancel()
-        screenshotRestoreJob = serviceScope.launch {
-            delay(12_000L)
-            if (isOverlayScreenshotCaptureInProgress && flowGeneration == externalFlowGeneration) {
-                android.util.Log.w("UAI_CAP", "overlay capture restore timeout; rebuilding overlay")
-                restoreOverlaysAfterExternalFlow(
-                    flowGeneration = flowGeneration,
-                    forcePanelVisible = true
-                )
-            }
-        }
-
-        val launchResult = runCatching {
-            OverlayScreenCaptureActivity.start(applicationContext) { outcome ->
-                serviceScope.launch {
-                    if (outcome is OverlayScreenCaptureOutcome.Success) {
-                        val persistedUri = withContext(Dispatchers.IO) {
-                            persistImageAttachment(applicationContext, outcome.base64)
-                        }
-                        pendingImages.add(Triple(outcome.base64, outcome.bitmap, persistedUri))
-                    } else if (outcome is OverlayScreenCaptureOutcome.Error) {
-                        android.util.Log.e("UAI_CAP", "overlay capture error: ${outcome.message}")
-                    }
-                    restoreOverlaysAfterExternalFlow(
-                        flowGeneration = flowGeneration,
-                        forcePanelVisible = true
-                    )
-                }
-            }
-        }
-        if (launchResult.isFailure) {
-            serviceScope.launch {
-                android.util.Log.e(
-                    "UAI_CAP",
-                    "failed to launch overlay capture activity",
-                    launchResult.exceptionOrNull()
-                )
-                restoreOverlaysAfterExternalFlow(
-                    flowGeneration = flowGeneration,
-                    forcePanelVisible = true
                 )
             }
         }
@@ -2701,7 +2642,7 @@ class FloatingBubbleService : Service() {
     }
 
     private fun promoteForegroundServiceForMediaProjectionIfNeeded() {
-        updateForegroundServiceType(includeMediaProjection = true)
+        updateForegroundServiceType(includeMediaProjection = false)
     }
 
     private fun restoreNormalForegroundServiceTypeIfNeeded() {

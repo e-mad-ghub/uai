@@ -105,6 +105,7 @@ fun SettingsScreen(
     }
     var pendingEnableMiniChat by rememberSaveable { mutableStateOf(false) }
     var showOverlayPermissionCallout by rememberSaveable { mutableStateOf(false) }
+    var showScreenshotAccessibilityDisclosure by rememberSaveable { mutableStateOf(false) }
     val isMiniChatConfigured = bubbleEnabled
     val isMiniChatActive = bubbleEnabled && hasOverlayPermission
     val showOverlayPermissionCard = !hasOverlayPermission &&
@@ -132,6 +133,37 @@ fun SettingsScreen(
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 Uri.parse("package:${context.packageName}")
             )
+        )
+    }
+
+    fun openScreenshotAccessibilitySettings() {
+        MiniChatScreenshotAccessibilityService.openSettings(context)
+    }
+
+    if (showScreenshotAccessibilityDisclosure) {
+        AlertDialog(
+            onDismissRequest = { showScreenshotAccessibilityDisclosure = false },
+            title = {
+                Text(stringResource(R.string.mini_chat_screenshot_disclosure_title))
+            },
+            text = {
+                Text(stringResource(R.string.mini_chat_screenshot_disclosure_body))
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showScreenshotAccessibilityDisclosure = false
+                        openScreenshotAccessibilitySettings()
+                    }
+                ) {
+                    Text(stringResource(R.string.action_continue_to_accessibility_settings))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showScreenshotAccessibilityDisclosure = false }) {
+                    Text(stringResource(R.string.action_not_now))
+                }
+            }
         )
     }
 
@@ -304,7 +336,7 @@ fun SettingsScreen(
                                 }
                             ),
                             onAction = {
-                                MiniChatScreenshotAccessibilityService.openSettings(context)
+                                showScreenshotAccessibilityDisclosure = true
                             }
                         )
                     }

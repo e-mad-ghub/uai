@@ -255,6 +255,10 @@ class FloatingBubbleService : Service() {
     private val systemDialogsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != Intent.ACTION_CLOSE_SYSTEM_DIALOGS) return
+            if (isQuickMenuVisible) {
+                dismissQuickAccessMenu()
+                scheduleBubbleIdleFade()
+            }
             if (overlaySurfaceState == OverlaySurfaceState.ExternalFlow || isOverlayScreenshotCaptureInProgress) {
                 pendingPanelRestoreAfterExternalFlow = false
                 return
@@ -952,6 +956,36 @@ class FloatingBubbleService : Service() {
                             scheduleBubbleIdleFade()
                         },
                     )
+                }
+            }
+            // The quick menu is attached while the finger may still be down from the original
+            // long-press on the bubble. Handle the full gesture on this window as well so the
+            // release/cancel event cannot get lost when the overlay is added mid-gesture.
+            setOnTouchListener { _, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN,
+                    MotionEvent.ACTION_MOVE -> {
+                        quickMenuHoveredItem = hitTestQuickMenuItem(event.rawX, event.rawY)
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        val hovered = hitTestQuickMenuItem(event.rawX, event.rawY)
+                        quickMenuHoveredItem = null
+                        if (hovered != null) {
+                            triggerQuickMenuItemById(hovered)
+                        } else {
+                            dismissQuickAccessMenu()
+                            scheduleBubbleIdleFade()
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        quickMenuHoveredItem = null
+                        dismissQuickAccessMenu()
+                        scheduleBubbleIdleFade()
+                        true
+                    }
+                    else -> true
                 }
             }
         }

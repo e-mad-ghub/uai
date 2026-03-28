@@ -41,7 +41,7 @@
             android:foregroundServiceType="specialUse|mediaProjection"
             android:exported="false">
             <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_JUSTIFICATION"
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Provides a persistent AI chat bubble overlay visible across all apps" />
         </service>
 

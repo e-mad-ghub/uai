@@ -129,6 +129,28 @@ internal fun shouldDeferPanelRestoreAfterExternalFlow(
     isAppUiVisible: Boolean
 ): Boolean = reopenPanel && isAppUiVisible
 
+internal fun foregroundServiceTypeMaskForOverlayService(
+    sdkInt: Int,
+    includeMediaProjection: Boolean
+): Int? {
+    return when {
+        sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
+            if (includeMediaProjection) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            }
+        }
+        sdkInt >= Build.VERSION_CODES.Q -> {
+            // Keep Android 10-13 on the legacy runtime mask to avoid changing the
+            // long-standing MediaProjection behavior on older devices.
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        }
+        else -> null
+    }
+}
+
 class FloatingBubbleService : Service() {
 
     private enum class OverlaySurfaceState {
@@ -223,6 +245,7 @@ class FloatingBubbleService : Service() {
     private var lastAssistantRepairNotificationKey: String? = null
     private var bubbleSnapAnimator: ValueAnimator? = null
     private var bubbleAlphaAnimator: ValueAnimator? = null
+    private var currentForegroundServiceTypeMask: Int? = null
     private var portraitBubblePositionCache: Pair<Int, Int>? = null
     private var wideBubblePositionCache: Pair<Int, Int>? = null
     // Track which theme was applied when the bubble was last composed, so we can
@@ -1592,6 +1615,7 @@ class FloatingBubbleService : Service() {
         screenshotRestoreJob?.cancel()
         screenshotRestoreJob = null
         isOverlayScreenshotCaptureInProgress = false
+        restoreNormalForegroundServiceTypeIfNeeded()
 
         val reopenPanel = forcePanelVisible ?: pendingPanelRestoreAfterExternalFlow
         pendingPanelRestoreAfterExternalFlow = false
@@ -1901,6 +1925,7 @@ class FloatingBubbleService : Service() {
     private fun launchMediaProjectionScreenshotCapture() {
         if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
         isOverlayScreenshotCaptureInProgress = true
+        promoteForegroundServiceForMediaProjectionIfNeeded()
 
         val flowGeneration = suspendOverlaysForExternalFlow(reopenPanelOnReturn = true)
 
@@ -2606,34 +2631,47 @@ class FloatingBubbleService : Service() {
             @Suppress("DEPRECATION")
             WindowManager.LayoutParams.TYPE_PHONE
 
-    private fun startForegroundCompat() {
+    private fun buildForegroundNotification(): Notification {
         val notifIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this, 0, notifIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val notification: Notification = NotificationCompat.Builder(this, UaiApplication.BUBBLE_CHANNEL_ID)
+        return NotificationCompat.Builder(this, UaiApplication.BUBBLE_CHANNEL_ID)
             .setContentTitle(getString(R.string.bubble_notification_title))
             .setContentText(getString(R.string.bubble_notification_text))
             .setSmallIcon(R.drawable.ic_brand_monochrome)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID, notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID, notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
+    private fun updateForegroundServiceType(includeMediaProjection: Boolean, force: Boolean = false) {
+        val targetMask = foregroundServiceTypeMaskForOverlayService(
+            sdkInt = Build.VERSION.SDK_INT,
+            includeMediaProjection = includeMediaProjection
+        )
+        if (!force && currentForegroundServiceTypeMask == targetMask) return
+
+        val notification = buildForegroundNotification()
+        if (targetMask != null) {
+            startForeground(NOTIFICATION_ID, notification, targetMask)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+        currentForegroundServiceTypeMask = targetMask
+    }
+
+    private fun startForegroundCompat() {
+        updateForegroundServiceType(includeMediaProjection = false, force = true)
+    }
+
+    private fun promoteForegroundServiceForMediaProjectionIfNeeded() {
+        updateForegroundServiceType(includeMediaProjection = true)
+    }
+
+    private fun restoreNormalForegroundServiceTypeIfNeeded() {
+        updateForegroundServiceType(includeMediaProjection = false)
     }
 
     companion object {

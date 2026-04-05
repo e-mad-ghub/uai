@@ -13,9 +13,9 @@ enum class AiProviderType(val displayName: String) {
 data class AgentConfig(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "New Agent",
-    val provider: AiProviderType = AiProviderType.OPENROUTER,
+    val provider: AiProviderType = AiProviderType.ON_DEVICE,
     val apiKey: String = "",
-    val model: String = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
+    val model: String = "deepseek-r1-distill-qwen-1.5b",
     val onDevice: OnDeviceProviderConfig = OnDeviceProviderConfig(),
     val customPreset: CustomProviderPreset = CustomProviderPreset.MANUAL,
     val customBaseUrl: String = "",
@@ -38,9 +38,7 @@ data class AgentConfig(
     val supportsVision: Boolean get() = when {
         model == MONEY_SAVER_MODEL -> true // resolved model will be determined at runtime
         else -> when (provider) {
-        AiProviderType.ON_DEVICE -> looksLikeVisionCapableOnDeviceModel(
-            onDevice.selectedModelId.ifBlank { model }
-        )
+        AiProviderType.ON_DEVICE -> false
         AiProviderType.OPENAI -> {
             val m = model.lowercase()
             m.contains("gpt-5") ||
@@ -85,9 +83,9 @@ data class AgentConfig(
                 "claude-opus-4-6"
             ),
             AiProviderType.ON_DEVICE to listOf(
-                "gemma-3n-e2b-it",
-                "gemma-3-1b-it",
-                "gemma-3-4b-it"
+                "deepseek-r1-distill-qwen-1.5b",
+                "qwen2.5-1.5b-instruct",
+                "phi-4-mini-instruct"
             ),
             AiProviderType.OPENROUTER to listOf(
                 SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,

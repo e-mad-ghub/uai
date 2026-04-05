@@ -22,11 +22,11 @@ import org.junit.Test
 class OpenRouterModelsTest {
 
     @Test
-    fun newAgentDefaultsToSideAgentBestFreeRoute() {
+    fun newAgentDefaultsToOnDevice() {
         val agent = AgentConfig()
 
-        assertEquals(AiProviderType.OPENROUTER, agent.provider)
-        assertEquals(SIDEAGENT_OPENROUTER_BEST_FREE_MODEL, agent.model)
+        assertEquals(AiProviderType.ON_DEVICE, agent.provider)
+        assertEquals("deepseek-r1-distill-qwen-1.5b", agent.model)
     }
 
     @Test

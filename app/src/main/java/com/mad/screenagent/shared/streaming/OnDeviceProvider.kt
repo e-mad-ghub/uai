@@ -1,7 +1,9 @@
 package com.mad.screenagent.shared.streaming
 
 import com.mad.screenagent.data.model.AgentConfig
+import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.repository.OnDeviceModelSource
+import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
@@ -10,7 +12,7 @@ import kotlinx.coroutines.Dispatchers
 
 class OnDeviceProvider(
     private val modelRepository: OnDeviceModelSource,
-    private val runtime: OnDeviceRuntime = UnavailableOnDeviceRuntime()
+    private val runtime: OnDeviceRuntime
 ) : AiProvider {
 
     override fun streamResponse(messages: List<ChatMessage>, config: AgentConfig): Flow<StreamChunk> =
@@ -24,6 +26,22 @@ class OnDeviceProvider(
             val installed = modelRepository.getInstalledModel(modelId)
             if (installed == null) {
                 emit(StreamChunk.Error(IllegalStateException("The selected On-Device model is not installed yet.")))
+                return@flow
+            }
+            if (installed.downloadState == OnDeviceDownloadState.DOWNLOADING ||
+                installed.downloadState == OnDeviceDownloadState.VALIDATING
+            ) {
+                emit(StreamChunk.Error(IllegalStateException("The selected On-Device model is still downloading.")))
+                return@flow
+            }
+            if (!installed.downloadState.isReadyForUse) {
+                emit(StreamChunk.Error(IllegalStateException("The selected On-Device model is not ready yet.")))
+                return@flow
+            }
+            if (!File(installed.localPath).exists() || File(installed.localPath).length() == 0L) {
+                val reason = "The selected On-Device model file is missing at ${installed.localPath}."
+                modelRepository.markModelUnavailable(modelId, reason)
+                emit(StreamChunk.Error(IllegalStateException(reason)))
                 return@flow
             }
 

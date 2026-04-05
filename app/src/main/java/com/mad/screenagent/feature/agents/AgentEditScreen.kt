@@ -49,6 +49,8 @@ import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AiProviderType
 import com.mad.screenagent.data.model.CustomProviderPreset
 import com.mad.screenagent.data.model.OnDeviceDownloadState
+import com.mad.screenagent.data.model.InstalledOnDeviceModel
+import com.mad.screenagent.data.model.OnDeviceModelCatalogEntry
 import com.mad.screenagent.data.model.OnDeviceModelLibraryItem
 import com.mad.screenagent.data.model.canHandleImageRequests
 import com.mad.screenagent.data.model.isOpenRouterFreeModel
@@ -75,8 +77,9 @@ fun AgentEditScreen(
     val openRouterCatalogEntries by viewModel.openRouterCatalogEntries.collectAsStateWithLifecycle()
     val freeModelIds by viewModel.freeModelIds.collectAsStateWithLifecycle()
     val providerModels by viewModel.providerModels.collectAsStateWithLifecycle()
-    val onDeviceCatalog by viewModel.onDeviceCatalog.collectAsStateWithLifecycle()
-    val onDeviceModelLibrary by viewModel.onDeviceModelLibrary.collectAsStateWithLifecycle()
+    val publicOnDeviceModelLibrary by viewModel.publicOnDeviceModelLibrary.collectAsStateWithLifecycle()
+    val readyOnDeviceModelLibrary by viewModel.readyOnDeviceModelLibrary.collectAsStateWithLifecycle()
+    val nonPublicOnDeviceModelLibrary by viewModel.nonPublicOnDeviceModelLibrary.collectAsStateWithLifecycle()
     val onDeviceDownloadState by viewModel.onDeviceDownloadState.collectAsStateWithLifecycle()
     val isLoadingModels by viewModel.isLoadingModels.collectAsStateWithLifecycle()
     val connectionTestState by viewModel.connectionTestState.collectAsStateWithLifecycle()
@@ -100,7 +103,7 @@ fun AgentEditScreen(
     val isCustomProvider = agent.provider == AiProviderType.CUSTOM
     val isOnDeviceProvider = agent.provider == AiProviderType.ON_DEVICE
     val selectedOnDeviceModelId = agent.onDevice.selectedModelId.ifBlank { agent.model }
-    val selectedOnDeviceItem = onDeviceModelLibrary.firstOrNull {
+    val selectedPublicOnDeviceItem = publicOnDeviceModelLibrary.firstOrNull {
         it.catalogEntry.id == selectedOnDeviceModelId
     }
     val canSave = saveValidationMessage == null
@@ -240,12 +243,17 @@ fun AgentEditScreen(
                         FilterChip(
                             selected = agent.provider == type,
                             onClick = {
-                                val defaultModel = defaultRecommendedModelId(
-                                    provider = type,
-                                    openRouterCatalogEntries = openRouterCatalogEntries,
-                                    fetchedProviderModels = if (type == agent.provider) providerModels else emptyList(),
-                                    freeModelIds = freeModelIds
-                                )
+                                val defaultModel = when (type) {
+                                    AiProviderType.ON_DEVICE ->
+                                        readyOnDeviceModelLibrary.firstOrNull()?.catalogEntry?.id
+                                            ?: publicOnDeviceModelLibrary.firstOrNull()?.catalogEntry?.id.orEmpty()
+                                    else -> defaultRecommendedModelId(
+                                        provider = type,
+                                        openRouterCatalogEntries = openRouterCatalogEntries,
+                                        fetchedProviderModels = if (type == agent.provider) providerModels else emptyList(),
+                                        freeModelIds = freeModelIds
+                                    )
+                                }
                                 viewModel.switchProvider(type, defaultModel)
                             },
                             label = { Text(type.displayName) }
@@ -261,15 +269,22 @@ fun AgentEditScreen(
 
                 if (isOnDeviceProvider) {
                     OnDeviceModelSection(
-                        library = onDeviceModelLibrary,
+                        publicLibrary = publicOnDeviceModelLibrary,
+                        readyLibrary = readyOnDeviceModelLibrary,
+                        nonPublicLibrary = nonPublicOnDeviceModelLibrary,
                         selectedModelId = agent.onDevice.selectedModelId.ifBlank { agent.model },
                         downloadState = onDeviceDownloadState,
                         onModelSelect = { modelId ->
-                            viewModel.update { copy(onDevice = onDevice.copy(selectedModelId = modelId)) }
+                            viewModel.update {
+                                copy(
+                                    model = modelId,
+                                    onDevice = onDevice.copy(selectedModelId = modelId)
+                                )
+                            }
                         },
                         onDownload = viewModel::downloadOnDeviceModel,
+                        onCancel = viewModel::cancelOnDeviceDownload,
                         onDelete = viewModel::deleteOnDeviceModel,
-                        onRefresh = viewModel::refreshOnDeviceCatalog
                     )
                 } else if (isCustomProvider) {
                     CustomProviderPresetSelector(
@@ -367,12 +382,12 @@ fun AgentEditScreen(
                 }
                 if (isOnDeviceProvider) {
                     LocalModelStatusNote(
-                        hasModels = onDeviceCatalog.models.isNotEmpty(),
+                        publicModels = publicOnDeviceModelLibrary,
+                        nonPublicModels = nonPublicOnDeviceModelLibrary,
                         isLoadingModels = isLoadingModels,
                         selectedModel = agent.onDevice.selectedModelId,
-                        isReady = onDeviceModelLibrary.any {
-                            it.catalogEntry.id == agent.onDevice.selectedModelId && it.installRecord != null
-                        }
+                        selectedIsPublic = selectedPublicOnDeviceItem != null,
+                        isReady = selectedPublicOnDeviceItem?.installRecord?.downloadState?.isReadyForUse == true
                     )
                 } else {
                     ProviderCatalogStatusNote(
@@ -389,7 +404,7 @@ fun AgentEditScreen(
                 OutlinedButton(
                     onClick = viewModel::testConnection,
                     enabled = when {
-                        isOnDeviceProvider -> selectedOnDeviceModelId.isNotBlank()
+                        isOnDeviceProvider -> selectedPublicOnDeviceItem?.installRecord?.downloadState?.isReadyForUse == true
                         else -> agent.apiKey.isNotBlank() &&
                             (!isCustomProvider || normalizeOpenAiCompatibleBaseUrl(agent.customBaseUrl).isNotBlank()) &&
                             agent.model.isNotBlank()
@@ -1450,15 +1465,39 @@ private fun NativeWebSearchToggle(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun OnDeviceModelSection(
-    library: List<OnDeviceModelLibraryItem>,
+    publicLibrary: List<OnDeviceModelLibraryItem>,
+    readyLibrary: List<OnDeviceModelLibraryItem>,
+    nonPublicLibrary: List<OnDeviceModelLibraryItem>,
     selectedModelId: String,
     downloadState: OnDeviceDownloadState,
     onModelSelect: (String) -> Unit,
     onDownload: (String) -> Unit,
+    onCancel: (String) -> Unit,
     onDelete: (String) -> Unit,
-    onRefresh: () -> Unit
 ) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val selectedItem = (publicLibrary + nonPublicLibrary).firstOrNull { it.catalogEntry.id == selectedModelId }
+    val selectedPublicItem = publicLibrary.firstOrNull { it.catalogEntry.id == selectedModelId }
+    val selectedReadyItem = readyLibrary.firstOrNull { it.catalogEntry.id == selectedModelId }
+    val selectedInstallRecord = selectedPublicItem?.installRecord
+    val selectedStatusText = when {
+        selectedItem == null -> "Choose a public model"
+        selectedPublicItem == null -> "Not publicly downloadable"
+        selectedReadyItem != null -> "Ready"
+        else -> when (selectedInstallRecord?.downloadState ?: downloadState) {
+            OnDeviceDownloadState.DOWNLOADING -> "Downloading"
+            OnDeviceDownloadState.VALIDATING -> "Validating"
+            OnDeviceDownloadState.READY,
+            OnDeviceDownloadState.DOWNLOADED -> "Ready"
+            OnDeviceDownloadState.CANCELLED -> "Cancelled"
+            OnDeviceDownloadState.FAILED -> "Download failed"
+            OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
+            OnDeviceDownloadState.NOT_DOWNLOADED -> "Not installed"
+        }
+    }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -1468,74 +1507,241 @@ private fun OnDeviceModelSection(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("On-Device", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = "Download public local models here. Ready models appear in the dropdown below.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Text(
+            text = when (downloadState) {
+                OnDeviceDownloadState.DOWNLOADING -> "Status: A local model is downloading in the background."
+                OnDeviceDownloadState.VALIDATING -> "Status: A local model is being validated."
+                OnDeviceDownloadState.READY,
+                OnDeviceDownloadState.DOWNLOADED -> "Status: Ready models are available in the dropdown."
+                OnDeviceDownloadState.CANCELLED -> "Status: The last download was cancelled."
+                OnDeviceDownloadState.FAILED -> "Status: The last download failed."
+                OnDeviceDownloadState.UNAVAILABLE -> "Status: Local models are unavailable on this device."
+                OnDeviceDownloadState.NOT_DOWNLOADED -> "Status: No local models have been downloaded yet."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Local model library", style = MaterialTheme.typography.titleSmall)
+                Text("Download models", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    text = "Pick a public model to download. Downloads keep running in the background and can be cancelled at any time.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (publicLibrary.isEmpty()) {
                     Text(
-                        text = "Choose a native model for On-Device.",
+                        text = "No public on-device models are available.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-                TextButton(onClick = onRefresh) {
-                    Text("Check")
+                } else {
+                    publicLibrary.forEach { item ->
+                        val entry = item.catalogEntry
+                        val install = item.installRecord
+                        val state = install?.downloadState ?: OnDeviceDownloadState.NOT_DOWNLOADED
+                        val status = when (state) {
+                            OnDeviceDownloadState.DOWNLOADING -> install.progressText() ?: "Downloading"
+                            OnDeviceDownloadState.VALIDATING -> install.progressText() ?: "Validating"
+                            OnDeviceDownloadState.READY,
+                            OnDeviceDownloadState.DOWNLOADED -> "Ready"
+                            OnDeviceDownloadState.CANCELLED -> "Cancelled"
+                            OnDeviceDownloadState.FAILED -> "Download failed"
+                            OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
+                            OnDeviceDownloadState.NOT_DOWNLOADED -> "Not installed"
+                        }
+                        val canCancel = state == OnDeviceDownloadState.DOWNLOADING ||
+                            state == OnDeviceDownloadState.VALIDATING
+                        val canDelete = state.isReadyForUse
+                        val actionLabel = when {
+                            canCancel -> "Cancel"
+                            canDelete -> "Delete"
+                            state == OnDeviceDownloadState.FAILED ||
+                                state == OnDeviceDownloadState.CANCELLED -> "Retry"
+                            else -> "Download"
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(entry.displayName, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    text = listOfNotNull(
+                                        status,
+                                        entry.estimatedSizeText(),
+                                        install.progressText(),
+                                        entry.description.ifBlank { entry.id }
+                                    ).joinToString(" · "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(
+                                onClick = {
+                                    when {
+                                        canCancel -> onCancel(entry.id)
+                                        canDelete -> onDelete(entry.id)
+                                        else -> onDownload(entry.id)
+                                    }
+                                }
+                            ) {
+                                Text(actionLabel)
+                            }
+                        }
+                    }
                 }
             }
+        }
 
-            Text(
-                text = when (downloadState) {
-                    OnDeviceDownloadState.DOWNLOADING -> "Status: Downloading local model metadata"
-                    OnDeviceDownloadState.DOWNLOADED -> "Status: Local model library ready"
-                    OnDeviceDownloadState.FAILED -> "Status: Last local-model download failed"
-                    OnDeviceDownloadState.NOT_DOWNLOADED -> "Status: No local models installed yet"
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it }
+        ) {
+            OutlinedTextField(
+                value = selectedReadyItem?.catalogEntry?.displayName
+                    ?: selectedPublicItem?.catalogEntry?.displayName
+                    ?: "Choose downloaded model",
+                onValueChange = {},
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                readOnly = true,
+                label = { Text("Ready models") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                supportingText = {
+                    val supportingText = when {
+                        selectedItem == null -> "Pick a public model from the download area first."
+                        selectedReadyItem == null -> selectedStatusText
+                        else -> selectedItem.catalogEntry.description.ifBlank { selectedStatusText }
+                    }
+                    Text(supportingText)
                 },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                singleLine = true
             )
-            library.forEach { item ->
-                val entry = item.catalogEntry
-                val isInstalled = item.installRecord != null
+
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                if (readyLibrary.isEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text("No downloaded models ready yet") },
+                        onClick = { expanded = false },
+                        enabled = false
+                    )
+                } else {
+                    readyLibrary.forEach { item ->
+                        val entry = item.catalogEntry
+                        val status = when (item.installRecord?.downloadState ?: OnDeviceDownloadState.NOT_DOWNLOADED) {
+                            OnDeviceDownloadState.DOWNLOADING -> "Downloading"
+                            OnDeviceDownloadState.VALIDATING -> "Validating"
+                            OnDeviceDownloadState.READY,
+                            OnDeviceDownloadState.DOWNLOADED -> "Ready"
+                            OnDeviceDownloadState.CANCELLED -> "Cancelled"
+                            OnDeviceDownloadState.FAILED -> "Download failed"
+                            OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
+                            OnDeviceDownloadState.NOT_DOWNLOADED -> "Not installed"
+                        }
+                        DropdownMenuItem(
+                            text = {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(entry.displayName)
+                                    Text(
+                                        listOfNotNull(
+                                            status,
+                                            entry.description.ifBlank { entry.id }
+                                        ).joinToString(" · "),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            onClick = {
+                                expanded = false
+                                onModelSelect(entry.id)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        Text(
+            text = "Selected model status: $selectedStatusText",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+            if (nonPublicLibrary.isNotEmpty()) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.medium,
-                    tonalElevation = if (entry.id == selectedModelId) 2.dp else 0.dp,
-                    color = if (entry.id == selectedModelId) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surface
-                    }
+                    color = MaterialTheme.colorScheme.surface
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier.padding(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(entry.displayName, style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                entry.description.ifBlank { entry.id },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = if (isInstalled) "Installed locally" else "Not installed",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        TextButton(onClick = { onModelSelect(entry.id) }) {
-                            Text(if (entry.id == selectedModelId) "Selected" else "Use")
-                        }
-                        TextButton(
-                            onClick = {
-                                if (isInstalled) onDelete(entry.id) else onDownload(entry.id)
+                        Text("Not publicly downloadable", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            text = "Shown separately because they need external access.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        nonPublicLibrary.forEach { item ->
+                            val entry = item.catalogEntry
+                            val status = when (item.installRecord?.downloadState ?: OnDeviceDownloadState.NOT_DOWNLOADED) {
+                                OnDeviceDownloadState.DOWNLOADING -> "External access required"
+                                OnDeviceDownloadState.VALIDATING -> "External access required"
+                                OnDeviceDownloadState.READY,
+                                OnDeviceDownloadState.DOWNLOADED -> "Not publicly downloadable"
+                                OnDeviceDownloadState.CANCELLED -> "Not publicly downloadable"
+                                OnDeviceDownloadState.FAILED -> "Not publicly downloadable"
+                                OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
+                                OnDeviceDownloadState.NOT_DOWNLOADED -> "Not publicly downloadable"
                             }
-                        ) {
-                            Text(if (isInstalled) "Delete" else "Download")
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(entry.displayName, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    text = listOfNotNull(
+                                        status,
+                                        item.installRecord.progressText(),
+                                        entry.description.ifBlank { entry.id }
+                                    ).joinToString(" · "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
@@ -1544,11 +1750,52 @@ private fun OnDeviceModelSection(
     }
 }
 
+private fun InstalledOnDeviceModel?.progressText(): String? {
+    val record = this ?: return null
+    if (record.downloadState != OnDeviceDownloadState.DOWNLOADING &&
+        record.downloadState != OnDeviceDownloadState.VALIDATING
+    ) {
+        return null
+    }
+    val downloadedText = record.downloadedBytes.takeIf { it > 0L }?.humanReadableBytes()
+    val totalText = record.totalBytes.takeIf { it > 0L }?.humanReadableBytes()
+    return when {
+        downloadedText != null && totalText != null -> "$downloadedText / $totalText"
+        downloadedText != null -> downloadedText
+        record.downloadState == OnDeviceDownloadState.DOWNLOADING -> "Downloading"
+        record.downloadState == OnDeviceDownloadState.VALIDATING -> "Validating"
+        else -> null
+    }
+}
+
+private fun Long.humanReadableBytes(): String {
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    var value = this.toDouble()
+    var unitIndex = 0
+    while (value >= 1024 && unitIndex < units.lastIndex) {
+        value /= 1024
+        unitIndex++
+    }
+    return if (unitIndex == 0) {
+        "${value.toLong()} ${units[unitIndex]}"
+    } else {
+        String.format(Locale.US, "%.1f %s", value, units[unitIndex])
+    }
+}
+
+private fun OnDeviceModelCatalogEntry.estimatedSizeText(): String? {
+    if (estimatedSizeMb <= 0) return null
+    val approxBytes = estimatedSizeMb.toLong() * 1024L * 1024L
+    return "~${approxBytes.humanReadableBytes()}"
+}
+
 @Composable
 private fun LocalModelStatusNote(
-    hasModels: Boolean,
+    publicModels: List<OnDeviceModelLibraryItem>,
+    nonPublicModels: List<OnDeviceModelLibraryItem>,
     isLoadingModels: Boolean,
     selectedModel: String,
+    selectedIsPublic: Boolean,
     isReady: Boolean
 ) {
     Surface(
@@ -1563,11 +1810,13 @@ private fun LocalModelStatusNote(
             Text("On-Device status", style = MaterialTheme.typography.labelLarge)
             Text(
                 text = when {
-                    isLoadingModels -> "Loading local model catalog..."
-                    !hasModels -> "No local models are available yet."
-                    selectedModel.isBlank() -> "Choose a local model to continue."
-                    isReady -> "Model $selectedModel is ready locally."
-                    else -> "Model $selectedModel is not installed yet."
+                    isLoadingModels -> "Loading public local models..."
+                    publicModels.isEmpty() && nonPublicModels.isEmpty() -> "No local models are available yet."
+                    publicModels.isEmpty() -> "No public models are available yet."
+                    selectedModel.isBlank() -> "Choose a public model to continue."
+                    !selectedIsPublic -> "Selected model is listed separately below."
+                    isReady -> "Selected public model is ready locally."
+                    else -> "Selected public model is not ready yet."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSecondaryContainer

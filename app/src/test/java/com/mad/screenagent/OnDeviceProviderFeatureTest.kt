@@ -13,10 +13,13 @@ import com.mad.screenagent.feature.agents.providerUiInfo
 import com.mad.screenagent.feature.agents.recommendedModelChoices
 import com.mad.screenagent.shared.streaming.AiProviderFactory
 import com.mad.screenagent.shared.streaming.OnDeviceProvider
+import com.mad.screenagent.shared.streaming.OnDeviceRuntime
 import com.mad.screenagent.shared.streaming.StreamChunk
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.toList
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -41,11 +44,11 @@ class OnDeviceProviderFeatureTest {
     @Test
     fun onDeviceRecommendedModelsStartWithTheCuratedStarterModel() {
         assertEquals(
-            "gemma-3n-e2b-it",
+            "deepseek-r1-distill-qwen-1.5b",
             defaultRecommendedModelId(AiProviderType.ON_DEVICE)
         )
         assertEquals(
-            listOf("gemma-3n-e2b-it", "gemma-3-1b-it", "gemma-3-4b-it"),
+            listOf("deepseek-r1-distill-qwen-1.5b", "qwen2.5-1.5b-instruct", "phi-4-mini-instruct"),
             recommendedModelChoices(AiProviderType.ON_DEVICE).map { it.id }
         )
     }
@@ -55,11 +58,12 @@ class OnDeviceProviderFeatureTest {
         val provider = AiProviderFactory.create(
             config = AgentConfig(
                 provider = AiProviderType.ON_DEVICE,
-                model = "gemma-3n-e2b-it",
-                onDevice = OnDeviceProviderConfig(selectedModelId = "gemma-3n-e2b-it")
+                model = "deepseek-r1-distill-qwen-1.5b",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "deepseek-r1-distill-qwen-1.5b")
             ),
             client = OkHttpClient(),
-            onDeviceModelRepository = FakeOnDeviceModelSource()
+            onDeviceModelRepository = FakeOnDeviceModelSource(),
+            onDeviceRuntime = FakeOnDeviceRuntime()
         )
 
         assertTrue(provider is OnDeviceProvider)
@@ -67,13 +71,13 @@ class OnDeviceProviderFeatureTest {
 
     @Test
     fun onDeviceProviderFailsWhenTheModelIsNotInstalled() = runBlocking {
-        val provider = OnDeviceProvider(FakeOnDeviceModelSource())
+        val provider = OnDeviceProvider(FakeOnDeviceModelSource(), runtime = FakeOnDeviceRuntime())
         val chunk = provider.streamResponse(
             messages = emptyList(),
             config = AgentConfig(
                 provider = AiProviderType.ON_DEVICE,
-                model = "gemma-3n-e2b-it",
-                onDevice = OnDeviceProviderConfig(selectedModelId = "gemma-3n-e2b-it")
+                model = "deepseek-r1-distill-qwen-1.5b",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "deepseek-r1-distill-qwen-1.5b")
             )
         ).first()
 
@@ -82,28 +86,84 @@ class OnDeviceProviderFeatureTest {
     }
 
     @Test
-    fun onDeviceProviderUsesTheRuntimeSeamAfterInstall() = runBlocking {
+    fun onDeviceProviderFailsWhileTheModelIsStillDownloading() = runBlocking {
+        val modelFile = tempModelFile()
         val provider = OnDeviceProvider(
             FakeOnDeviceModelSource(
                 installed = InstalledOnDeviceModel(
-                    modelId = "gemma-3n-e2b-it",
-                    localPath = File("/tmp/gemma-3n-e2b-it").absolutePath,
-                    downloadState = OnDeviceDownloadState.DOWNLOADED,
+                    modelId = "deepseek-r1-distill-qwen-1.5b",
+                    localPath = modelFile.absolutePath,
+                    downloadState = OnDeviceDownloadState.DOWNLOADING,
                     installedAt = 123L
                 )
-            )
+            ),
+            runtime = FakeOnDeviceRuntime()
         )
         val chunk = provider.streamResponse(
             messages = emptyList(),
             config = AgentConfig(
                 provider = AiProviderType.ON_DEVICE,
-                model = "gemma-3n-e2b-it",
-                onDevice = OnDeviceProviderConfig(selectedModelId = "gemma-3n-e2b-it")
+                model = "deepseek-r1-distill-qwen-1.5b",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "deepseek-r1-distill-qwen-1.5b")
             )
         ).first()
 
         assertTrue(chunk is StreamChunk.Error)
-        assertTrue((chunk as StreamChunk.Error).cause.message!!.contains("runtime is not wired"))
+        assertTrue((chunk as StreamChunk.Error).cause.message!!.contains("downloading"))
+    }
+
+    @Test
+    fun onDeviceProviderFailsWhileTheModelIsValidating() = runBlocking {
+        val modelFile = tempModelFile()
+        val provider = OnDeviceProvider(
+            FakeOnDeviceModelSource(
+                installed = InstalledOnDeviceModel(
+                    modelId = "deepseek-r1-distill-qwen-1.5b",
+                    localPath = modelFile.absolutePath,
+                    downloadState = OnDeviceDownloadState.VALIDATING,
+                    installedAt = 123L
+                )
+            ),
+            runtime = FakeOnDeviceRuntime()
+        )
+        val chunk = provider.streamResponse(
+            messages = emptyList(),
+            config = AgentConfig(
+                provider = AiProviderType.ON_DEVICE,
+                model = "deepseek-r1-distill-qwen-1.5b",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "deepseek-r1-distill-qwen-1.5b")
+            )
+        ).first()
+
+        assertTrue(chunk is StreamChunk.Error)
+        assertTrue((chunk as StreamChunk.Error).cause.message!!.contains("downloading"))
+    }
+
+    @Test
+    fun onDeviceProviderUsesTheRuntimeSeamAfterInstall() = runBlocking {
+        val modelFile = tempModelFile()
+        val provider = OnDeviceProvider(
+            FakeOnDeviceModelSource(
+                installed = InstalledOnDeviceModel(
+                    modelId = "deepseek-r1-distill-qwen-1.5b",
+                    localPath = modelFile.absolutePath,
+                    downloadState = OnDeviceDownloadState.READY,
+                    installedAt = 123L
+                )
+            ),
+            runtime = FakeOnDeviceRuntime()
+        )
+        val chunks = provider.streamResponse(
+            messages = emptyList(),
+            config = AgentConfig(
+                provider = AiProviderType.ON_DEVICE,
+                model = "deepseek-r1-distill-qwen-1.5b",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "deepseek-r1-distill-qwen-1.5b")
+            )
+        ).toList()
+
+        assertTrue(chunks.first() is StreamChunk.Token)
+        assertTrue(chunks.last() is StreamChunk.Done)
     }
 
     private class FakeOnDeviceModelSource(
@@ -112,4 +172,21 @@ class OnDeviceProviderFeatureTest {
         override suspend fun getInstalledModel(modelId: String): InstalledOnDeviceModel? =
             installed?.takeIf { it.modelId == modelId }
     }
+
+    private class FakeOnDeviceRuntime : OnDeviceRuntime {
+        override fun streamResponse(
+            messages: List<com.mad.screenagent.shared.streaming.ChatMessage>,
+            config: AgentConfig,
+            modelPath: String
+        ) = flow {
+            emit(StreamChunk.Token("ok"))
+            emit(StreamChunk.Done)
+        }
+    }
+
+    private fun tempModelFile(): File =
+        File.createTempFile("gemma-3n-e2b-it", ".task").apply {
+            writeText("stub")
+            deleteOnExit()
+        }
 }

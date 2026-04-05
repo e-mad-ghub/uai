@@ -58,6 +58,8 @@ import com.mad.screenagent.MainActivity
 import com.mad.screenagent.R
 import com.mad.screenagent.UaiApplication
 import com.mad.screenagent.data.model.QuickActionConfig
+import com.mad.screenagent.data.model.AiProviderType
+import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.model.forSlot
 import com.mad.screenagent.shared.streaming.AssistantStreamingSession
 import com.mad.screenagent.shared.streaming.FileAttachmentContext
@@ -101,6 +103,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -2110,6 +2113,14 @@ class FloatingBubbleService : Service() {
                 }
                 convId = currentConversationId ?: return@launch
                 val activeConversationId = convId
+                val resolvedAgent = container.resolveAgentConfig(agent)
+                val onDeviceBlockMessage = if (resolvedAgent.provider == AiProviderType.ON_DEVICE) {
+                    validateOnDeviceReadiness(container, resolvedAgent)
+                } else null
+                if (onDeviceBlockMessage != null) {
+                    miniChatErrorMessage = onDeviceBlockMessage
+                    return@launch
+                }
                 val persistedImageUri = imageList.firstOrNull()?.third
                     ?: imageList.firstOrNull()?.first?.let {
                         withContext(Dispatchers.IO) { persistImageAttachment(applicationContext, it) }
@@ -2178,7 +2189,6 @@ class FloatingBubbleService : Service() {
                         msg.toChatMessage()
                     }
                 })
-                val resolvedAgent = container.resolveAgentConfig(agent)
                 val shouldPrepareWebTurn = resolvedAgent.hasInternetAccess &&
                     container.webGateway.shouldPrepareTurn(
                         conversationKey = activeConversationId,
@@ -2281,6 +2291,33 @@ class FloatingBubbleService : Service() {
     }
 
     // ----- Helpers -----
+
+    private suspend fun validateOnDeviceReadiness(
+        container: com.mad.screenagent.AppContainer,
+        agent: AgentConfig
+    ): String? {
+        val modelId = agent.onDevice.selectedModelId.ifBlank { agent.model }.trim()
+        if (modelId.isBlank()) {
+            return "Choose an On-Device model before sending a message."
+        }
+        val installed = container.onDeviceModelRepository.getInstalledModel(modelId)
+            ?: return "Download an On-Device model before sending a message."
+        if (installed.downloadState == OnDeviceDownloadState.DOWNLOADING ||
+            installed.downloadState == OnDeviceDownloadState.VALIDATING
+        ) {
+            return "The selected On-Device model is still downloading."
+        }
+        if (!installed.downloadState.isReadyForUse) {
+            return installed.errorMessage ?: "The selected On-Device model is not ready yet."
+        }
+        val modelFile = File(installed.localPath)
+        if (!modelFile.exists() || modelFile.length() == 0L) {
+            val reason = "The selected On-Device model file is missing at ${installed.localPath}."
+            container.onDeviceModelRepository.markModelUnavailable(modelId, reason)
+            return reason
+        }
+        return null
+    }
 
     private fun getRealScreenHeight(): Int =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

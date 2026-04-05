@@ -209,21 +209,21 @@ fun recommendedModelChoices(
     val baseChoices = when (provider) {
         AiProviderType.ON_DEVICE -> listOf(
             RecommendedModelChoice(
-                id = "gemma-3n-e2b-it",
-                label = "Gemma 3n E2B IT",
-                description = "Balanced on-device starter model.",
+                id = "deepseek-r1-distill-qwen-1.5b",
+                label = "DeepSeek-R1-Distill-Qwen-1.5B",
+                description = "Balanced public on-device starter model.",
                 supportsDocuments = true
             ),
             RecommendedModelChoice(
-                id = "gemma-3-1b-it",
-                label = "Gemma 3 1B IT",
-                description = "Lightweight on-device chat model.",
+                id = "qwen2.5-1.5b-instruct",
+                label = "Qwen2.5-1.5B-Instruct",
+                description = "Lightweight public on-device chat model.",
                 supportsDocuments = true
             ),
             RecommendedModelChoice(
-                id = "gemma-3-4b-it",
-                label = "Gemma 3 4B IT",
-                description = "More capable on-device model.",
+                id = "phi-4-mini-instruct",
+                label = "Phi-4-mini-instruct",
+                description = "Compact public on-device chat model.",
                 supportsDocuments = true
             )
         )

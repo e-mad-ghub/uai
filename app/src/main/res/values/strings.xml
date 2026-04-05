@@ -66,6 +66,10 @@
     <string name="bubble_channel_description">Shows the persistent ScreenAgent mini chat overlay</string>
     <string name="bubble_notification_title">ScreenAgent Mini Chat</string>
     <string name="bubble_notification_text">Your floating ScreenAgent assistant is active</string>
+    <string name="download_channel_name">ScreenAgent Downloads</string>
+    <string name="download_channel_description">Shows progress for local model downloads</string>
+    <string name="download_notification_title">Downloading local model</string>
+    <string name="download_notification_text">ScreenAgent is downloading an on-device model in the background</string>
     <string name="feature_mini_chat">Mini Chat</string>
     <string name="feature_chats">Chats</string>
     <string name="feature_agents">Assistants</string>

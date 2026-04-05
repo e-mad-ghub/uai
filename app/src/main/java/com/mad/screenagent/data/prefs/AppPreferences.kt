@@ -15,9 +15,10 @@ import com.mad.screenagent.data.model.AppColorTheme
 import com.mad.screenagent.data.model.InstalledOnDeviceModel
 import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.model.OnDeviceModelCatalog
-import com.mad.screenagent.data.model.OnDeviceModelCatalogEntry
 import com.mad.screenagent.data.model.OpenRouterCatalog
 import com.mad.screenagent.data.model.ProviderModelCatalog
+import com.mad.screenagent.data.model.allOnDeviceCatalogEntries
+import com.mad.screenagent.data.model.normalizeOnDeviceCatalog
 import com.mad.screenagent.data.model.QuickActionConfig
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -122,31 +123,16 @@ class AppPreferences(context: Context) {
 
     val onDeviceModelCatalogFlow: Flow<OnDeviceModelCatalog> = store.data.map { prefs ->
         val json = prefs[Keys.ON_DEVICE_MODEL_CATALOG_JSON]
-        if (json.isNullOrBlank()) {
+        val catalog = if (json.isNullOrBlank()) {
             OnDeviceModelCatalog(
-                models = listOf(
-                    OnDeviceModelCatalogEntry(
-                        id = "gemma-3n-e2b-it",
-                        displayName = "Gemma 3n E2B IT",
-                        description = "Balanced on-device starter model."
-                    ),
-                    OnDeviceModelCatalogEntry(
-                        id = "gemma-3-1b-it",
-                        displayName = "Gemma 3 1B IT",
-                        description = "Lightweight on-device chat model."
-                    ),
-                    OnDeviceModelCatalogEntry(
-                        id = "gemma-3-4b-it",
-                        displayName = "Gemma 3 4B IT",
-                        description = "More capable on-device model."
-                    )
-                )
+                models = allOnDeviceCatalogEntries()
             )
         } else {
             gson.fromJson(json, OnDeviceModelCatalog::class.java)?.copy(
                 fetchedAt = prefs[Keys.ON_DEVICE_MODEL_CATALOG_FETCHED_AT] ?: 0L
             ) ?: OnDeviceModelCatalog()
         }
+        normalizeOnDeviceCatalog(catalog)
     }
 
     val installedOnDeviceModelsFlow: Flow<List<InstalledOnDeviceModel>> = store.data.map { prefs ->

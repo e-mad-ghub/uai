@@ -13,10 +13,12 @@ object AiProviderFactory {
         client: OkHttpClient,
         openRouterCatalogRepository: OpenRouterCatalogRepository? = null,
         openRouterBestFreeRoutingStateStore: OpenRouterBestFreeRoutingStateStore? = null,
-        onDeviceModelRepository: OnDeviceModelSource? = null
+        onDeviceModelRepository: OnDeviceModelSource? = null,
+        onDeviceRuntime: OnDeviceRuntime? = null
     ): AiProvider = when (config.provider) {
         AiProviderType.ON_DEVICE -> OnDeviceProvider(
-            modelRepository = onDeviceModelRepository ?: error("On-Device model repository is required")
+            modelRepository = onDeviceModelRepository ?: error("On-Device model repository is required"),
+            runtime = onDeviceRuntime ?: error("On-Device runtime is required")
         )
         AiProviderType.OPENAI -> OpenAiProvider(client)
         AiProviderType.ANTHROPIC -> AnthropicProvider(client)

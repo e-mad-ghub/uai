@@ -78,19 +78,29 @@ class UaiApplication : Application() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            val bubbleChannel = NotificationChannel(
                 BUBBLE_CHANNEL_ID,
                 getString(R.string.bubble_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = getString(R.string.bubble_channel_description)
             }
+            val downloadChannel = NotificationChannel(
+                DOWNLOAD_CHANNEL_ID,
+                getString(R.string.download_channel_name),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = getString(R.string.download_channel_description)
+            }
             getSystemService(NotificationManager::class.java)
-                .createNotificationChannel(channel)
+                .createNotificationChannel(bubbleChannel)
+            getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(downloadChannel)
         }
     }
 
     companion object {
         const val BUBBLE_CHANNEL_ID = "uai_bubble_channel"
+        const val DOWNLOAD_CHANNEL_ID = "uai_download_channel"
     }
 }

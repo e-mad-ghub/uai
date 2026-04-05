@@ -12,6 +12,7 @@ import com.mad.screenagent.data.model.OPENROUTER_FREE_ROUTER_MODEL
 import com.mad.screenagent.data.model.OpenRouterCatalogEntry
 import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.model.OnDeviceModelCatalog
+import com.mad.screenagent.data.model.OnDeviceModelCatalogEntry
 import com.mad.screenagent.data.model.OnDeviceModelLibraryItem
 import com.mad.screenagent.data.model.buildOpenAiCompatibleChatCompletionsUrl
 import com.mad.screenagent.data.model.buildOpenAiCompatibleModelsUrl
@@ -93,6 +94,15 @@ class AgentEditViewModel(
     private val _onDeviceModelLibrary = MutableStateFlow<List<OnDeviceModelLibraryItem>>(emptyList())
     val onDeviceModelLibrary: StateFlow<List<OnDeviceModelLibraryItem>> = _onDeviceModelLibrary
 
+    private val _publicOnDeviceModelLibrary = MutableStateFlow<List<OnDeviceModelLibraryItem>>(emptyList())
+    val publicOnDeviceModelLibrary: StateFlow<List<OnDeviceModelLibraryItem>> = _publicOnDeviceModelLibrary
+
+    private val _readyOnDeviceModelLibrary = MutableStateFlow<List<OnDeviceModelLibraryItem>>(emptyList())
+    val readyOnDeviceModelLibrary: StateFlow<List<OnDeviceModelLibraryItem>> = _readyOnDeviceModelLibrary
+
+    private val _nonPublicOnDeviceModelLibrary = MutableStateFlow<List<OnDeviceModelLibraryItem>>(emptyList())
+    val nonPublicOnDeviceModelLibrary: StateFlow<List<OnDeviceModelLibraryItem>> = _nonPublicOnDeviceModelLibrary
+
     private val _onDeviceDownloadState = MutableStateFlow(OnDeviceDownloadState.NOT_DOWNLOADED)
     val onDeviceDownloadState: StateFlow<OnDeviceDownloadState> = _onDeviceDownloadState
 
@@ -126,12 +136,20 @@ class AgentEditViewModel(
         validateCustomBaseUrl(_agent.value)
     )
 
-    val saveValidationMessage: StateFlow<String?> = combine(_agent, _allAgents) { draft, agents ->
-        validateDraft(draft, agents)
+    val saveValidationMessage: StateFlow<String?> = combine(
+        _agent,
+        _allAgents,
+        _readyOnDeviceModelLibrary
+    ) { draft, agents, readyOnDeviceModels ->
+        validateDraft(draft, agents, readyOnDeviceModels.map { it.catalogEntry.id }.toSet())
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5000),
-        validateDraft(_agent.value, _allAgents.value)
+        validateDraft(
+            _agent.value,
+            _allAgents.value,
+            _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }.toSet()
+        )
     )
 
     private var openAiModels: List<String> = emptyList()
@@ -203,12 +221,21 @@ class AgentEditViewModel(
             }
         }
         viewModelScope.launch {
-            onDeviceModelRepository.libraryFlow.collect { library ->
-                _onDeviceModelLibrary.value = library
-                onDeviceModels = library.map { it.catalogEntry.id }
-                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
-                    _providerModels.value = onDeviceModels
+            onDeviceModelRepository.libraryFlow.collect { publicLibrary ->
+                _publicOnDeviceModelLibrary.value = publicLibrary
+                _readyOnDeviceModelLibrary.value = publicLibrary.filter {
+                    it.installRecord?.downloadState?.isReadyForUse == true
                 }
+                onDeviceModels = _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }
+                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
+                    _providerModels.value = _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }
+                }
+            }
+        }
+        viewModelScope.launch {
+            onDeviceModelRepository.nonPublicLibraryFlow.collect { nonPublicLibrary ->
+                _nonPublicOnDeviceModelLibrary.value = nonPublicLibrary
+                _onDeviceModelLibrary.value = _publicOnDeviceModelLibrary.value + nonPublicLibrary
             }
         }
         viewModelScope.launch {
@@ -224,8 +251,12 @@ class AgentEditViewModel(
         val previous = _agent.value
         val updated = previous.block()
         _agent.value = if (updated.provider == AiProviderType.ON_DEVICE) {
+            val selectedModelId = updated.onDevice.selectedModelId.trim().ifBlank {
+                updated.model.trim()
+            }
             updated.copy(
-                onDevice = updated.onDevice.copy(selectedModelId = updated.model.trim())
+                model = selectedModelId,
+                onDevice = updated.onDevice.copy(selectedModelId = selectedModelId)
             )
         } else {
             updated
@@ -245,7 +276,12 @@ class AgentEditViewModel(
 
     fun save(setActiveAfterSave: Boolean = false) {
         val draft = _agent.value.normalizedForSave()
-        if (validateDraft(draft, _allAgents.value) != null) return
+        if (validateDraft(
+                draft,
+                _allAgents.value,
+                _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }.toSet()
+            ) != null
+        ) return
         viewModelScope.launch {
             val current = repo.agentsFlow.first().toMutableList()
             val idx = current.indexOfFirst { it.id == draft.id }
@@ -275,6 +311,12 @@ class AgentEditViewModel(
                     ConnectionTestState.Failure("Choose an on-device model first.")
                 } else if (installed == null) {
                     ConnectionTestState.Failure("Download an on-device model before testing.")
+                } else if (installed.downloadState == OnDeviceDownloadState.DOWNLOADING ||
+                    installed.downloadState == OnDeviceDownloadState.VALIDATING
+                ) {
+                    ConnectionTestState.Failure("The selected on-device model is still downloading.")
+                } else if (!installed.downloadState.isReadyForUse) {
+                    ConnectionTestState.Failure("The selected on-device model is not ready yet.")
                 } else {
                     ConnectionTestState.Success("Installed locally at ${installed.localPath}")
                 }
@@ -336,16 +378,37 @@ class AgentEditViewModel(
     fun downloadOnDeviceModel(modelId: String) {
         if (modelId.isBlank()) return
         viewModelScope.launch {
-            onDeviceModelRepository.saveDownloadState(OnDeviceDownloadState.DOWNLOADING)
-            onDeviceModelRepository.saveInstalledModel(
-                modelId = modelId,
-                localPath = onDeviceModelRepository.modelFilePath(modelId)
-            )
-            onDeviceModelRepository.saveDownloadState(OnDeviceDownloadState.DOWNLOADED)
-            if (_agent.value.provider == AiProviderType.ON_DEVICE) {
-                _connectionTestState.value = ConnectionTestState.Success(
-                    "Marked $modelId as installed locally."
-                )
+            try {
+                onDeviceModelRepository.enqueueDownload(modelId)
+                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
+                    _connectionTestState.value = ConnectionTestState.Success(
+                        "Downloading the local model in the background."
+                    )
+                }
+            } catch (e: Exception) {
+                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
+                    _connectionTestState.value = ConnectionTestState.Failure(
+                        e.message ?: "On-device model download failed"
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelOnDeviceDownload(modelId: String) {
+        if (modelId.isBlank()) return
+        viewModelScope.launch {
+            try {
+                onDeviceModelRepository.cancelDownload(modelId)
+                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
+                    _connectionTestState.value = ConnectionTestState.Idle
+                }
+            } catch (e: Exception) {
+                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
+                    _connectionTestState.value = ConnectionTestState.Failure(
+                        e.message ?: "Unable to cancel the download"
+                    )
+                }
             }
         }
     }
@@ -365,6 +428,8 @@ class AgentEditViewModel(
 
     fun selectOnDeviceModel(modelId: String) {
         if (_agent.value.provider != AiProviderType.ON_DEVICE) return
+        val readyModelIds = _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }.toSet()
+        if (modelId !in readyModelIds) return
         update {
             copy(
                 model = modelId,
@@ -667,7 +732,9 @@ class AgentEditViewModel(
         _isLoadingModels.value = true
         try {
             val catalog = onDeviceModelRepository.refreshCatalogIfStale(force = force)
-            onDeviceModels = catalog.models.map { it.id }
+            onDeviceModels = catalog.models
+                .filter { it.isPublicDefaultChoice() }
+                .map { it.id }
         } catch (_: Exception) {
             // fall back to cached catalog
         } finally {
@@ -728,13 +795,33 @@ class AgentEditViewModel(
     }
 }
 
-private fun validateDraft(draft: AgentConfig, agents: List<AgentConfig>): String? {
+private fun OnDeviceModelCatalogEntry.isPublicDefaultChoice(): Boolean {
+    val normalized = buildList {
+        add(id)
+        add(displayName)
+        add(description)
+    }.joinToString(separator = " ").lowercase()
+
+    return "preview" !in normalized &&
+        "gated" !in normalized &&
+        "external access" !in normalized &&
+        "access required" !in normalized
+}
+
+private fun validateDraft(
+    draft: AgentConfig,
+    agents: List<AgentConfig>,
+    readyOnDeviceModelIds: Set<String>
+): String? {
+    val onDeviceModelId = draft.onDevice.selectedModelId.trim().ifBlank { draft.model.trim() }
     return validateName(draft, agents)
         ?: validateCustomBaseUrl(draft)
         ?: validateApiKey(draft)
         ?: if (draft.provider == AiProviderType.ON_DEVICE) {
-            if (draft.onDevice.selectedModelId.trim().isBlank()) {
+            if (onDeviceModelId.isBlank()) {
                 "Choose an on-device model before saving."
+            } else if (onDeviceModelId !in readyOnDeviceModelIds) {
+                "Download and select a ready on-device model before saving."
             } else null
         } else if (draft.model.trim().isBlank()) {
             "Choose a model before saving."
@@ -850,7 +937,7 @@ private fun AgentConfig.normalizedForSave(): AgentConfig {
         apiKey = apiKey.trim(),
         model = model.trim(),
         onDevice = if (provider == AiProviderType.ON_DEVICE) {
-            onDevice.copy(selectedModelId = onDevice.selectedModelId.trim())
+            onDevice.copy(selectedModelId = onDevice.selectedModelId.trim().ifBlank { model.trim() })
         } else {
             onDevice
         },

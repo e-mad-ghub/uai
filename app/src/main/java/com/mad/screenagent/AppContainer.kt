@@ -22,6 +22,7 @@ import com.mad.screenagent.shared.streaming.WebGroundingService
 import com.mad.screenagent.shared.streaming.WikipediaProvider
 import com.mad.screenagent.shared.streaming.YandexSearchProvider
 import com.mad.screenagent.shared.streaming.AiProviderFactory
+import com.mad.screenagent.shared.streaming.MediaPipeOnDeviceRuntime
 import com.mad.screenagent.shared.streaming.fetchAndCacheSearXInstances
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -65,7 +66,9 @@ class AppContainer(context: Context) {
         ProviderModelCatalogRepository(preferences, okHttpClient)
 
     val onDeviceModelRepository: OnDeviceModelRepository =
-        OnDeviceModelRepository(preferences, context.applicationContext)
+        OnDeviceModelRepository(preferences, context.applicationContext, okHttpClient)
+
+    val onDeviceRuntime = MediaPipeOnDeviceRuntime(context.applicationContext)
 
     val webGroundingService: WebGroundingService = run {
         // General search fallback chain: SearXNG → MetaGer → Yandex → Brave → DDG Lite → DDG → Bing
@@ -97,7 +100,8 @@ class AppContainer(context: Context) {
             client = okHttpClient,
             openRouterCatalogRepository = openRouterCatalogRepository,
             openRouterBestFreeRoutingStateStore = openRouterBestFreeRoutingStateStore,
-            onDeviceModelRepository = onDeviceModelRepository
+            onDeviceModelRepository = onDeviceModelRepository,
+            onDeviceRuntime = onDeviceRuntime
         )
     }
 

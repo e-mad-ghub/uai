@@ -49,6 +49,7 @@ fun AppNavGraph(
                     assistantRuntime = container.assistantRuntime,
                     webGateway = container.webGateway,
                     providerFactory = container.providerFactory,
+                    onDeviceModelRepository = container.onDeviceModelRepository,
                     agentResolver = container::resolveAgentConfig
                 )
             )
@@ -73,6 +74,7 @@ fun AppNavGraph(
                     assistantRuntime = container.assistantRuntime,
                     webGateway = container.webGateway,
                     providerFactory = container.providerFactory,
+                    onDeviceModelRepository = container.onDeviceModelRepository,
                     agentResolver = container::resolveAgentConfig
                 )
             )

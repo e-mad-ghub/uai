@@ -18,10 +18,12 @@ import com.mad.screenagent.data.db.ConversationEntity
 import com.mad.screenagent.data.db.MessageEntity
 import com.mad.screenagent.data.db.toChatMessage
 import com.mad.screenagent.data.model.AgentConfig
+import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.model.canHandleImageRequests
 import com.mad.screenagent.data.model.hasInternetAccess
 import com.mad.screenagent.data.repository.AgentRepository
 import com.mad.screenagent.data.repository.ConversationRepository
+import com.mad.screenagent.data.repository.OnDeviceModelSource
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
@@ -43,6 +45,7 @@ class ConversationDetailViewModel(
     private val assistantRuntime: ToolAwareAssistantRuntime,
     private val webGateway: WebGateway,
     private val providerFactory: (AgentConfig) -> AiProvider,
+    private val onDeviceModelRepository: OnDeviceModelSource,
     private val agentResolver: suspend (AgentConfig) -> AgentConfig = { it }
 ) : ViewModel() {
 
@@ -273,6 +276,14 @@ class ConversationDetailViewModel(
         _isLoading.value = true
         _inputText.value = ""
         streamingJob = viewModelScope.launch {
+            val onDeviceBlockMessage = if (agent.provider == com.mad.screenagent.data.model.AiProviderType.ON_DEVICE) {
+                validateOnDeviceReadiness(agent)
+            } else null
+            if (onDeviceBlockMessage != null) {
+                _errorEvent.trySend(onDeviceBlockMessage)
+                _isLoading.value = false
+                return@launch
+            }
 
             val isFirstMessage = messages.value.isEmpty()
 
@@ -492,6 +503,29 @@ class ConversationDetailViewModel(
         }
     }
 
+    private suspend fun validateOnDeviceReadiness(agent: AgentConfig): String? {
+        val modelId = agent.onDevice.selectedModelId.trim().ifBlank { agent.model.trim() }
+        if (modelId.isBlank()) {
+            return "Choose an On-Device model before sending a message."
+        }
+        val installed = onDeviceModelRepository.getInstalledModel(modelId)
+            ?: return "Download an On-Device model before sending a message."
+        if (installed.downloadState == OnDeviceDownloadState.DOWNLOADING ||
+            installed.downloadState == OnDeviceDownloadState.VALIDATING
+        ) {
+            return "The selected On-Device model is still downloading."
+        }
+        if (!installed.downloadState.isReadyForUse) {
+            return installed.errorMessage ?: "The selected On-Device model is not ready yet."
+        }
+        if (!java.io.File(installed.localPath).exists() || java.io.File(installed.localPath).length() == 0L) {
+            val reason = "The selected On-Device model file is missing at ${installed.localPath}."
+            onDeviceModelRepository.markModelUnavailable(modelId, reason)
+            return reason
+        }
+        return null
+    }
+
     class Factory(
         private val conversationId: String,
         private val repo: ConversationRepository,
@@ -499,6 +533,7 @@ class ConversationDetailViewModel(
         private val assistantRuntime: ToolAwareAssistantRuntime,
         private val webGateway: WebGateway,
         private val providerFactory: (AgentConfig) -> AiProvider,
+        private val onDeviceModelRepository: OnDeviceModelSource,
         private val agentResolver: suspend (AgentConfig) -> AgentConfig = { it }
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
@@ -510,6 +545,7 @@ class ConversationDetailViewModel(
                 assistantRuntime,
                 webGateway,
                 providerFactory,
+                onDeviceModelRepository,
                 agentResolver
             ) as T
     }

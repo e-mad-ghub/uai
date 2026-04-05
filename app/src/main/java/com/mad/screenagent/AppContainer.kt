@@ -32,6 +32,7 @@ import com.mad.screenagent.data.model.MONEY_SAVER_MODEL
 import com.mad.screenagent.data.repository.AgentRepository
 import com.mad.screenagent.data.repository.ConversationRepository
 import com.mad.screenagent.data.repository.OpenRouterCatalogRepository
+import com.mad.screenagent.data.repository.OnDeviceModelRepository
 import com.mad.screenagent.data.repository.ProviderModelCatalogRepository
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -63,6 +64,9 @@ class AppContainer(context: Context) {
     val providerModelCatalogRepository: ProviderModelCatalogRepository =
         ProviderModelCatalogRepository(preferences, okHttpClient)
 
+    val onDeviceModelRepository: OnDeviceModelRepository =
+        OnDeviceModelRepository(preferences, context.applicationContext)
+
     val webGroundingService: WebGroundingService = run {
         // General search fallback chain: SearXNG → MetaGer → Yandex → Brave → DDG Lite → DDG → Bing
         val generalSearchProvider = FallbackWebSearchProvider(
@@ -92,7 +96,8 @@ class AppContainer(context: Context) {
             config = config,
             client = okHttpClient,
             openRouterCatalogRepository = openRouterCatalogRepository,
-            openRouterBestFreeRoutingStateStore = openRouterBestFreeRoutingStateStore
+            openRouterBestFreeRoutingStateStore = openRouterBestFreeRoutingStateStore,
+            onDeviceModelRepository = onDeviceModelRepository
         )
     }
 

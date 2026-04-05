@@ -21,6 +21,7 @@ class ProviderModelCatalogRepository(
     fun catalogFlow(provider: AiProviderType): Flow<ProviderModelCatalog> = when (provider) {
         AiProviderType.OPENAI -> prefs.openAiModelCatalogFlow
         AiProviderType.ANTHROPIC -> prefs.anthropicModelCatalogFlow
+        AiProviderType.ON_DEVICE -> error("On-Device catalog is managed by OnDeviceModelRepository")
         AiProviderType.OPENROUTER -> error("OpenRouter uses OpenRouterCatalogRepository")
         AiProviderType.CUSTOM -> error("Custom provider catalogs are fetched per assistant")
     }
@@ -34,6 +35,7 @@ class ProviderModelCatalogRepository(
         maxAgeMs: Long = DEFAULT_CATALOG_MAX_AGE_MS,
         force: Boolean = false
     ): ProviderModelCatalog {
+        require(provider != AiProviderType.ON_DEVICE) { "Use OnDeviceModelRepository for On-Device" }
         require(provider != AiProviderType.OPENROUTER) { "Use OpenRouterCatalogRepository for OpenRouter" }
         require(provider != AiProviderType.CUSTOM) { "Custom provider catalogs are fetched per assistant" }
 
@@ -46,6 +48,7 @@ class ProviderModelCatalogRepository(
             when (provider) {
                 AiProviderType.OPENAI -> fetchOpenAiCatalog(apiKey)
                 AiProviderType.ANTHROPIC -> fetchAnthropicCatalog(apiKey)
+                AiProviderType.ON_DEVICE -> error("On-Device catalog is managed locally")
                 AiProviderType.OPENROUTER -> error("Unsupported provider")
                 AiProviderType.CUSTOM -> error("Unsupported provider")
             }

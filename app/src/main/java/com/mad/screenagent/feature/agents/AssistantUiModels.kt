@@ -180,12 +180,22 @@ fun providerUiInfo(provider: AiProviderType): ProviderUiInfo = when (provider) {
         apiKeyCalloutTitle = "Custom provider setup",
         apiKeyCalloutBody = "Choose a preset or enter a manual base URL for Groq, Grok, NVIDIA, or another compatible provider."
     )
+    AiProviderType.ON_DEVICE -> ProviderUiInfo(
+        provider = provider,
+        label = "On-Device",
+        description = "Run curated local models directly on the device with no API key.",
+        apiKeyHint = "No API key needed. Download a local model and use it on the device.",
+        apiKeyPlaceholder = "Not required",
+        apiKeyCalloutTitle = "On-device models",
+        apiKeyCalloutBody = "ScreenAgent keeps local models native to the app. Pick a model from the installed catalog and use it offline."
+    )
 }
 
 fun assistantProviderOrder(): List<AiProviderType> = listOf(
-    AiProviderType.OPENROUTER,
-    AiProviderType.OPENAI,
+    AiProviderType.ON_DEVICE,
     AiProviderType.ANTHROPIC,
+    AiProviderType.OPENAI,
+    AiProviderType.OPENROUTER,
     AiProviderType.CUSTOM
 )
 
@@ -197,6 +207,26 @@ fun recommendedModelChoices(
     currentModel: String? = null
 ): List<RecommendedModelChoice> {
     val baseChoices = when (provider) {
+        AiProviderType.ON_DEVICE -> listOf(
+            RecommendedModelChoice(
+                id = "gemma-3n-e2b-it",
+                label = "Gemma 3n E2B IT",
+                description = "Balanced on-device starter model.",
+                supportsDocuments = true
+            ),
+            RecommendedModelChoice(
+                id = "gemma-3-1b-it",
+                label = "Gemma 3 1B IT",
+                description = "Lightweight on-device chat model.",
+                supportsDocuments = true
+            ),
+            RecommendedModelChoice(
+                id = "gemma-3-4b-it",
+                label = "Gemma 3 4B IT",
+                description = "More capable on-device model.",
+                supportsDocuments = true
+            )
+        )
         AiProviderType.OPENAI -> {
             val balancedModel = preferredOpenAiBalancedModel(fetchedProviderModels)
             val fastModel = preferredOpenAiFastModel(fetchedProviderModels)

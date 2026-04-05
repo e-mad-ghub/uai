@@ -48,6 +48,8 @@ import com.mad.screenagent.R
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AiProviderType
 import com.mad.screenagent.data.model.CustomProviderPreset
+import com.mad.screenagent.data.model.OnDeviceDownloadState
+import com.mad.screenagent.data.model.OnDeviceModelLibraryItem
 import com.mad.screenagent.data.model.canHandleImageRequests
 import com.mad.screenagent.data.model.isOpenRouterFreeModel
 import com.mad.screenagent.data.model.normalizeOpenAiCompatibleBaseUrl
@@ -73,6 +75,9 @@ fun AgentEditScreen(
     val openRouterCatalogEntries by viewModel.openRouterCatalogEntries.collectAsStateWithLifecycle()
     val freeModelIds by viewModel.freeModelIds.collectAsStateWithLifecycle()
     val providerModels by viewModel.providerModels.collectAsStateWithLifecycle()
+    val onDeviceCatalog by viewModel.onDeviceCatalog.collectAsStateWithLifecycle()
+    val onDeviceModelLibrary by viewModel.onDeviceModelLibrary.collectAsStateWithLifecycle()
+    val onDeviceDownloadState by viewModel.onDeviceDownloadState.collectAsStateWithLifecycle()
     val isLoadingModels by viewModel.isLoadingModels.collectAsStateWithLifecycle()
     val connectionTestState by viewModel.connectionTestState.collectAsStateWithLifecycle()
     val nameValidationMessage by viewModel.nameValidationMessage.collectAsStateWithLifecycle()
@@ -93,6 +98,11 @@ fun AgentEditScreen(
     val selectedModelChoice = recommendedModels.firstOrNull { it.id == agent.model }
         ?: recommendedModels.firstOrNull()
     val isCustomProvider = agent.provider == AiProviderType.CUSTOM
+    val isOnDeviceProvider = agent.provider == AiProviderType.ON_DEVICE
+    val selectedOnDeviceModelId = agent.onDevice.selectedModelId.ifBlank { agent.model }
+    val selectedOnDeviceItem = onDeviceModelLibrary.firstOrNull {
+        it.catalogEntry.id == selectedOnDeviceModelId
+    }
     val canSave = saveValidationMessage == null
     val saveButtonLabel = when {
         viewModel.isEditing -> stringResource(R.string.assistants_save_changes)
@@ -249,7 +259,19 @@ fun AgentEditScreen(
                 )
                 ProviderInfoCard(info = providerInfo)
 
-                if (isCustomProvider) {
+                if (isOnDeviceProvider) {
+                    OnDeviceModelSection(
+                        library = onDeviceModelLibrary,
+                        selectedModelId = agent.onDevice.selectedModelId.ifBlank { agent.model },
+                        downloadState = onDeviceDownloadState,
+                        onModelSelect = { modelId ->
+                            viewModel.update { copy(onDevice = onDevice.copy(selectedModelId = modelId)) }
+                        },
+                        onDownload = viewModel::downloadOnDeviceModel,
+                        onDelete = viewModel::deleteOnDeviceModel,
+                        onRefresh = viewModel::refreshOnDeviceCatalog
+                    )
+                } else if (isCustomProvider) {
                     CustomProviderPresetSelector(
                         selectedPreset = agent.customPreset,
                         onPresetSelect = viewModel::applyCustomPreset
@@ -278,42 +300,46 @@ fun AgentEditScreen(
                     ProductPill(label = agent.provider.displayName, emphasized = true)
                     if (isCustomProvider) {
                         ProductPill(label = agent.customPreset.displayName)
+                    } else if (isOnDeviceProvider) {
+                        ProductPill(label = agent.onDevice.selectedModelId.ifBlank { "Choose model" })
                     } else if (selectedModelChoice != null) {
                         ProductPill(label = selectedModelChoice.label)
                     }
                 }
 
-                OutlinedTextField(
-                    value = agent.apiKey,
-                    onValueChange = { viewModel.update { copy(apiKey = it) } },
-                    label = { Text(stringResource(R.string.assistants_field_api_key)) },
-                    placeholder = { Text(providerInfo.apiKeyPlaceholder) },
-                    modifier = Modifier.fillMaxWidth(),
-                    isError = apiKeyValidationMessage != null,
-                    visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    supportingText = {
-                        Text(apiKeyValidationMessage ?: providerInfo.apiKeyHint)
-                    },
-                    trailingIcon = {
-                        TextButton(onClick = { showApiKey = !showApiKey }) {
-                            Text(
-                                if (showApiKey) {
-                                    stringResource(R.string.assistants_action_hide)
-                                } else {
-                                    stringResource(R.string.assistants_action_show)
-                                }
-                            )
+                if (!isOnDeviceProvider) {
+                    OutlinedTextField(
+                        value = agent.apiKey,
+                        onValueChange = { viewModel.update { copy(apiKey = it) } },
+                        label = { Text(stringResource(R.string.assistants_field_api_key)) },
+                        placeholder = { Text(providerInfo.apiKeyPlaceholder) },
+                        modifier = Modifier.fillMaxWidth(),
+                        isError = apiKeyValidationMessage != null,
+                        visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        supportingText = {
+                            Text(apiKeyValidationMessage ?: providerInfo.apiKeyHint)
+                        },
+                        trailingIcon = {
+                            TextButton(onClick = { showApiKey = !showApiKey }) {
+                                Text(
+                                    if (showApiKey) {
+                                        stringResource(R.string.assistants_action_hide)
+                                    } else {
+                                        stringResource(R.string.assistants_action_show)
+                                    }
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+                    ApiKeyHelpCallout(
+                        info = providerInfo,
+                        onOpenLink = providerInfo.apiKeyActionUrl?.let { url ->
+                            { uriHandler.openUri(url) }
                         }
-                    },
-                    singleLine = true
-                )
-                ApiKeyHelpCallout(
-                    info = providerInfo,
-                    onOpenLink = providerInfo.apiKeyActionUrl?.let { url ->
-                        { uriHandler.openUri(url) }
-                    }
-                )
+                    )
+                }
 
                 if (isCustomProvider) {
                     RawModelSelector(
@@ -330,7 +356,7 @@ fun AgentEditScreen(
                             "Enter a model ID from this endpoint. ScreenAgent will detect models after a successful availability check."
                         }
                     )
-                } else if (selectedModelChoice != null) {
+                } else if (!isOnDeviceProvider && selectedModelChoice != null) {
                     RecommendedModelSelector(
                         selectedModel = selectedModelChoice,
                         choices = recommendedModels,
@@ -339,21 +365,35 @@ fun AgentEditScreen(
                         }
                     )
                 }
-                ProviderCatalogStatusNote(
-                    provider = agent.provider,
-                    hasProviderCatalog = providerModels.isNotEmpty(),
-                    isLoadingModels = isLoadingModels,
-                    hasApiKey = agent.apiKey.isNotBlank(),
-                    hasBaseUrl = !isCustomProvider || normalizeOpenAiCompatibleBaseUrl(agent.customBaseUrl).isNotBlank()
-                )
+                if (isOnDeviceProvider) {
+                    LocalModelStatusNote(
+                        hasModels = onDeviceCatalog.models.isNotEmpty(),
+                        isLoadingModels = isLoadingModels,
+                        selectedModel = agent.onDevice.selectedModelId,
+                        isReady = onDeviceModelLibrary.any {
+                            it.catalogEntry.id == agent.onDevice.selectedModelId && it.installRecord != null
+                        }
+                    )
+                } else {
+                    ProviderCatalogStatusNote(
+                        provider = agent.provider,
+                        hasProviderCatalog = providerModels.isNotEmpty(),
+                        isLoadingModels = isLoadingModels,
+                        hasApiKey = agent.apiKey.isNotBlank(),
+                        hasBaseUrl = !isCustomProvider || normalizeOpenAiCompatibleBaseUrl(agent.customBaseUrl).isNotBlank()
+                    )
+                }
 
                 CapabilityRow(agent = agent)
 
                 OutlinedButton(
                     onClick = viewModel::testConnection,
-                    enabled = agent.apiKey.isNotBlank() &&
-                        (!isCustomProvider || normalizeOpenAiCompatibleBaseUrl(agent.customBaseUrl).isNotBlank()) &&
-                        agent.model.isNotBlank() &&
+                    enabled = when {
+                        isOnDeviceProvider -> selectedOnDeviceModelId.isNotBlank()
+                        else -> agent.apiKey.isNotBlank() &&
+                            (!isCustomProvider || normalizeOpenAiCompatibleBaseUrl(agent.customBaseUrl).isNotBlank()) &&
+                            agent.model.isNotBlank()
+                    } &&
                         connectionTestState !is ConnectionTestState.Testing
                 ) {
                     if (connectionTestState is ConnectionTestState.Testing) {
@@ -419,7 +459,114 @@ fun AgentEditScreen(
                                 verticalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 HorizontalDivider()
-                                if (!isCustomProvider) {
+                                if (isOnDeviceProvider) {
+                                    Text(
+                                        "Local runtime tuning",
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    OutlinedTextField(
+                                        value = agent.onDevice.maxOutputTokens.toString(),
+                                        onValueChange = { raw ->
+                                            val digits = raw.filter { it.isDigit() }
+                                            viewModel.update {
+                                                copy(
+                                                    onDevice = onDevice.copy(
+                                                        maxOutputTokens = digits.toIntOrNull()
+                                                            ?: onDevice.maxOutputTokens
+                                                    )
+                                                )
+                                            }
+                                        },
+                                        label = { Text("Max output tokens") },
+                                        supportingText = { Text("How many tokens the local model may generate.") },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+                                    OutlinedTextField(
+                                        value = agent.onDevice.topK.toString(),
+                                        onValueChange = { raw ->
+                                            val digits = raw.filter { it.isDigit() }
+                                            viewModel.update {
+                                                copy(
+                                                    onDevice = onDevice.copy(
+                                                        topK = digits.toIntOrNull() ?: onDevice.topK
+                                                    )
+                                                )
+                                            }
+                                        },
+                                        label = { Text("Top K") },
+                                        supportingText = { Text("Sampling limit for local generation.") },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text(
+                                            "Temperature: ${agent.onDevice.temperature}",
+                                            style = MaterialTheme.typography.labelLarge
+                                        )
+                                        Slider(
+                                            value = agent.onDevice.temperature,
+                                            onValueChange = { value ->
+                                                viewModel.update {
+                                                    copy(onDevice = onDevice.copy(temperature = value))
+                                                }
+                                            },
+                                            valueRange = 0f..2f,
+                                            steps = 19
+                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                stringResource(R.string.assistants_creativity_precise),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                stringResource(R.string.assistants_creativity_creative),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    OutlinedTextField(
+                                        value = agent.onDevice.randomSeed.toString(),
+                                        onValueChange = { raw ->
+                                            val digits = raw.filter { it.isDigit() }
+                                            viewModel.update {
+                                                copy(
+                                                    onDevice = onDevice.copy(
+                                                        randomSeed = digits.toIntOrNull() ?: onDevice.randomSeed
+                                                    )
+                                                )
+                                            }
+                                        },
+                                        label = { Text("Random seed") },
+                                        supportingText = { Text("Set a seed for reproducible local runs.") },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+                                    OutlinedTextField(
+                                        value = agent.onDevice.loraAdapterId.orEmpty(),
+                                        onValueChange = { raw ->
+                                            viewModel.update {
+                                                copy(
+                                                    onDevice = onDevice.copy(
+                                                        loraAdapterId = raw.trim().ifBlank { null }
+                                                    )
+                                                )
+                                            }
+                                        },
+                                        label = { Text("LoRA adapter ID") },
+                                        supportingText = { Text("Optional adapter identifier for local model variants.") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+                                } else if (!isCustomProvider) {
                                     if (agent.model == MONEY_SAVER_MODEL) {
                                         val resolvedId = remember(agent.provider, providerModels) {
                                             resolvedMoneySaverModelId(agent.provider, providerModels)
@@ -679,6 +826,10 @@ private fun ProviderCatalogStatusNote(
             "Loading latest ${provider.displayName} catalog…",
             "ScreenAgent is updating the available model list for this provider."
         )
+        provider == AiProviderType.ON_DEVICE -> Pair(
+            "Local catalog ready",
+            "ScreenAgent will show installed on-device models here once downloads are wired."
+        )
         provider == AiProviderType.OPENROUTER -> Pair(
             "Showing fallback list",
             "OpenRouter's live catalog is not available right now, so ScreenAgent is using its built-in fallback list."
@@ -731,6 +882,158 @@ private fun ProviderCatalogStatusNote(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalModelStatusNoteLegacy(
+    hasModels: Boolean,
+    isLoadingModels: Boolean,
+    selectedModel: String,
+    isReady: Boolean
+) {
+    val (title, body) = when {
+        isReady -> Pair(
+            "Local model ready",
+            "ScreenAgent found an installed on-device model and can use it without an API key."
+        )
+        isLoadingModels -> Pair(
+            "Loading local model catalog…",
+            "ScreenAgent is updating the local model list."
+        )
+        hasModels -> Pair(
+            "Local catalog available",
+            "Choose a local model below and install it before using On-Device."
+        )
+        else -> Pair(
+            "No local models yet",
+            "ScreenAgent will show the curated on-device catalog here once it is wired."
+        )
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                Icons.Default.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, style = MaterialTheme.typography.labelLarge)
+                Text(
+                    body,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (selectedModel.isNotBlank()) {
+                    Text(
+                        text = "Selected: $selectedModel",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OnDeviceModelSectionLegacy(
+    library: List<OnDeviceModelLibraryItem>,
+    selectedModelId: String,
+    onModelSelect: (String) -> Unit,
+    onRefresh: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Local models", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "Choose a native model for On-Device. Downloads and full backend wiring come next.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            TextButton(onClick = onRefresh) {
+                Text("Refresh")
+            }
+        }
+
+            Text(
+                "Status: ${if (library.any { it.installRecord != null }) "Some models installed" else "No models installed yet"}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            library.forEach { model ->
+                val isSelected = model.catalogEntry.id == selectedModelId
+                val isInstalled = model.installRecord != null
+                ElevatedCard(
+                    onClick = { onModelSelect(model.catalogEntry.id) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(model.catalogEntry.displayName, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    model.catalogEntry.description.ifBlank { "Local on-device model" },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (isSelected) {
+                                Text(
+                                    "Selected",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AssistChip(
+                                onClick = { onModelSelect(model.catalogEntry.id) },
+                                label = { Text(if (isInstalled) "Installed" else "Not installed") }
+                            )
+                            if (model.catalogEntry.supportsVision) {
+                                AssistChip(
+                                    onClick = {},
+                                    label = { Text("Vision") }
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1142,6 +1445,133 @@ private fun NativeWebSearchToggle(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun OnDeviceModelSection(
+    library: List<OnDeviceModelLibraryItem>,
+    selectedModelId: String,
+    downloadState: OnDeviceDownloadState,
+    onModelSelect: (String) -> Unit,
+    onDownload: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onRefresh: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Local model library", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        text = "Choose a native model for On-Device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                TextButton(onClick = onRefresh) {
+                    Text("Check")
+                }
+            }
+
+            Text(
+                text = when (downloadState) {
+                    OnDeviceDownloadState.DOWNLOADING -> "Status: Downloading local model metadata"
+                    OnDeviceDownloadState.DOWNLOADED -> "Status: Local model library ready"
+                    OnDeviceDownloadState.FAILED -> "Status: Last local-model download failed"
+                    OnDeviceDownloadState.NOT_DOWNLOADED -> "Status: No local models installed yet"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            library.forEach { item ->
+                val entry = item.catalogEntry
+                val isInstalled = item.installRecord != null
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium,
+                    tonalElevation = if (entry.id == selectedModelId) 2.dp else 0.dp,
+                    color = if (entry.id == selectedModelId) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(entry.displayName, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                entry.description.ifBlank { entry.id },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = if (isInstalled) "Installed locally" else "Not installed",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(onClick = { onModelSelect(entry.id) }) {
+                            Text(if (entry.id == selectedModelId) "Selected" else "Use")
+                        }
+                        TextButton(
+                            onClick = {
+                                if (isInstalled) onDelete(entry.id) else onDownload(entry.id)
+                            }
+                        ) {
+                            Text(if (isInstalled) "Delete" else "Download")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalModelStatusNote(
+    hasModels: Boolean,
+    isLoadingModels: Boolean,
+    selectedModel: String,
+    isReady: Boolean
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.secondaryContainer
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text("On-Device status", style = MaterialTheme.typography.labelLarge)
+            Text(
+                text = when {
+                    isLoadingModels -> "Loading local model catalog..."
+                    !hasModels -> "No local models are available yet."
+                    selectedModel.isBlank() -> "Choose a local model to continue."
+                    isReady -> "Model $selectedModel is ready locally."
+                    else -> "Model $selectedModel is not installed yet."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
         }
     }
 }

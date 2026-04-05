@@ -30,8 +30,8 @@ class OpenRouterModelsTest {
     }
 
     @Test
-    fun providerOrderStartsWithOpenRouter() {
-        assertEquals(AiProviderType.OPENROUTER, assistantProviderOrder().first())
+    fun providerOrderStartsWithOnDevice() {
+        assertEquals(AiProviderType.ON_DEVICE, assistantProviderOrder().first())
     }
 
     @Test

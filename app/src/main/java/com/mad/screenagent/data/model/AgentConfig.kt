@@ -3,8 +3,9 @@ package com.mad.screenagent.data.model
 import java.util.UUID
 
 enum class AiProviderType(val displayName: String) {
-    OPENAI("OpenAI"),
+    ON_DEVICE("On-Device"),
     ANTHROPIC("Anthropic"),
+    OPENAI("OpenAI"),
     OPENROUTER("OpenRouter"),
     CUSTOM("Custom")
 }
@@ -15,6 +16,7 @@ data class AgentConfig(
     val provider: AiProviderType = AiProviderType.OPENROUTER,
     val apiKey: String = "",
     val model: String = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
+    val onDevice: OnDeviceProviderConfig = OnDeviceProviderConfig(),
     val customPreset: CustomProviderPreset = CustomProviderPreset.MANUAL,
     val customBaseUrl: String = "",
     val systemPrompt: String = "You are a helpful assistant.",
@@ -36,6 +38,9 @@ data class AgentConfig(
     val supportsVision: Boolean get() = when {
         model == MONEY_SAVER_MODEL -> true // resolved model will be determined at runtime
         else -> when (provider) {
+        AiProviderType.ON_DEVICE -> looksLikeVisionCapableOnDeviceModel(
+            onDevice.selectedModelId.ifBlank { model }
+        )
         AiProviderType.OPENAI -> {
             val m = model.lowercase()
             m.contains("gpt-5") ||
@@ -78,6 +83,11 @@ data class AgentConfig(
                 "claude-sonnet-4-6",
                 "claude-haiku-4-5-20251001",
                 "claude-opus-4-6"
+            ),
+            AiProviderType.ON_DEVICE to listOf(
+                "gemma-3n-e2b-it",
+                "gemma-3-1b-it",
+                "gemma-3-4b-it"
             ),
             AiProviderType.OPENROUTER to listOf(
                 SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,

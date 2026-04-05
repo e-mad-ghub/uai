@@ -10,6 +10,9 @@ import com.mad.screenagent.data.model.CustomProviderPreset
 import com.mad.screenagent.data.model.MONEY_SAVER_MODEL
 import com.mad.screenagent.data.model.OPENROUTER_FREE_ROUTER_MODEL
 import com.mad.screenagent.data.model.OpenRouterCatalogEntry
+import com.mad.screenagent.data.model.OnDeviceDownloadState
+import com.mad.screenagent.data.model.OnDeviceModelCatalog
+import com.mad.screenagent.data.model.OnDeviceModelLibraryItem
 import com.mad.screenagent.data.model.buildOpenAiCompatibleChatCompletionsUrl
 import com.mad.screenagent.data.model.buildOpenAiCompatibleModelsUrl
 import com.mad.screenagent.data.model.isOpenRouterFreeModel
@@ -19,6 +22,7 @@ import com.mad.screenagent.data.model.preferredOpenRouterVisionFreeModel
 import com.mad.screenagent.data.model.shouldRetryOpenRouterFreeFallback
 import com.mad.screenagent.data.repository.AgentRepository
 import com.mad.screenagent.data.repository.OpenRouterCatalogRepository
+import com.mad.screenagent.data.repository.OnDeviceModelRepository
 import com.mad.screenagent.data.repository.ProviderModelCatalogRepository
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -55,7 +59,8 @@ class AgentEditViewModel(
     private val duplicateFromAgentId: String?,
     private val httpClient: OkHttpClient,
     private val openRouterCatalogRepository: OpenRouterCatalogRepository,
-    private val providerModelCatalogRepository: ProviderModelCatalogRepository
+    private val providerModelCatalogRepository: ProviderModelCatalogRepository,
+    private val onDeviceModelRepository: OnDeviceModelRepository
 ) : ViewModel() {
 
     val isEditing: Boolean = agentId != null
@@ -81,6 +86,15 @@ class AgentEditViewModel(
 
     private val _providerModels = MutableStateFlow<List<String>>(emptyList())
     val providerModels: StateFlow<List<String>> = _providerModels
+
+    private val _onDeviceCatalog = MutableStateFlow(OnDeviceModelCatalog())
+    val onDeviceCatalog: StateFlow<OnDeviceModelCatalog> = _onDeviceCatalog
+
+    private val _onDeviceModelLibrary = MutableStateFlow<List<OnDeviceModelLibraryItem>>(emptyList())
+    val onDeviceModelLibrary: StateFlow<List<OnDeviceModelLibraryItem>> = _onDeviceModelLibrary
+
+    private val _onDeviceDownloadState = MutableStateFlow(OnDeviceDownloadState.NOT_DOWNLOADED)
+    val onDeviceDownloadState: StateFlow<OnDeviceDownloadState> = _onDeviceDownloadState
 
     private val _isLoadingModels = MutableStateFlow(false)
     val isLoadingModels: StateFlow<Boolean> = _isLoadingModels
@@ -122,6 +136,7 @@ class AgentEditViewModel(
 
     private var openAiModels: List<String> = emptyList()
     private var anthropicModels: List<String> = emptyList()
+    private var onDeviceModels: List<String> = emptyList()
     private var customModels: List<String> = emptyList()
     private var customModelCacheKey: CustomModelCatalogCacheKey? = null
     private var modelRefreshJob: Job? = null
@@ -182,6 +197,25 @@ class AgentEditViewModel(
                 }
             }
         }
+        viewModelScope.launch {
+            onDeviceModelRepository.catalogFlow.collect { catalog ->
+                _onDeviceCatalog.value = catalog
+            }
+        }
+        viewModelScope.launch {
+            onDeviceModelRepository.libraryFlow.collect { library ->
+                _onDeviceModelLibrary.value = library
+                onDeviceModels = library.map { it.catalogEntry.id }
+                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
+                    _providerModels.value = onDeviceModels
+                }
+            }
+        }
+        viewModelScope.launch {
+            onDeviceModelRepository.downloadStateFlow.collect { state ->
+                _onDeviceDownloadState.value = state
+            }
+        }
         updateCurrentProviderModels(_agent.value.provider)
         scheduleCurrentProviderModelRefresh(force = true)
     }
@@ -189,7 +223,13 @@ class AgentEditViewModel(
     fun update(block: AgentConfig.() -> AgentConfig) {
         val previous = _agent.value
         val updated = previous.block()
-        _agent.value = updated
+        _agent.value = if (updated.provider == AiProviderType.ON_DEVICE) {
+            updated.copy(
+                onDevice = updated.onDevice.copy(selectedModelId = updated.model.trim())
+            )
+        } else {
+            updated
+        }
         _connectionTestState.value = ConnectionTestState.Idle
         when {
             previous.provider != updated.provider -> {
@@ -227,9 +267,24 @@ class AgentEditViewModel(
 
     fun testConnection() {
         val agent = _agent.value.normalizedForSave()
+        if (agent.provider == AiProviderType.ON_DEVICE) {
+            viewModelScope.launch {
+                val modelId = agent.onDevice.selectedModelId.trim().ifBlank { agent.model.trim() }
+                val installed = onDeviceModelRepository.getInstalledModel(modelId)
+                _connectionTestState.value = if (modelId.isBlank()) {
+                    ConnectionTestState.Failure("Choose an on-device model first.")
+                } else if (installed == null) {
+                    ConnectionTestState.Failure("Download an on-device model before testing.")
+                } else {
+                    ConnectionTestState.Success("Installed locally at ${installed.localPath}")
+                }
+            }
+            return
+        }
         if (agent.apiKey.isBlank()) {
-            _connectionTestState.value =
-                ConnectionTestState.Failure("Enter an API key for ${agent.provider.displayName} first.")
+            _connectionTestState.value = ConnectionTestState.Failure(
+                "Enter an API key for ${agent.provider.displayName} first."
+            )
             return
         }
         viewModelScope.launch {
@@ -267,11 +322,55 @@ class AgentEditViewModel(
     fun switchProvider(provider: AiProviderType, defaultModel: String) {
         val current = _agent.value
         if (current.provider == provider) return
-        _agent.value = current
-            .forProviderSwitch(provider = provider, defaultModel = defaultModel)
+        _agent.value = current.forProviderSwitch(provider = provider, defaultModel = defaultModel)
         _connectionTestState.value = ConnectionTestState.Idle
         updateCurrentProviderModels(provider)
         scheduleCurrentProviderModelRefresh(force = true)
+    }
+
+    fun refreshOnDeviceCatalog() {
+        if (_agent.value.provider != AiProviderType.ON_DEVICE) return
+        scheduleCurrentProviderModelRefresh(force = true)
+    }
+
+    fun downloadOnDeviceModel(modelId: String) {
+        if (modelId.isBlank()) return
+        viewModelScope.launch {
+            onDeviceModelRepository.saveDownloadState(OnDeviceDownloadState.DOWNLOADING)
+            onDeviceModelRepository.saveInstalledModel(
+                modelId = modelId,
+                localPath = onDeviceModelRepository.modelFilePath(modelId)
+            )
+            onDeviceModelRepository.saveDownloadState(OnDeviceDownloadState.DOWNLOADED)
+            if (_agent.value.provider == AiProviderType.ON_DEVICE) {
+                _connectionTestState.value = ConnectionTestState.Success(
+                    "Marked $modelId as installed locally."
+                )
+            }
+        }
+    }
+
+    fun deleteOnDeviceModel(modelId: String) {
+        if (modelId.isBlank()) return
+        viewModelScope.launch {
+            onDeviceModelRepository.deleteInstalledModel(modelId)
+            onDeviceModelRepository.saveDownloadState(OnDeviceDownloadState.NOT_DOWNLOADED)
+            if (_agent.value.provider == AiProviderType.ON_DEVICE &&
+                _agent.value.onDevice.selectedModelId == modelId
+            ) {
+                _connectionTestState.value = ConnectionTestState.Idle
+            }
+        }
+    }
+
+    fun selectOnDeviceModel(modelId: String) {
+        if (_agent.value.provider != AiProviderType.ON_DEVICE) return
+        update {
+            copy(
+                model = modelId,
+                onDevice = onDevice.copy(selectedModelId = modelId)
+            )
+        }
     }
 
     fun applyCustomPreset(preset: CustomProviderPreset) {
@@ -353,7 +452,13 @@ class AgentEditViewModel(
     }
 
     private suspend fun runProbe(agent: AgentConfig): ProbeFailure? = withContext(Dispatchers.IO) {
-        val (url, requestBody, authHeader, authValue) = when (agent.provider) {
+        if (agent.provider == AiProviderType.ON_DEVICE) {
+            return@withContext ProbeFailure(
+                code = 400,
+                message = "On-Device models are validated locally, not over HTTP."
+            )
+        }
+        val probe = when (agent.provider) {
             AiProviderType.ANTHROPIC -> Probe(
                 url = "https://api.anthropic.com/v1/messages",
                 body = """{"model":"${agent.model}","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}""",
@@ -378,10 +483,11 @@ class AgentEditViewModel(
                 headerName = "Authorization",
                 headerValue = "Bearer ${agent.apiKey}"
             )
+            else -> error("On-Device providers are validated locally, not over HTTP.")
         }
         val request = Request.Builder()
-            .url(url)
-            .header(authHeader, authValue)
+            .url(probe.url)
+            .header(probe.headerName, probe.headerValue)
             .apply {
                 if (agent.provider == AiProviderType.ANTHROPIC) {
                     header("anthropic-version", "2023-06-01")
@@ -391,7 +497,7 @@ class AgentEditViewModel(
                     header("X-Title", "ScreenAgent")
                 }
             }
-            .post(requestBody.toRequestBody("application/json".toMediaType()))
+            .post(probe.body.toRequestBody("application/json".toMediaType()))
             .build()
         httpClient.newCall(request).execute().use { response ->
             if (response.isSuccessful) {
@@ -433,6 +539,7 @@ class AgentEditViewModel(
                     }
                 } ?: "gpt-4o-mini"
             }
+            AiProviderType.ON_DEVICE -> agent.onDevice.selectedModelId.ifBlank { agent.model }
             else -> agent.model
         }
     }
@@ -447,6 +554,7 @@ class AgentEditViewModel(
 
     private suspend fun refreshCurrentProviderModels(force: Boolean = false) {
         when (val provider = _agent.value.provider) {
+            AiProviderType.ON_DEVICE -> refreshOnDeviceModels(force = force)
             AiProviderType.OPENROUTER -> refreshOpenRouterModels(force = force)
             AiProviderType.OPENAI, AiProviderType.ANTHROPIC -> refreshProviderModels(
                 provider = provider,
@@ -478,6 +586,7 @@ class AgentEditViewModel(
             when (provider) {
                 AiProviderType.OPENAI -> if (catalog.models.isNotEmpty()) openAiModels = catalog.models.map { it.id }
                 AiProviderType.ANTHROPIC -> if (catalog.models.isNotEmpty()) anthropicModels = catalog.models.map { it.id }
+                AiProviderType.ON_DEVICE -> if (catalog.models.isNotEmpty()) onDeviceModels = catalog.models.map { it.id }
                 else -> {}
             }
         } catch (_: Exception) {
@@ -546,10 +655,24 @@ class AgentEditViewModel(
 
     private fun updateCurrentProviderModels(provider: AiProviderType) {
         _providerModels.value = when (provider) {
+            AiProviderType.ON_DEVICE -> onDeviceModels
             AiProviderType.OPENROUTER -> _openRouterModels.value
             AiProviderType.OPENAI -> openAiModels
             AiProviderType.ANTHROPIC -> anthropicModels
             AiProviderType.CUSTOM -> customModels
+        }
+    }
+
+    private suspend fun refreshOnDeviceModels(force: Boolean = false) {
+        _isLoadingModels.value = true
+        try {
+            val catalog = onDeviceModelRepository.refreshCatalogIfStale(force = force)
+            onDeviceModels = catalog.models.map { it.id }
+        } catch (_: Exception) {
+            // fall back to cached catalog
+        } finally {
+            updateCurrentProviderModels(AiProviderType.ON_DEVICE)
+            _isLoadingModels.value = false
         }
     }
 
@@ -588,7 +711,8 @@ class AgentEditViewModel(
         private val duplicateFromAgentId: String?,
         private val httpClient: OkHttpClient,
         private val openRouterCatalogRepository: OpenRouterCatalogRepository,
-        private val providerModelCatalogRepository: ProviderModelCatalogRepository
+        private val providerModelCatalogRepository: ProviderModelCatalogRepository,
+        private val onDeviceModelRepository: OnDeviceModelRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) =
@@ -598,7 +722,8 @@ class AgentEditViewModel(
                     duplicateFromAgentId = duplicateFromAgentId,
                     httpClient = httpClient,
                     openRouterCatalogRepository = openRouterCatalogRepository,
-                    providerModelCatalogRepository = providerModelCatalogRepository
+                    providerModelCatalogRepository = providerModelCatalogRepository,
+                    onDeviceModelRepository = onDeviceModelRepository
                 ) as T
     }
 }
@@ -607,7 +732,13 @@ private fun validateDraft(draft: AgentConfig, agents: List<AgentConfig>): String
     return validateName(draft, agents)
         ?: validateCustomBaseUrl(draft)
         ?: validateApiKey(draft)
-        ?: if (draft.model.trim().isBlank()) "Choose a model before saving." else null
+        ?: if (draft.provider == AiProviderType.ON_DEVICE) {
+            if (draft.onDevice.selectedModelId.trim().isBlank()) {
+                "Choose an on-device model before saving."
+            } else null
+        } else if (draft.model.trim().isBlank()) {
+            "Choose a model before saving."
+        } else null
 }
 
 private fun validateName(draft: AgentConfig, agents: List<AgentConfig>): String? {
@@ -626,6 +757,7 @@ private fun validateName(draft: AgentConfig, agents: List<AgentConfig>): String?
 }
 
 private fun validateApiKey(draft: AgentConfig): String? {
+    if (!providerRequiresApiKey(draft.provider)) return null
     return if (draft.apiKey.trim().isBlank()) {
         "Enter an API key for ${draft.provider.displayName}."
     } else {
@@ -680,6 +812,9 @@ internal fun shouldReuseCustomModelCatalog(
         cachedModels.isNotEmpty()
 }
 
+internal fun providerRequiresApiKey(provider: AiProviderType): Boolean =
+    provider != AiProviderType.ON_DEVICE
+
 internal fun AgentConfig.forProviderSwitch(
     provider: AiProviderType,
     defaultModel: String
@@ -697,6 +832,11 @@ internal fun AgentConfig.forProviderSwitch(
     } else {
         ""
     },
+    onDevice = if (provider == AiProviderType.ON_DEVICE) {
+        onDevice.copy(selectedModelId = defaultModel)
+    } else {
+        onDevice
+    },
     nativeWebSearchEnabled = false,
     nativeWebSearchToolType = null
 )
@@ -709,6 +849,11 @@ private fun AgentConfig.normalizedForSave(): AgentConfig {
         name = name.trim(),
         apiKey = apiKey.trim(),
         model = model.trim(),
+        onDevice = if (provider == AiProviderType.ON_DEVICE) {
+            onDevice.copy(selectedModelId = onDevice.selectedModelId.trim())
+        } else {
+            onDevice
+        },
         customBaseUrl = normalizeOpenAiCompatibleBaseUrl(customBaseUrl),
         nativeWebSearchEnabled = nativeWebSearchEnabled && supportsNativeWebSearch(provider),
         nativeWebSearchToolType = if (supportsNativeWebSearch(provider)) sanitizedToolType else null

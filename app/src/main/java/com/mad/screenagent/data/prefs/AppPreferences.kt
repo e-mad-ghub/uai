@@ -12,6 +12,10 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AiProviderType
 import com.mad.screenagent.data.model.AppColorTheme
+import com.mad.screenagent.data.model.InstalledOnDeviceModel
+import com.mad.screenagent.data.model.OnDeviceDownloadState
+import com.mad.screenagent.data.model.OnDeviceModelCatalog
+import com.mad.screenagent.data.model.OnDeviceModelCatalogEntry
 import com.mad.screenagent.data.model.OpenRouterCatalog
 import com.mad.screenagent.data.model.ProviderModelCatalog
 import com.mad.screenagent.data.model.QuickActionConfig
@@ -49,6 +53,10 @@ class AppPreferences(context: Context) {
         val OPENAI_MODEL_CATALOG_FETCHED_AT = longPreferencesKey("openai_model_catalog_fetched_at")
         val ANTHROPIC_MODEL_CATALOG_JSON = stringPreferencesKey("anthropic_model_catalog_json")
         val ANTHROPIC_MODEL_CATALOG_FETCHED_AT = longPreferencesKey("anthropic_model_catalog_fetched_at")
+        val ON_DEVICE_MODEL_CATALOG_JSON = stringPreferencesKey("on_device_model_catalog_json")
+        val ON_DEVICE_MODEL_CATALOG_FETCHED_AT = longPreferencesKey("on_device_model_catalog_fetched_at")
+        val ON_DEVICE_INSTALLED_MODELS_JSON = stringPreferencesKey("on_device_installed_models_json")
+        val ON_DEVICE_DOWNLOAD_STATE_JSON = stringPreferencesKey("on_device_download_state_json")
         val QUICK_ACTIONS_JSON = stringPreferencesKey("quick_actions_json")
         val LAST_ACTIVE_BUBBLE_CONVERSATION_ID = stringPreferencesKey("last_active_bubble_conversation_id")
     }
@@ -109,6 +117,54 @@ class AppPreferences(context: Context) {
             gson.fromJson(json, ProviderModelCatalog::class.java)?.copy(
                 fetchedAt = prefs[Keys.ANTHROPIC_MODEL_CATALOG_FETCHED_AT] ?: 0L
             ) ?: ProviderModelCatalog()
+        }
+    }
+
+    val onDeviceModelCatalogFlow: Flow<OnDeviceModelCatalog> = store.data.map { prefs ->
+        val json = prefs[Keys.ON_DEVICE_MODEL_CATALOG_JSON]
+        if (json.isNullOrBlank()) {
+            OnDeviceModelCatalog(
+                models = listOf(
+                    OnDeviceModelCatalogEntry(
+                        id = "gemma-3n-e2b-it",
+                        displayName = "Gemma 3n E2B IT",
+                        description = "Balanced on-device starter model."
+                    ),
+                    OnDeviceModelCatalogEntry(
+                        id = "gemma-3-1b-it",
+                        displayName = "Gemma 3 1B IT",
+                        description = "Lightweight on-device chat model."
+                    ),
+                    OnDeviceModelCatalogEntry(
+                        id = "gemma-3-4b-it",
+                        displayName = "Gemma 3 4B IT",
+                        description = "More capable on-device model."
+                    )
+                )
+            )
+        } else {
+            gson.fromJson(json, OnDeviceModelCatalog::class.java)?.copy(
+                fetchedAt = prefs[Keys.ON_DEVICE_MODEL_CATALOG_FETCHED_AT] ?: 0L
+            ) ?: OnDeviceModelCatalog()
+        }
+    }
+
+    val installedOnDeviceModelsFlow: Flow<List<InstalledOnDeviceModel>> = store.data.map { prefs ->
+        val json = prefs[Keys.ON_DEVICE_INSTALLED_MODELS_JSON]
+        if (json.isNullOrBlank()) {
+            emptyList()
+        } else {
+            val type = object : TypeToken<List<InstalledOnDeviceModel>>() {}.type
+            gson.fromJson<List<InstalledOnDeviceModel>>(json, type) ?: emptyList()
+        }
+    }
+
+    val onDeviceDownloadStateFlow: Flow<OnDeviceDownloadState> = store.data.map { prefs ->
+        val json = prefs[Keys.ON_DEVICE_DOWNLOAD_STATE_JSON]
+        if (json.isNullOrBlank()) {
+            OnDeviceDownloadState.NOT_DOWNLOADED
+        } else {
+            gson.fromJson(json, OnDeviceDownloadState::class.java) ?: OnDeviceDownloadState.NOT_DOWNLOADED
         }
     }
 
@@ -218,9 +274,29 @@ class AppPreferences(context: Context) {
                     it[Keys.ANTHROPIC_MODEL_CATALOG_JSON] = gson.toJson(catalog)
                     it[Keys.ANTHROPIC_MODEL_CATALOG_FETCHED_AT] = catalog.fetchedAt
                 }
+                AiProviderType.ON_DEVICE,
                 AiProviderType.OPENROUTER,
                 AiProviderType.CUSTOM -> Unit
             }
+        }
+    }
+
+    suspend fun saveOnDeviceModelCatalog(catalog: OnDeviceModelCatalog) {
+        store.edit {
+            it[Keys.ON_DEVICE_MODEL_CATALOG_JSON] = gson.toJson(catalog)
+            it[Keys.ON_DEVICE_MODEL_CATALOG_FETCHED_AT] = catalog.fetchedAt
+        }
+    }
+
+    suspend fun saveInstalledOnDeviceModels(models: List<InstalledOnDeviceModel>) {
+        store.edit {
+            it[Keys.ON_DEVICE_INSTALLED_MODELS_JSON] = gson.toJson(models)
+        }
+    }
+
+    suspend fun saveOnDeviceDownloadState(state: OnDeviceDownloadState) {
+        store.edit {
+            it[Keys.ON_DEVICE_DOWNLOAD_STATE_JSON] = gson.toJson(state)
         }
     }
 

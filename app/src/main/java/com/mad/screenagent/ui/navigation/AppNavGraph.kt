@@ -123,7 +123,8 @@ fun AppNavGraph(
                     duplicateFromId,
                     container.okHttpClient,
                     container.openRouterCatalogRepository,
-                    container.providerModelCatalogRepository
+                    container.providerModelCatalogRepository,
+                    container.onDeviceModelRepository
                 )
             )
             AgentEditScreen(

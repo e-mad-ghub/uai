@@ -70,7 +70,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import com.mad.screenagent.design.components.ProductEmptyStateCard
-import com.mad.screenagent.design.components.ProductPill
 import com.mad.screenagent.design.components.ProductScreenIntro
 import com.mad.screenagent.design.components.ProductTopBarTitle
 
@@ -392,13 +391,6 @@ private fun AgentItem(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        ProductPill(label = agent.provider.displayName, emphasized = true)
-                        ProductPill(label = agent.model)
-                    }
                     Text(
                         buildString {
                             append(if (agent.apiKey.isBlank()) "Connection pending" else "Configured")

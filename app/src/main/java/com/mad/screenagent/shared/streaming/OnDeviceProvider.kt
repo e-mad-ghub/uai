@@ -20,33 +20,36 @@ class OnDeviceProvider(
         flow {
             val modelId = config.onDevice.selectedModelId.takeIf { it.isNotBlank() } ?: config.model.trim()
             if (modelId.isBlank()) {
-                emit(StreamChunk.Error(IllegalStateException("Choose an On-Device model before sending a message.")))
+                emit(StreamChunk.Error(IllegalStateException(OnDeviceUserMessages.chooseModel())))
                 return@flow
             }
 
             val installed = modelRepository.getInstalledModel(modelId)
             if (installed == null) {
-                emit(StreamChunk.Error(IllegalStateException("The selected On-Device model is not installed yet.")))
+                emit(StreamChunk.Error(IllegalStateException(OnDeviceUserMessages.downloadModelFirst())))
                 return@flow
             }
             if (installed.downloadState == OnDeviceDownloadState.DOWNLOADING ||
                 installed.downloadState == OnDeviceDownloadState.VALIDATING
             ) {
-                emit(StreamChunk.Error(IllegalStateException("The selected On-Device model is still downloading.")))
+                emit(StreamChunk.Error(IllegalStateException(OnDeviceUserMessages.modelStillDownloading())))
                 return@flow
             }
             if (!installed.downloadState.isReadyForUse) {
                 emit(
                     StreamChunk.Error(
                         IllegalStateException(
-                            installed.errorMessage ?: "The selected On-Device model is not ready yet."
+                            OnDeviceUserMessages.validationMessage(
+                                installed.failureKind,
+                                installed.errorMessage
+                            )
                         )
                     )
                 )
                 return@flow
             }
             if (!File(installed.localPath).exists() || File(installed.localPath).length() == 0L) {
-                val reason = "The selected On-Device model file is missing at ${installed.localPath}."
+                val reason = OnDeviceUserMessages.missingModelFile()
                 modelRepository.markModelUnavailable(modelId, reason, OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE)
                 emit(StreamChunk.Error(IllegalStateException(reason)))
                 return@flow
@@ -56,7 +59,9 @@ class OnDeviceProvider(
             ) {
                 val runtimeValidation = runtime.validateModel(installed.localPath)
                 if (!runtimeValidation.isSuccess) {
-                    val reason = runtimeValidation.message ?: "The selected On-Device model is runtime incompatible on this device."
+                    val reason = runtimeValidation.message ?: OnDeviceUserMessages.validationMessage(
+                        runtimeValidation.failureKind
+                    )
                     modelRepository.markModelUnavailable(
                         modelId,
                         reason,

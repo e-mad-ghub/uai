@@ -8,6 +8,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.arm.aichat.gguf.GgufMetadataReader
 import com.arm.aichat.gguf.InvalidFileFormatException
+import com.google.gson.Gson
 import com.mad.screenagent.data.model.InstalledOnDeviceModel
 import com.mad.screenagent.data.model.OnDeviceFailureKind
 import com.mad.screenagent.data.model.OnDeviceDownloadState
@@ -20,11 +21,13 @@ import com.mad.screenagent.data.model.defaultOnDeviceCatalogEntries
 import com.mad.screenagent.data.model.normalizeOnDeviceCatalog
 import com.mad.screenagent.data.prefs.AppPreferences
 import com.mad.screenagent.shared.streaming.OnDeviceRuntime
+import com.mad.screenagent.shared.streaming.OnDeviceUserMessages
 import com.mad.screenagent.shared.streaming.OnDeviceValidationResult
 import java.io.File
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.CancellationException
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import kotlinx.coroutines.flow.Flow
@@ -43,6 +46,17 @@ interface OnDeviceModelSource {
     ) {}
 }
 
+data class OnDeviceCatalogRefreshResult(
+    val catalog: OnDeviceModelCatalog,
+    val usedCachedCatalog: Boolean,
+    val failureMessage: String? = null
+)
+
+private const val ON_DEVICE_CATALOG_MANIFEST_URL =
+    "https://raw.githubusercontent.com/e-mad-ghub/projects-assets/master/ScreenAgent/model_catalog_manifest.json"
+private const val ON_DEVICE_CATALOG_STALE_MS = 24L * 60L * 60L * 1000L
+private const val ON_DEVICE_BUNDLED_CATALOG_ASSET = "on_device_catalog_manifest.json"
+
 class OnDeviceModelRepository(
     private val prefs: AppPreferences,
     private val context: Context,
@@ -50,6 +64,7 @@ class OnDeviceModelRepository(
     private val runtime: OnDeviceRuntime
 ) : OnDeviceModelSource {
     private val ggufMetadataReader = GgufMetadataReader.create()
+    private val gson = Gson()
 
     val catalogFlow: Flow<OnDeviceModelCatalog> = prefs.onDeviceModelCatalogFlow
     val installedModelsFlow: Flow<List<InstalledOnDeviceModel>> = prefs.installedOnDeviceModelsFlow
@@ -88,7 +103,7 @@ class OnDeviceModelRepository(
     suspend fun ensureDefaultCatalog(): OnDeviceModelCatalog {
         val current = catalogFlow.first()
         val seeded = if (current.models.isEmpty()) {
-            OnDeviceModelCatalog(models = defaultOnDeviceCatalogEntries())
+            loadBundledCatalogBootstrap()
         } else {
             current
         }
@@ -99,8 +114,95 @@ class OnDeviceModelRepository(
         return normalized
     }
 
-    suspend fun refreshCatalogIfStale(force: Boolean = false): OnDeviceModelCatalog {
-        return ensureDefaultCatalog()
+    suspend fun refreshCatalogIfStale(force: Boolean = false): OnDeviceCatalogRefreshResult {
+        val current = ensureDefaultCatalog()
+        val now = System.currentTimeMillis()
+        if (!force && current.fetchedAt > 0L && now - current.fetchedAt < ON_DEVICE_CATALOG_STALE_MS) {
+            return OnDeviceCatalogRefreshResult(
+                catalog = current,
+                usedCachedCatalog = false
+            )
+        }
+
+        val importedEntries = current.models.filter { it.isImported }
+        val remoteResult = try {
+            Pair(fetchRemoteCatalog(now), null)
+        } catch (e: Exception) {
+            Pair(current, OnDeviceUserMessages.refreshCatalogFailure(e))
+        }
+        val merged = normalizeOnDeviceCatalog(
+            remoteResult.first.copy(
+                fetchedAt = if (remoteResult.second == null) now else remoteResult.first.fetchedAt,
+                models = remoteResult.first.models.filterNot { it.isImported } + importedEntries
+            )
+        )
+        if (merged != current) {
+            prefs.saveOnDeviceModelCatalog(merged)
+        } else if (merged.fetchedAt != current.fetchedAt) {
+            prefs.saveOnDeviceModelCatalog(merged)
+        }
+        return OnDeviceCatalogRefreshResult(
+            catalog = merged,
+            usedCachedCatalog = remoteResult.second != null,
+            failureMessage = remoteResult.second
+        )
+    }
+
+    private suspend fun fetchRemoteCatalog(fetchedAt: Long): OnDeviceModelCatalog = withContext(Dispatchers.IO) {
+        val requestUrl = ON_DEVICE_CATALOG_MANIFEST_URL
+            .toHttpUrl()
+            .newBuilder()
+            .addQueryParameter("t", fetchedAt.toString())
+            .build()
+        val request = Request.Builder()
+            .url(requestUrl)
+            .header("Cache-Control", "no-cache")
+            .header("Pragma", "no-cache")
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IOException("Unable to refresh the on-device catalog.")
+            }
+            val body = response.body?.string().orEmpty()
+            if (body.isBlank()) {
+                throw IOException("Received an empty on-device catalog manifest.")
+            }
+            val parsed = gson.fromJson(body, OnDeviceModelCatalog::class.java)
+                ?: throw IOException("Unable to parse the on-device catalog manifest.")
+            val sanitized = parsed.models
+                .filter { !it.isImported }
+                .filter { it.downloadUrl.isNotBlank() && it.fileName.isNotBlank() }
+                .map { entry ->
+                    entry.copy(
+                        sourceTypeKey = OnDeviceModelSourceType.CATALOG.name,
+                        accessStateKey = entry.accessStateKey ?: OnDeviceModelAccessState.PUBLIC.name,
+                        runtimeProfileId = entry.runtimeProfileId ?: runtime.runtimeProfileId
+                    )
+                }
+            OnDeviceModelCatalog(
+                fetchedAt = fetchedAt,
+                models = sanitized
+            )
+        }
+    }
+
+    private suspend fun loadBundledCatalogBootstrap(): OnDeviceModelCatalog = withContext(Dispatchers.IO) {
+        val assetCatalog = runCatching {
+            context.assets.open(ON_DEVICE_BUNDLED_CATALOG_ASSET).bufferedReader().use { reader ->
+                gson.fromJson(reader.readText(), OnDeviceModelCatalog::class.java)
+            }
+        }.getOrNull()
+
+        val bundled = assetCatalog?.copy(
+            fetchedAt = System.currentTimeMillis()
+        ) ?: OnDeviceModelCatalog(
+            fetchedAt = System.currentTimeMillis(),
+            models = defaultOnDeviceCatalogEntries()
+        )
+
+        bundled.copy(
+            models = bundled.models.filterNot { it.isImported }
+        )
     }
 
     suspend fun getInstalledModels(): List<InstalledOnDeviceModel> =
@@ -163,7 +265,7 @@ class OnDeviceModelRepository(
     suspend fun importModel(uri: Uri): InstalledOnDeviceModel = withContext(Dispatchers.IO) {
         val fileName = resolveImportFileName(uri)
         require(fileName.endsWith(".gguf", ignoreCase = true)) {
-            "Only GGUF model files can be imported."
+            "This file isn't a supported model. Import a GGUF model file."
         }
 
         val modelId = "imported-${UUID.randomUUID()}"
@@ -188,7 +290,7 @@ class OnDeviceModelRepository(
 
         context.contentResolver.openInputStream(uri)?.use { input ->
             targetFile.outputStream().use { output -> input.copyTo(output) }
-        } ?: throw IOException("Unable to read the selected GGUF file.")
+        } ?: throw IOException("Couldn't read the selected model file.")
 
         val validationResult = validateDownloadedModel(targetFile)
         if (!validationResult.isSuccess) {
@@ -337,7 +439,7 @@ class OnDeviceModelRepository(
                 val validationResult = validateDownloadedModel(targetFile)
                 if (!validationResult.isSuccess) {
                     throw ModelValidationException(
-                        message = validationResult.message ?: "GGUF validation failed.",
+                        message = validationResult.message ?: OnDeviceUserMessages.runtimeUnavailable(),
                         failureKind = validationResult.failureKind
                     )
                 }
@@ -367,9 +469,9 @@ class OnDeviceModelRepository(
                     if (response.code == 401 || response.code == 403) {
                         downgradeCatalogEntryAccess(modelId, OnDeviceModelAccessState.GATED)
                     }
-                    throw IOException("Download failed for $modelId: HTTP ${response.code}")
+                    throw IOException("Download failed: HTTP ${response.code}")
                 }
-                val body = response.body ?: throw IOException("Empty model download response for $modelId")
+                val body = response.body ?: throw IOException("Download failed: empty response")
                 totalBytes = body.contentLength().takeIf { it > 0L } ?: 0L
                 val progressBuffer = ByteArray(DEFAULT_DOWNLOAD_BUFFER_SIZE)
                 var lastReportedBytes = 0L
@@ -441,7 +543,7 @@ class OnDeviceModelRepository(
                     validatedRuntimeProfileId = runtime.runtimeProfileId
                 )
                 throw ModelValidationException(
-                    message = validationResult.message ?: "GGUF validation failed.",
+                    message = validationResult.message ?: OnDeviceUserMessages.runtimeUnavailable(),
                     failureKind = validationResult.failureKind
                 )
             }
@@ -484,7 +586,11 @@ class OnDeviceModelRepository(
                 downloadState = OnDeviceDownloadState.FAILED,
                 downloadedBytes = downloadedBytes,
                 totalBytes = totalBytes,
-                errorMessage = t.message ?: "On-device model download failed",
+                errorMessage = if (t is ModelValidationException) {
+                    t.message
+                } else {
+                    OnDeviceUserMessages.downloadFailure(t)
+                },
                 failureKind = if (t is ModelValidationException) {
                     t.failureKind
                 } else if (t.message?.contains("HTTP", ignoreCase = true) == true) {
@@ -543,13 +649,13 @@ class OnDeviceModelRepository(
         if (!file.exists() || file.length() == 0L) {
             return OnDeviceValidationResult.failure(
                 OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
-                "The GGUF model file is missing or empty."
+                OnDeviceUserMessages.missingModelFile()
             )
         }
         if (!file.name.endsWith(".gguf", ignoreCase = true)) {
             return OnDeviceValidationResult.failure(
                 OnDeviceFailureKind.INVALID_GGUF,
-                "Only GGUF model files are supported."
+                "This file isn't a supported model. Import a GGUF model file."
             )
         }
         return try {
@@ -557,7 +663,7 @@ class OnDeviceModelRepository(
             if (!valid) {
                 OnDeviceValidationResult.failure(
                     OnDeviceFailureKind.INVALID_GGUF,
-                    "The selected file is not a valid GGUF model."
+                    OnDeviceUserMessages.validationMessage(OnDeviceFailureKind.INVALID_GGUF)
                 )
             } else {
                 runtime.validateModel(file.absolutePath)
@@ -565,12 +671,12 @@ class OnDeviceModelRepository(
         } catch (_: InvalidFileFormatException) {
             OnDeviceValidationResult.failure(
                 OnDeviceFailureKind.INVALID_GGUF,
-                "The selected file is not a valid GGUF model."
+                OnDeviceUserMessages.validationMessage(OnDeviceFailureKind.INVALID_GGUF)
             )
         } catch (t: Throwable) {
             OnDeviceValidationResult.failure(
                 OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR,
-                t.message ?: "GGUF validation failed."
+                OnDeviceUserMessages.validationMessage(OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR)
             )
         }
     }

@@ -2,11 +2,7 @@ package com.mad.screenagent.data.model
 
 data class OnDeviceProviderConfig(
     val selectedModelId: String = "",
-    val maxOutputTokens: Int = 256,
-    val topK: Int = 40,
-    val temperature: Float = 0.8f,
-    val randomSeed: Int = 0,
-    val loraAdapterId: String? = null
+    val maxOutputTokens: Int = 256
 )
 
 fun looksLikeVisionCapableOnDeviceModel(modelId: String): Boolean {

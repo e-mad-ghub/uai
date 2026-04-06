@@ -136,7 +136,7 @@
     <string name="assistants_hero_duplicate_title">Copy this assistant and adjust the details below</string>
     <string name="assistants_hero_duplicate_body">All settings were copied from the original assistant. Update anything you want before saving the duplicate.</string>
     <string name="assistants_section_basic_title">Basic setup</string>
-    <string name="assistants_section_basic_body">This is all most customers need.</string>
+    <string name="assistants_section_basic_body">Run GGUF models directly on the device with no API key.</string>
     <string name="assistants_field_name">Assistant name</string>
     <string name="assistants_field_name_placeholder">General Assistant</string>
     <string name="assistants_field_name_hint">Pick a name that will be easy to recognize in chats and lists.</string>

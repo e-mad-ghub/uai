@@ -68,7 +68,7 @@ class LlamaCppOnDeviceRuntime(
         if (!modelFile.exists() || modelFile.length() == 0L) {
             return OnDeviceValidationResult.failure(
                 OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
-                "The On-Device GGUF model file is missing at $modelPath."
+                OnDeviceUserMessages.missingModelFile()
             )
         }
 
@@ -89,8 +89,10 @@ class LlamaCppOnDeviceRuntime(
                 val cause = t.unwrapOnDeviceThrowable()
                 OnDeviceValidationResult.failure(
                     failureKind = cause.toFailureKind(),
-                    message = cause.message
-                        ?: "The selected GGUF model could not be opened by the on-device llama runtime."
+                    message = OnDeviceUserMessages.validationMessage(
+                        cause.toFailureKind(),
+                        cause.message
+                    )
                 )
             }
         }
@@ -107,7 +109,7 @@ class LlamaCppOnDeviceRuntime(
             if (!modelFile.exists() || modelFile.length() == 0L) {
                 emit(
                     StreamChunk.Error(
-                        IllegalStateException("On-Device GGUF model file is missing at $modelPath.")
+                        IllegalStateException(OnDeviceUserMessages.missingModelFile())
                     )
                 )
                 return@flow
@@ -224,7 +226,7 @@ private fun Throwable.withFallbackMessage(): Throwable =
         this
     } else {
         IllegalStateException(
-            "The on-device llama runtime failed to generate a response.",
+            OnDeviceUserMessages.runtimeUnavailable(),
             this
         )
     }

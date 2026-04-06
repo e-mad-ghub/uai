@@ -33,6 +33,24 @@ class AgentProviderStateTest {
     }
 
     @Test
+    fun providerSwitch_toOnDeviceClearsModelSelection() {
+        val draft = AgentConfig(
+            provider = AiProviderType.OPENAI,
+            model = "gpt-4.1",
+            apiKey = "secret"
+        )
+
+        val switched = draft.forProviderSwitch(
+            provider = AiProviderType.ON_DEVICE,
+            defaultModel = "gemma-3-1b-it-gguf"
+        )
+
+        assertEquals(AiProviderType.ON_DEVICE, switched.provider)
+        assertEquals("", switched.model)
+        assertEquals("", switched.onDevice.selectedModelId)
+    }
+
+    @Test
     fun supportsNativeWebSearch_onlyAllowsOpenAiAndAnthropic() {
         assertTrue(supportsNativeWebSearch(AiProviderType.OPENAI))
         assertTrue(supportsNativeWebSearch(AiProviderType.ANTHROPIC))

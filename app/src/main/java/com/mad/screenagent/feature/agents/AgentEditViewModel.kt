@@ -24,10 +24,12 @@ import com.mad.screenagent.data.model.preferredOpenRouterVisionFreeModel
 import com.mad.screenagent.data.model.shouldRetryOpenRouterFreeFallback
 import com.mad.screenagent.data.repository.AgentRepository
 import com.mad.screenagent.data.repository.OpenRouterCatalogRepository
+import com.mad.screenagent.data.repository.OnDeviceCatalogRefreshResult
 import com.mad.screenagent.data.repository.OnDeviceModelRepository
 import com.mad.screenagent.data.repository.ProviderModelCatalogRepository
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.mad.screenagent.shared.streaming.OnDeviceUserMessages
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -54,6 +56,26 @@ sealed class ConnectionTestState {
     ) : ConnectionTestState()
     data class Failure(val message: String) : ConnectionTestState()
 }
+
+enum class OnDeviceShelfSort {
+    RECOMMENDED,
+    SMALLEST,
+    QUALITY
+}
+
+enum class OnDeviceCatalogRefreshStatus {
+    IDLE,
+    REFRESHING,
+    REFRESHED,
+    FAILED_CACHED
+}
+
+data class OnDeviceCatalogUiState(
+    val fetchedAt: Long = 0L,
+    val refreshStatus: OnDeviceCatalogRefreshStatus = OnDeviceCatalogRefreshStatus.IDLE,
+    val lastRefreshFailureMessage: String? = null,
+    val shelfSort: OnDeviceShelfSort = OnDeviceShelfSort.RECOMMENDED
+)
 
 class AgentEditViewModel(
     private val repo: AgentRepository,
@@ -109,6 +131,9 @@ class AgentEditViewModel(
 
     private val _onDeviceDownloadState = MutableStateFlow(OnDeviceDownloadState.NOT_DOWNLOADED)
     val onDeviceDownloadState: StateFlow<OnDeviceDownloadState> = _onDeviceDownloadState
+
+    private val _onDeviceCatalogUiState = MutableStateFlow(OnDeviceCatalogUiState())
+    val onDeviceCatalogUiState: StateFlow<OnDeviceCatalogUiState> = _onDeviceCatalogUiState
 
     private val _isLoadingModels = MutableStateFlow(false)
     val isLoadingModels: StateFlow<Boolean> = _isLoadingModels
@@ -222,6 +247,9 @@ class AgentEditViewModel(
         viewModelScope.launch {
             onDeviceModelRepository.catalogFlow.collect { catalog ->
                 _onDeviceCatalog.value = catalog
+                _onDeviceCatalogUiState.value = _onDeviceCatalogUiState.value.copy(
+                    fetchedAt = catalog.fetchedAt
+                )
             }
         }
         viewModelScope.launch {
@@ -321,17 +349,19 @@ class AgentEditViewModel(
                 val modelId = agent.onDevice.selectedModelId.trim().ifBlank { agent.model.trim() }
                 val installed = onDeviceModelRepository.getInstalledModel(modelId)
                 _connectionTestState.value = if (modelId.isBlank()) {
-                    ConnectionTestState.Failure("Choose an on-device model first.")
+                    ConnectionTestState.Failure(OnDeviceUserMessages.chooseModel())
                 } else if (installed == null) {
-                    ConnectionTestState.Failure("Download an on-device model before testing.")
+                    ConnectionTestState.Failure(OnDeviceUserMessages.downloadModelFirst())
                 } else if (installed.downloadState == OnDeviceDownloadState.DOWNLOADING ||
                     installed.downloadState == OnDeviceDownloadState.VALIDATING
                 ) {
-                    ConnectionTestState.Failure("The selected on-device model is still downloading.")
+                    ConnectionTestState.Failure(OnDeviceUserMessages.modelStillDownloading())
                 } else if (!installed.downloadState.isReadyForUse) {
-                    ConnectionTestState.Failure(installed.errorMessage ?: "The selected on-device model is not ready yet.")
+                    ConnectionTestState.Failure(
+                        OnDeviceUserMessages.validationMessage(installed.failureKind, installed.errorMessage)
+                    )
                 } else {
-                    ConnectionTestState.Success("Installed locally at ${installed.localPath}")
+                    ConnectionTestState.Success("This on-device model is ready to use.")
                 }
             }
             return
@@ -385,7 +415,15 @@ class AgentEditViewModel(
 
     fun refreshOnDeviceCatalog() {
         if (_agent.value.provider != AiProviderType.ON_DEVICE) return
+        _onDeviceCatalogUiState.value = _onDeviceCatalogUiState.value.copy(
+            refreshStatus = OnDeviceCatalogRefreshStatus.REFRESHING,
+            lastRefreshFailureMessage = null
+        )
         scheduleCurrentProviderModelRefresh(force = true)
+    }
+
+    fun setOnDeviceShelfSort(sort: OnDeviceShelfSort) {
+        _onDeviceCatalogUiState.value = _onDeviceCatalogUiState.value.copy(shelfSort = sort)
     }
 
     fun downloadOnDeviceModel(modelId: String) {
@@ -401,7 +439,7 @@ class AgentEditViewModel(
             } catch (e: Exception) {
                 if (_agent.value.provider == AiProviderType.ON_DEVICE) {
                     _connectionTestState.value = ConnectionTestState.Failure(
-                        e.message ?: "On-device model download failed"
+                        OnDeviceUserMessages.downloadFailure(e)
                     )
                 }
             }
@@ -419,7 +457,7 @@ class AgentEditViewModel(
             } catch (e: Exception) {
                 if (_agent.value.provider == AiProviderType.ON_DEVICE) {
                     _connectionTestState.value = ConnectionTestState.Failure(
-                        e.message ?: "Unable to cancel the download"
+                        OnDeviceUserMessages.cancelDownloadFailure()
                     )
                 }
             }
@@ -438,11 +476,11 @@ class AgentEditViewModel(
                     )
                 }
                 _connectionTestState.value = ConnectionTestState.Success(
-                    "Imported the GGUF model and validated it locally."
+                    OnDeviceUserMessages.importSuccess()
                 )
             } catch (e: Exception) {
                 _connectionTestState.value = ConnectionTestState.Failure(
-                    e.message ?: "Unable to import the GGUF model"
+                    OnDeviceUserMessages.importFailure(e)
                 )
             }
         }
@@ -766,16 +804,33 @@ class AgentEditViewModel(
     private suspend fun refreshOnDeviceModels(force: Boolean = false) {
         _isLoadingModels.value = true
         try {
-            val catalog = onDeviceModelRepository.refreshCatalogIfStale(force = force)
-            onDeviceModels = catalog.models
+            val result = onDeviceModelRepository.refreshCatalogIfStale(force = force)
+            applyOnDeviceCatalogRefreshResult(result)
+            onDeviceModels = result.catalog.models
                 .filter { it.isPublicDefaultChoice() }
                 .map { it.id }
         } catch (_: Exception) {
             // fall back to cached catalog
+            _onDeviceCatalogUiState.value = _onDeviceCatalogUiState.value.copy(
+                refreshStatus = OnDeviceCatalogRefreshStatus.FAILED_CACHED,
+                lastRefreshFailureMessage = OnDeviceUserMessages.cachedCatalogFallback()
+            )
         } finally {
             updateCurrentProviderModels(AiProviderType.ON_DEVICE)
             _isLoadingModels.value = false
         }
+    }
+
+    private fun applyOnDeviceCatalogRefreshResult(result: OnDeviceCatalogRefreshResult) {
+        _onDeviceCatalogUiState.value = _onDeviceCatalogUiState.value.copy(
+            fetchedAt = result.catalog.fetchedAt,
+            refreshStatus = if (result.usedCachedCatalog) {
+                OnDeviceCatalogRefreshStatus.FAILED_CACHED
+            } else {
+                OnDeviceCatalogRefreshStatus.REFRESHED
+            },
+            lastRefreshFailureMessage = result.failureMessage
+        )
     }
 
     private suspend fun fetchCustomCompatibleModels(
@@ -933,7 +988,7 @@ internal fun AgentConfig.forProviderSwitch(
     defaultModel: String
 ): AgentConfig = copy(
     provider = provider,
-    model = defaultModel,
+    model = if (provider == AiProviderType.ON_DEVICE) "" else defaultModel,
     apiKey = "",
     customPreset = if (provider == AiProviderType.CUSTOM) {
         CustomProviderPreset.MANUAL
@@ -946,7 +1001,7 @@ internal fun AgentConfig.forProviderSwitch(
         ""
     },
     onDevice = if (provider == AiProviderType.ON_DEVICE) {
-        onDevice.copy(selectedModelId = defaultModel)
+        onDevice.copy(selectedModelId = "")
     } else {
         onDevice
     },

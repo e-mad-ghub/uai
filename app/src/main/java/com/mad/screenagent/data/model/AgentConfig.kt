@@ -15,7 +15,7 @@ data class AgentConfig(
     val name: String = "New Agent",
     val provider: AiProviderType = AiProviderType.ON_DEVICE,
     val apiKey: String = "",
-    val model: String = "gemma-3-1b-it-gguf",
+    val model: String = "",
     val onDevice: OnDeviceProviderConfig = OnDeviceProviderConfig(),
     val customPreset: CustomProviderPreset = CustomProviderPreset.MANUAL,
     val customBaseUrl: String = "",

@@ -17,7 +17,6 @@ import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.model.OnDeviceModelCatalog
 import com.mad.screenagent.data.model.OpenRouterCatalog
 import com.mad.screenagent.data.model.ProviderModelCatalog
-import com.mad.screenagent.data.model.allOnDeviceCatalogEntries
 import com.mad.screenagent.data.model.normalizeOnDeviceCatalog
 import com.mad.screenagent.data.model.QuickActionConfig
 import com.google.gson.Gson
@@ -124,9 +123,7 @@ class AppPreferences(context: Context) {
     val onDeviceModelCatalogFlow: Flow<OnDeviceModelCatalog> = store.data.map { prefs ->
         val json = prefs[Keys.ON_DEVICE_MODEL_CATALOG_JSON]
         val catalog = if (json.isNullOrBlank()) {
-            OnDeviceModelCatalog(
-                models = allOnDeviceCatalogEntries()
-            )
+            OnDeviceModelCatalog()
         } else {
             gson.fromJson(json, OnDeviceModelCatalog::class.java)?.copy(
                 fetchedAt = prefs[Keys.ON_DEVICE_MODEL_CATALOG_FETCHED_AT] ?: 0L

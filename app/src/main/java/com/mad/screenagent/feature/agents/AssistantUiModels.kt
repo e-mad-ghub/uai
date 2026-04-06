@@ -193,9 +193,9 @@ fun providerUiInfo(provider: AiProviderType): ProviderUiInfo = when (provider) {
 
 fun assistantProviderOrder(): List<AiProviderType> = listOf(
     AiProviderType.ON_DEVICE,
+    AiProviderType.OPENROUTER,
     AiProviderType.ANTHROPIC,
     AiProviderType.OPENAI,
-    AiProviderType.OPENROUTER,
     AiProviderType.CUSTOM
 )
 
@@ -434,7 +434,6 @@ fun formatTokenCount(tokens: Long): String = when {
 }
 
 fun assistantCapabilities(agent: AgentConfig): List<String> = buildList {
-    add(agent.provider.displayName)
     if (agent.canHandleImageRequests()) add("Images")
     if (agent.supportsDocuments) add("Documents")
     if (agent.provider == AiProviderType.OPENROUTER && isOpenRouterFreeModel(agent.model)) add("Free")

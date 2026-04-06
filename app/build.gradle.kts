@@ -20,8 +20,8 @@ android {
         applicationId = "com.mad.screenagent"
         minSdk = 24
         targetSdk = 36
-        versionCode = 5
-        versionName = "5.1"
+        versionCode = 6
+        versionName = "6.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += listOf("arm64-v8a")

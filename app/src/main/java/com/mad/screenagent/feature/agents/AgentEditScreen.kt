@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -39,6 +40,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -59,6 +61,7 @@ import com.mad.screenagent.data.model.canHandleImageRequests
 import com.mad.screenagent.data.model.isOpenRouterFreeModel
 import com.mad.screenagent.data.model.normalizeOpenAiCompatibleBaseUrl
 import com.mad.screenagent.shared.streaming.NativeWebSearchConfig
+import com.mad.screenagent.shared.streaming.OnDeviceUserMessages
 import com.mad.screenagent.data.model.MONEY_SAVER_MODEL
 import com.mad.screenagent.data.model.SIDEAGENT_OPENROUTER_BEST_FREE_MODEL
 import java.text.SimpleDateFormat
@@ -85,6 +88,7 @@ fun AgentEditScreen(
     val importedOnDeviceModelLibrary by viewModel.importedOnDeviceModelLibrary.collectAsStateWithLifecycle()
     val nonPublicOnDeviceModelLibrary by viewModel.nonPublicOnDeviceModelLibrary.collectAsStateWithLifecycle()
     val onDeviceDownloadState by viewModel.onDeviceDownloadState.collectAsStateWithLifecycle()
+    val onDeviceCatalogUiState by viewModel.onDeviceCatalogUiState.collectAsStateWithLifecycle()
     val isLoadingModels by viewModel.isLoadingModels.collectAsStateWithLifecycle()
     val connectionTestState by viewModel.connectionTestState.collectAsStateWithLifecycle()
     val nameValidationMessage by viewModel.nameValidationMessage.collectAsStateWithLifecycle()
@@ -258,9 +262,7 @@ fun AgentEditScreen(
                             selected = agent.provider == type,
                             onClick = {
                                 val defaultModel = when (type) {
-                                    AiProviderType.ON_DEVICE ->
-                                        readyOnDeviceModelLibrary.firstOrNull()?.catalogEntry?.id
-                                            ?: publicOnDeviceModelLibrary.firstOrNull()?.catalogEntry?.id.orEmpty()
+                                    AiProviderType.ON_DEVICE -> ""
                                     else -> defaultRecommendedModelId(
                                         provider = type,
                                         openRouterCatalogEntries = openRouterCatalogEntries,
@@ -274,12 +276,19 @@ fun AgentEditScreen(
                         )
                     }
                 }
+                val providerChangeHint = if (isOnDeviceProvider) {
+                    "Pick your preferred model directly from the \"Models Shelf\" to run it on the device with no API key."
+                } else {
+                    stringResource(R.string.assistants_provider_change_hint)
+                }
                 Text(
-                    stringResource(R.string.assistants_provider_change_hint),
+                    providerChangeHint,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                ProviderInfoCard(info = providerInfo)
+                if (!isOnDeviceProvider) {
+                    ProviderInfoCard(info = providerInfo)
+                }
 
                 if (isOnDeviceProvider) {
                     OnDeviceModelSection(
@@ -289,6 +298,7 @@ fun AgentEditScreen(
                         nonPublicLibrary = nonPublicOnDeviceModelLibrary,
                         selectedModelId = agent.onDevice.selectedModelId.ifBlank { agent.model },
                         downloadState = onDeviceDownloadState,
+                        catalogUiState = onDeviceCatalogUiState,
                         onModelSelect = { modelId ->
                             viewModel.update {
                                 copy(
@@ -299,6 +309,8 @@ fun AgentEditScreen(
                         },
                         onDownload = viewModel::downloadOnDeviceModel,
                         onImport = { ggufImportLauncher.launch(arrayOf("*/*")) },
+                        onRefresh = viewModel::refreshOnDeviceCatalog,
+                        onSortChange = viewModel::setOnDeviceShelfSort,
                         onCancel = viewModel::cancelOnDeviceDownload,
                         onDelete = viewModel::deleteOnDeviceModel,
                     )
@@ -322,20 +334,6 @@ fun AgentEditScreen(
                         },
                         singleLine = true
                     )
-                }
-
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ProductPill(label = agent.provider.displayName, emphasized = true)
-                    if (isCustomProvider) {
-                        ProductPill(label = agent.customPreset.displayName)
-                    } else if (isOnDeviceProvider) {
-                        ProductPill(label = agent.onDevice.selectedModelId.ifBlank { "Choose model" })
-                    } else if (selectedModelChoice != null) {
-                        ProductPill(label = selectedModelChoice.label)
-                    }
                 }
 
                 if (!isOnDeviceProvider) {
@@ -396,16 +394,7 @@ fun AgentEditScreen(
                         }
                     )
                 }
-                if (isOnDeviceProvider) {
-                    LocalModelStatusNote(
-                        publicModels = publicOnDeviceModelLibrary,
-                        nonPublicModels = nonPublicOnDeviceModelLibrary,
-                        isLoadingModels = isLoadingModels,
-                        selectedModel = agent.onDevice.selectedModelId,
-                        selectedIsPublic = selectedPublicOnDeviceItem != null,
-                        isReady = selectedReadyOnDeviceItem?.installRecord?.downloadState?.isReadyForUse == true
-                    )
-                } else {
+                if (!isOnDeviceProvider) {
                     ProviderCatalogStatusNote(
                         provider = agent.provider,
                         hasProviderCatalog = providerModels.isNotEmpty(),
@@ -511,89 +500,6 @@ fun AgentEditScreen(
                                         label = { Text("Max output tokens") },
                                         supportingText = { Text("How many tokens the local model may generate.") },
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
-                                    )
-                                    OutlinedTextField(
-                                        value = agent.onDevice.topK.toString(),
-                                        onValueChange = { raw ->
-                                            val digits = raw.filter { it.isDigit() }
-                                            viewModel.update {
-                                                copy(
-                                                    onDevice = onDevice.copy(
-                                                        topK = digits.toIntOrNull() ?: onDevice.topK
-                                                    )
-                                                )
-                                            }
-                                        },
-                                        label = { Text("Top K") },
-                                        supportingText = { Text("Sampling limit for local generation.") },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
-                                    )
-                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Text(
-                                            "Temperature: ${agent.onDevice.temperature}",
-                                            style = MaterialTheme.typography.labelLarge
-                                        )
-                                        Slider(
-                                            value = agent.onDevice.temperature,
-                                            onValueChange = { value ->
-                                                viewModel.update {
-                                                    copy(onDevice = onDevice.copy(temperature = value))
-                                                }
-                                            },
-                                            valueRange = 0f..2f,
-                                            steps = 19
-                                        )
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween
-                                        ) {
-                                            Text(
-                                                stringResource(R.string.assistants_creativity_precise),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                            Text(
-                                                stringResource(R.string.assistants_creativity_creative),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                    OutlinedTextField(
-                                        value = agent.onDevice.randomSeed.toString(),
-                                        onValueChange = { raw ->
-                                            val digits = raw.filter { it.isDigit() }
-                                            viewModel.update {
-                                                copy(
-                                                    onDevice = onDevice.copy(
-                                                        randomSeed = digits.toIntOrNull() ?: onDevice.randomSeed
-                                                    )
-                                                )
-                                            }
-                                        },
-                                        label = { Text("Random seed") },
-                                        supportingText = { Text("Set a seed for reproducible local runs.") },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
-                                    )
-                                    OutlinedTextField(
-                                        value = agent.onDevice.loraAdapterId.orEmpty(),
-                                        onValueChange = { raw ->
-                                            viewModel.update {
-                                                copy(
-                                                    onDevice = onDevice.copy(
-                                                        loraAdapterId = raw.trim().ifBlank { null }
-                                                    )
-                                                )
-                                            }
-                                        },
-                                        label = { Text("LoRA adapter ID") },
-                                        supportingText = { Text("Optional adapter identifier for local model variants.") },
                                         modifier = Modifier.fillMaxWidth(),
                                         singleLine = true
                                     )
@@ -1489,25 +1395,24 @@ private fun OnDeviceModelSection(
     nonPublicLibrary: List<OnDeviceModelLibraryItem>,
     selectedModelId: String,
     downloadState: OnDeviceDownloadState,
+    catalogUiState: OnDeviceCatalogUiState,
     onModelSelect: (String) -> Unit,
     onDownload: (String) -> Unit,
     onImport: () -> Unit,
+    onRefresh: () -> Unit,
+    onSortChange: (OnDeviceShelfSort) -> Unit,
     onCancel: (String) -> Unit,
     onDelete: (String) -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
-    val selectedItem = (publicLibrary + importedLibrary + nonPublicLibrary).firstOrNull { it.catalogEntry.id == selectedModelId }
-    val selectedPublicItem = publicLibrary.firstOrNull { it.catalogEntry.id == selectedModelId }
+    var sortExpanded by rememberSaveable { mutableStateOf(false) }
+    val isRefreshing = catalogUiState.refreshStatus == OnDeviceCatalogRefreshStatus.REFRESHING
+    val shelfItems = (publicLibrary + importedLibrary)
+        .distinctBy { it.catalogEntry.id }
+        .sortedWith { left, right ->
+            compareShelfItems(left, right, catalogUiState.shelfSort)
+        }
     val selectedReadyItem = readyLibrary.firstOrNull { it.catalogEntry.id == selectedModelId }
-    val selectedImportedItem = importedLibrary.firstOrNull { it.catalogEntry.id == selectedModelId }
-    val selectedInstallRecord = selectedPublicItem?.installRecord
-    val selectedStatusText = when {
-        selectedItem == null -> "Choose or import a GGUF model"
-        selectedImportedItem != null && selectedReadyItem != null -> "Ready"
-        selectedPublicItem == null -> "Not publicly downloadable"
-        selectedReadyItem != null -> "Ready"
-        else -> selectedInstallRecord.statusHeadline(downloadState)
-    }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1518,299 +1423,243 @@ private fun OnDeviceModelSection(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("On-Device", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    text = "Download curated GGUF models or import your own GGUF files here. Ready models appear in the dropdown below.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+            Text("Models Shelf", style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = "Download curated GGUF models or import your own GGUF files here. Ready models appear in the selector below.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = catalogUiState.lastRefreshedLabel(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
-        Text(
-            text = when (downloadState) {
-                OnDeviceDownloadState.DOWNLOADING -> "Status: A local model is downloading in the background."
-                OnDeviceDownloadState.VALIDATING -> "Status: A local model is being validated."
-                OnDeviceDownloadState.READY,
-                OnDeviceDownloadState.DOWNLOADED -> "Status: Ready models are available in the dropdown."
-                OnDeviceDownloadState.CANCELLED -> "Status: The last download was cancelled."
-                OnDeviceDownloadState.FAILED -> "Status: The last local model failed validation or runtime checks."
-                OnDeviceDownloadState.UNAVAILABLE -> "Status: Local models are unavailable on this device."
-                OnDeviceDownloadState.NOT_DOWNLOADED -> "Status: No local models have been downloaded yet."
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("Download models", style = MaterialTheme.typography.labelLarge)
-                Text(
-                    text = "Pick a public GGUF model to download. Downloads keep running in the background and can be cancelled at any time.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                OutlinedButton(onClick = onImport) {
-                    Text("Import GGUF")
-                }
-                if (publicLibrary.isEmpty()) {
+            if (catalogUiState.refreshStatus == OnDeviceCatalogRefreshStatus.FAILED_CACHED) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
                     Text(
-                        text = "No public GGUF models are available.",
+                        text = catalogUiState.lastRefreshFailureMessage
+                            ?: "Showing cached catalog.",
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
-                } else {
-                    publicLibrary.forEach { item ->
-                        val entry = item.catalogEntry
-                        val install = item.installRecord
-                        val state = install?.downloadState ?: OnDeviceDownloadState.NOT_DOWNLOADED
-                        val progressText = install.progressText()
-                        val status = install.statusHeadline(state)
-                        val canCancel = state == OnDeviceDownloadState.DOWNLOADING ||
-                            state == OnDeviceDownloadState.VALIDATING
-                        val canDelete = state.isReadyForUse
-                        val actionLabel = when {
-                            canCancel -> "Cancel"
-                            canDelete -> "Delete"
-                            state == OnDeviceDownloadState.FAILED ||
-                                state == OnDeviceDownloadState.CANCELLED -> "Retry"
-                            else -> "Download"
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(entry.displayName, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    text = listOfNotNull(
-                                        status,
-                                        entry.estimatedSizeText(),
-                                        progressText,
-                                        install.failureReasonSummary(),
-                                        entry.description.ifBlank { entry.id }
-                                    ).joinToString(" · "),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                }
+            }
+
+            ExposedDropdownMenuBox(
+                expanded = sortExpanded,
+                onExpandedChange = { sortExpanded = it }
+            ) {
+                OutlinedTextField(
+                    value = shelfSortLabel(catalogUiState.shelfSort),
+                    onValueChange = {},
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                    readOnly = true,
+                    label = { Text("Sort models") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(sortExpanded) },
+                    singleLine = true
+                )
+                ExposedDropdownMenu(
+                    expanded = sortExpanded,
+                    onDismissRequest = { sortExpanded = false }
+                ) {
+                    OnDeviceShelfSort.entries.forEach { sort ->
+                        DropdownMenuItem(
+                            text = { Text(shelfSortLabel(sort)) },
+                            onClick = {
+                                sortExpanded = false
+                                onSortChange(sort)
                             }
-                            TextButton(
-                                onClick = {
-                                    when {
-                                        canCancel -> onCancel(entry.id)
-                                        canDelete -> onDelete(entry.id)
-                                        else -> onDownload(entry.id)
-                                    }
-                                }
-                            ) {
-                                Text(actionLabel)
-                            }
-                        }
+                        )
                     }
                 }
             }
-        }
 
-        if (importedLibrary.isNotEmpty()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onRefresh,
+                    enabled = !isRefreshing
+                ) {
+                    if (isRefreshing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("Refreshing")
+                    } else {
+                        Text("Refresh Models")
+                    }
+                }
+                OutlinedButton(onClick = onImport) {
+                    Text("Import GGUF")
+                }
+            }
+
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.medium,
                 color = MaterialTheme.colorScheme.surface
             ) {
                 Column(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Imported GGUF models", style = MaterialTheme.typography.labelLarge)
-                    Text(
-                        text = "Imported files are validated locally and become selectable once ready.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    importedLibrary.forEach { item ->
-                        val entry = item.catalogEntry
-                        val record = item.installRecord
-                        val state = record?.downloadState ?: OnDeviceDownloadState.NOT_DOWNLOADED
-                        val status = when (state) {
-                            OnDeviceDownloadState.DOWNLOADING -> record.progressText() ?: "Importing"
-                            OnDeviceDownloadState.VALIDATING -> record.progressText() ?: "Validating"
-                            OnDeviceDownloadState.READY,
-                            OnDeviceDownloadState.DOWNLOADED -> "Ready"
-                            OnDeviceDownloadState.CANCELLED -> "Cancelled"
-                            OnDeviceDownloadState.FAILED -> record.statusHeadline(state)
-                            OnDeviceDownloadState.UNAVAILABLE -> record.statusHeadline(state)
-                            OnDeviceDownloadState.NOT_DOWNLOADED -> "Not installed"
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(entry.displayName, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    text = listOfNotNull(
-                                        status,
-                                        record?.downloadedBytes?.takeIf { it > 0L }?.humanReadableBytes(),
-                                        record.failureReasonSummary(),
-                                        entry.description.ifBlank { entry.id }
-                                    ).joinToString(" · "),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            TextButton(onClick = { onDelete(entry.id) }) {
-                                Text("Delete")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = { expanded = it }
-        ) {
-            OutlinedTextField(
-                value = selectedReadyItem?.catalogEntry?.displayName
-                    ?: selectedImportedItem?.catalogEntry?.displayName
-                    ?: selectedPublicItem?.catalogEntry?.displayName
-                    ?: "Choose ready GGUF model",
-                onValueChange = {},
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(MenuAnchorType.PrimaryNotEditable),
-                readOnly = true,
-                label = { Text("Ready models") },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                supportingText = {
-                    val supportingText = when {
-                        selectedItem == null -> "Download a curated GGUF model or import your own GGUF file first."
-                        selectedReadyItem == null -> selectedStatusText
-                        else -> selectedItem.catalogEntry.description.ifBlank { selectedStatusText }
-                    }
-                    Text(supportingText)
-                },
-                singleLine = true
-            )
-
-            ExposedDropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false }
-            ) {
-                if (readyLibrary.isEmpty()) {
-                    DropdownMenuItem(
-                        text = { Text("No ready GGUF models yet") },
-                        onClick = { expanded = false },
-                        enabled = false
-                    )
-                } else {
-                    readyLibrary.forEach { item ->
-                        val entry = item.catalogEntry
-                        val status = when (item.installRecord?.downloadState ?: OnDeviceDownloadState.NOT_DOWNLOADED) {
-                            OnDeviceDownloadState.DOWNLOADING -> "Downloading"
-                            OnDeviceDownloadState.VALIDATING -> "Validating"
-                            OnDeviceDownloadState.READY,
-                            OnDeviceDownloadState.DOWNLOADED -> "Ready"
-                            OnDeviceDownloadState.CANCELLED -> "Cancelled"
-                            OnDeviceDownloadState.FAILED -> item.installRecord.statusHeadline(OnDeviceDownloadState.FAILED)
-                            OnDeviceDownloadState.UNAVAILABLE -> item.installRecord.statusHeadline(OnDeviceDownloadState.UNAVAILABLE)
-                            OnDeviceDownloadState.NOT_DOWNLOADED -> "Not installed"
-                        }
-                        DropdownMenuItem(
-                            text = {
-                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(entry.displayName)
-                                    Text(
-                                        listOfNotNull(
-                                            status,
-                                            if (entry.isImported) "Imported GGUF" else null,
-                                            entry.description.ifBlank { entry.id }
-                                        ).joinToString(" · "),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            },
-                            onClick = {
-                                expanded = false
-                                onModelSelect(entry.id)
-                            }
-                        )
-                    }
-                }
-            }
-        }
-        Text(
-            text = "Selected model status: $selectedStatusText",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-            if (nonPublicLibrary.isNotEmpty()) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.surface
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("Not publicly downloadable", style = MaterialTheme.typography.labelLarge)
+                    if (shelfItems.isEmpty()) {
                         Text(
-                            text = "Shown separately because they need external access.",
+                            text = "No GGUF models are available yet.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        nonPublicLibrary.forEach { item ->
+                    } else {
+                        shelfItems.forEach { item ->
                             val entry = item.catalogEntry
-                            val status = when (item.installRecord?.downloadState ?: OnDeviceDownloadState.NOT_DOWNLOADED) {
-                                OnDeviceDownloadState.DOWNLOADING -> "External access required"
-                                OnDeviceDownloadState.VALIDATING -> "External access required"
-                                OnDeviceDownloadState.READY,
-                                OnDeviceDownloadState.DOWNLOADED -> "Not publicly downloadable"
-                                OnDeviceDownloadState.CANCELLED -> "Not publicly downloadable"
-                                OnDeviceDownloadState.FAILED -> "Not publicly downloadable"
-                                OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
-                                OnDeviceDownloadState.NOT_DOWNLOADED -> "Not publicly downloadable"
+                            val record = item.installRecord
+                            val state = record?.downloadState ?: OnDeviceDownloadState.NOT_DOWNLOADED
+                            val isReady = state.isReadyForUse
+                            val isGreyed = !isReady
+                            val status = record.statusHeadline(state)
+                            val progressText = record.progressText()
+                            val canCancel = state == OnDeviceDownloadState.DOWNLOADING ||
+                                state == OnDeviceDownloadState.VALIDATING
+                            val canRemove = entry.isImported || isReady
+                            val actionLabel = when {
+                                canCancel -> "Cancel"
+                                canRemove -> "Remove"
+                                else -> "Download"
                             }
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
+
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .alpha(if (isGreyed) 0.55f else 1f),
+                                shape = MaterialTheme.shapes.medium,
+                                color = MaterialTheme.colorScheme.surfaceVariant
                             ) {
-                                Text(entry.displayName, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    text = listOfNotNull(
-                                        status,
-                                        item.installRecord.progressText(),
-                                        entry.description.ifBlank { entry.id }
-                                    ).joinToString(" · "),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(entry.userFacingDisplayName(), style = MaterialTheme.typography.bodyMedium)
+                                        }
+                                        Text(
+                                            text = listOfNotNull(
+                                                status,
+                                                entry.estimatedSizeText(),
+                                                progressText,
+                                                record.failureReasonSummary()
+                                            ).joinToString(" · "),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            when {
+                                                canCancel -> onCancel(entry.id)
+                                                canRemove -> onDelete(entry.id)
+                                                else -> onDownload(entry.id)
+                                            }
+                                        }
+                                    ) {
+                                        Text(actionLabel)
+                                    }
+                                }
                             }
+                        }
+                    }
+                }
+            }
+
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = it }
+            ) {
+                OutlinedTextField(
+                    value = selectedReadyItem?.catalogEntry?.userFacingDisplayName() ?: "None Selected",
+                    onValueChange = {},
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                    readOnly = true,
+                    label = { Text("Model selector") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    supportingText = {
+                        Text(
+                            if (selectedReadyItem == null) {
+                                "Choose a ready model from the shelf. This selection is required before saving."
+                            } else {
+                                selectedReadyItem.catalogEntry.description.ifBlank { "Ready to use" }
+                            }
+                        )
+                    },
+                    singleLine = true
+                )
+
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                "None Selected",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        onClick = {
+                            expanded = false
+                            onModelSelect("")
+                        }
+                    )
+                    if (readyLibrary.isEmpty()) {
+                        DropdownMenuItem(
+                            text = { Text("No ready GGUF models yet") },
+                            onClick = { expanded = false },
+                            enabled = false
+                        )
+                    } else {
+                        readyLibrary.forEach { item ->
+                            val entry = item.catalogEntry
+                            DropdownMenuItem(
+                                text = {
+                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text(entry.userFacingDisplayName())
+                                        Text(
+                                            entry.description.ifBlank { "Ready to use" },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    expanded = false
+                                    onModelSelect(entry.id)
+                                }
+                            )
                         }
                     }
                 }
@@ -1837,6 +1686,73 @@ private fun InstalledOnDeviceModel?.progressText(): String? {
     }
 }
 
+private fun OnDeviceModelCatalogEntry.userFacingDisplayName(): String {
+    val current = displayName.trim()
+    if (current.isNotEmpty() && !current.startsWith("imported-")) return current
+    val fileLabel = fileName.removeSuffix(".gguf").trim()
+    if (fileLabel.isNotEmpty()) return fileLabel
+    return id.removePrefix("imported-").trim().ifBlank { id }
+}
+
+private fun compareShelfItems(
+    left: OnDeviceModelLibraryItem,
+    right: OnDeviceModelLibraryItem,
+    sort: OnDeviceShelfSort
+): Int {
+    val leftImported = left.catalogEntry.isImported
+    val rightImported = right.catalogEntry.isImported
+    if (leftImported != rightImported) {
+        return if (leftImported) 1 else -1
+    }
+    return when (sort) {
+        OnDeviceShelfSort.RECOMMENDED -> compareValuesBy(
+            left,
+            right,
+            { it.catalogEntry.recommendedRank },
+            { it.catalogEntry.estimatedSizeMb },
+            { it.catalogEntry.userFacingDisplayName().lowercase(Locale.getDefault()) }
+        )
+        OnDeviceShelfSort.SMALLEST -> compareValuesBy(
+            left,
+            right,
+            { it.catalogEntry.estimatedSizeMb },
+            { it.catalogEntry.recommendedRank },
+            { it.catalogEntry.userFacingDisplayName().lowercase(Locale.getDefault()) }
+        )
+        OnDeviceShelfSort.QUALITY -> compareValuesBy(
+            left,
+            right,
+            { -it.catalogEntry.recommendedRank.coerceAtMost(10_000) },
+            { -it.catalogEntry.estimatedSizeMb },
+            { it.catalogEntry.userFacingDisplayName().lowercase(Locale.getDefault()) }
+        )
+    }
+}
+
+private fun shelfSortLabel(sort: OnDeviceShelfSort): String = when (sort) {
+    OnDeviceShelfSort.RECOMMENDED -> "Recommended"
+    OnDeviceShelfSort.SMALLEST -> "Smallest"
+    OnDeviceShelfSort.QUALITY -> "Quality"
+}
+
+private fun OnDeviceCatalogUiState.lastRefreshedLabel(): String {
+    if (fetchedAt <= 0L) return "Last refreshed: not yet"
+    val now = System.currentTimeMillis()
+    val deltaMs = (now - fetchedAt).coerceAtLeast(0L)
+    val relative = when {
+        deltaMs < 60_000L -> "just now"
+        deltaMs < 60L * 60L * 1000L -> "${deltaMs / 60_000L} min ago"
+        deltaMs < 24L * 60L * 60L * 1000L -> "${deltaMs / (60L * 60L * 1000L)} h ago"
+        else -> null
+    }
+    val absolute = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(fetchedAt))
+    return if (relative != null) {
+        "Last refreshed: $relative ($absolute)"
+    } else {
+        "Last refreshed: $absolute"
+    }
+}
+
 private fun InstalledOnDeviceModel?.statusHeadline(
     fallbackState: OnDeviceDownloadState
 ): String {
@@ -1849,8 +1765,7 @@ private fun InstalledOnDeviceModel?.statusHeadline(
         OnDeviceDownloadState.DOWNLOADED -> "Ready"
         OnDeviceDownloadState.CANCELLED -> "Cancelled"
         OnDeviceDownloadState.FAILED -> when {
-            record?.failureKind == OnDeviceFailureKind.RUNTIME_INCOMPATIBLE -> "Runtime incompatible"
-            record?.failureKind == OnDeviceFailureKind.INVALID_GGUF -> "Invalid GGUF"
+            record != null -> OnDeviceUserMessages.shortStatus(record.failureKind)
             else -> "Download failed"
         }
         OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
@@ -1862,15 +1777,7 @@ private fun InstalledOnDeviceModel?.failureReasonSummary(): String? {
     val record = this
     val message = record?.errorMessage?.trim().orEmpty()
     if (message.isBlank()) return null
-    return when {
-        record?.failureKind == OnDeviceFailureKind.RUNTIME_INCOMPATIBLE ->
-            "This GGUF model is not loadable by the bundled llama runtime on this device"
-        record?.failureKind == OnDeviceFailureKind.INVALID_GGUF ->
-            "The downloaded file is not a valid GGUF model"
-        record?.failureKind == OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE ->
-            "The downloaded model file is missing or empty"
-        else -> message
-    }
+    return OnDeviceUserMessages.validationMessage(record?.failureKind ?: OnDeviceFailureKind.NONE, message)
 }
 
 private fun Long.humanReadableBytes(): String {

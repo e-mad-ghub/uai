@@ -66,6 +66,7 @@ import com.mad.screenagent.data.model.forSlot
 import com.mad.screenagent.shared.streaming.AssistantStreamingSession
 import com.mad.screenagent.shared.streaming.FileAttachmentContext
 import com.mad.screenagent.shared.streaming.ImageAttachment
+import com.mad.screenagent.shared.streaming.OnDeviceUserMessages
 import com.mad.screenagent.shared.streaming.StreamChunk
 import com.mad.screenagent.shared.streaming.ThrottledStreamingMessageWriter
 import com.mad.screenagent.shared.streaming.compressHistory
@@ -2306,21 +2307,21 @@ class FloatingBubbleService : Service() {
     ): String? {
         val modelId = agent.onDevice.selectedModelId.ifBlank { agent.model }.trim()
         if (modelId.isBlank()) {
-            return "Choose an On-Device model before sending a message."
+            return OnDeviceUserMessages.chooseModel()
         }
         val installed = container.onDeviceModelRepository.getInstalledModel(modelId)
-            ?: return "Download an On-Device model before sending a message."
+            ?: return OnDeviceUserMessages.downloadModelFirst()
         if (installed.downloadState == OnDeviceDownloadState.DOWNLOADING ||
             installed.downloadState == OnDeviceDownloadState.VALIDATING
         ) {
-            return "The selected On-Device model is still downloading."
+            return OnDeviceUserMessages.modelStillDownloading()
         }
         if (!installed.downloadState.isReadyForUse) {
             return installed.onDeviceBlockedReason()
         }
         val modelFile = File(installed.localPath)
         if (!modelFile.exists() || modelFile.length() == 0L) {
-            val reason = "The selected On-Device model file is missing at ${installed.localPath}."
+            val reason = OnDeviceUserMessages.missingModelFile()
             container.onDeviceModelRepository.markModelUnavailable(modelId, reason)
             return reason
         }
@@ -2328,17 +2329,7 @@ class FloatingBubbleService : Service() {
     }
 
     private fun InstalledOnDeviceModel.onDeviceBlockedReason(): String {
-        val message = errorMessage?.trim().orEmpty()
-        if (message.isBlank()) return "The selected On-Device model is not ready yet."
-        return when {
-            failureKind == OnDeviceFailureKind.RUNTIME_INCOMPATIBLE ->
-                "The selected On-Device model is runtime incompatible on this device."
-            failureKind == OnDeviceFailureKind.INVALID_GGUF ->
-                "The selected On-Device model is not a valid GGUF file."
-            failureKind == OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE ->
-                "The selected On-Device model file is missing or empty."
-            else -> message
-        }
+        return OnDeviceUserMessages.validationMessage(failureKind, errorMessage)
     }
 
     private fun getRealScreenHeight(): Int =

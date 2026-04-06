@@ -26,7 +26,8 @@ class OpenRouterModelsTest {
         val agent = AgentConfig()
 
         assertEquals(AiProviderType.ON_DEVICE, agent.provider)
-        assertEquals("gemma-3-1b-it-gguf", agent.model)
+        assertEquals("", agent.model)
+        assertEquals("", agent.onDevice.selectedModelId)
     }
 
     @Test

@@ -21,4 +21,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "uai"
 include(":app")
+include(":llama-android-lib")
  

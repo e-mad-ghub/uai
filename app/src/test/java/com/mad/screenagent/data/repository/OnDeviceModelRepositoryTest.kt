@@ -2,6 +2,7 @@ package com.mad.screenagent.data.repository
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.model.OnDeviceModelAccessState
 import com.mad.screenagent.data.model.OnDeviceModelCapability
@@ -11,8 +12,12 @@ import com.mad.screenagent.data.model.allOnDeviceCatalogEntries
 import com.mad.screenagent.data.model.defaultOnDeviceCatalogEntries
 import com.mad.screenagent.data.model.nonPublicOnDeviceCatalogEntries
 import com.mad.screenagent.data.prefs.AppPreferences
+import com.mad.screenagent.shared.streaming.ChatMessage
+import com.mad.screenagent.shared.streaming.OnDeviceRuntime
+import com.mad.screenagent.shared.streaming.StreamChunk
 import java.io.File
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -49,10 +54,11 @@ class OnDeviceModelRepositoryTest {
         val publicEntries = defaultOnDeviceCatalogEntries()
         val nonPublicEntries = nonPublicOnDeviceCatalogEntries()
 
-        assertEquals(3, publicEntries.size)
+        assertEquals(2, publicEntries.size)
         assertTrue(nonPublicEntries.isEmpty())
         assertTrue(publicEntries.all { it.accessState == OnDeviceModelAccessState.PUBLIC })
         assertTrue(publicEntries.all { it.capability == OnDeviceModelCapability.LOCAL_TEXT })
+        assertTrue(publicEntries.all { it.fileName.endsWith(".gguf") })
         assertTrue(nonPublicEntries.all { it.accessState != OnDeviceModelAccessState.PUBLIC })
         assertTrue(publicEntries.map { it.id }.intersect(nonPublicEntries.map { it.id }.toSet()).isEmpty())
         assertEquals(
@@ -80,10 +86,11 @@ class OnDeviceModelRepositoryTest {
                 id = "public-false-positive",
                 displayName = "Public False Positive",
                 description = "Deliberately public-marked entry for access-blocked regression coverage.",
-                downloadUrl = server.url("/model.task").toString(),
-                fileName = "model.task",
+                downloadUrl = server.url("/model.gguf").toString(),
+                fileName = "model.gguf",
                 accessStateKey = OnDeviceModelAccessState.PUBLIC.name,
-                capabilityKey = OnDeviceModelCapability.LOCAL_TEXT.name
+                capabilityKey = OnDeviceModelCapability.LOCAL_TEXT.name,
+                sourceTypeKey = com.mad.screenagent.data.model.OnDeviceModelSourceType.CATALOG.name
             )
             val prefs = AppPreferences(context)
             prefs.saveOnDeviceModelCatalog(
@@ -92,7 +99,8 @@ class OnDeviceModelRepositoryTest {
             val repository = OnDeviceModelRepository(
                 prefs = prefs,
                 context = context,
-                client = OkHttpClient()
+                client = OkHttpClient(),
+                runtime = FakeOnDeviceRuntime()
             )
 
             val error = try {
@@ -115,5 +123,15 @@ class OnDeviceModelRepositoryTest {
     private fun clearOnDeviceStorage() {
         File(context.filesDir, "datastore").deleteRecursively()
         File(context.filesDir, "on-device").deleteRecursively()
+    }
+
+    private class FakeOnDeviceRuntime : OnDeviceRuntime {
+        override suspend fun validateModel(modelPath: String): String? = null
+
+        override fun streamResponse(
+            messages: List<ChatMessage>,
+            config: AgentConfig,
+            modelPath: String
+        ) = flow<StreamChunk> { error("Not used in repository tests") }
     }
 }

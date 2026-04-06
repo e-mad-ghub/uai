@@ -1,5 +1,6 @@
 package com.mad.screenagent.feature.agents
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -99,6 +100,9 @@ class AgentEditViewModel(
 
     private val _readyOnDeviceModelLibrary = MutableStateFlow<List<OnDeviceModelLibraryItem>>(emptyList())
     val readyOnDeviceModelLibrary: StateFlow<List<OnDeviceModelLibraryItem>> = _readyOnDeviceModelLibrary
+
+    private val _importedOnDeviceModelLibrary = MutableStateFlow<List<OnDeviceModelLibraryItem>>(emptyList())
+    val importedOnDeviceModelLibrary: StateFlow<List<OnDeviceModelLibraryItem>> = _importedOnDeviceModelLibrary
 
     private val _nonPublicOnDeviceModelLibrary = MutableStateFlow<List<OnDeviceModelLibraryItem>>(emptyList())
     val nonPublicOnDeviceModelLibrary: StateFlow<List<OnDeviceModelLibraryItem>> = _nonPublicOnDeviceModelLibrary
@@ -223,7 +227,17 @@ class AgentEditViewModel(
         viewModelScope.launch {
             onDeviceModelRepository.libraryFlow.collect { publicLibrary ->
                 _publicOnDeviceModelLibrary.value = publicLibrary
-                _readyOnDeviceModelLibrary.value = publicLibrary.filter {
+            }
+        }
+        viewModelScope.launch {
+            onDeviceModelRepository.importedLibraryFlow.collect { importedLibrary ->
+                _importedOnDeviceModelLibrary.value = importedLibrary
+            }
+        }
+        viewModelScope.launch {
+            onDeviceModelRepository.allLibraryFlow.collect { library ->
+                _onDeviceModelLibrary.value = library
+                _readyOnDeviceModelLibrary.value = library.filter {
                     it.installRecord?.downloadState?.isReadyForUse == true
                 }
                 onDeviceModels = _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }
@@ -235,7 +249,6 @@ class AgentEditViewModel(
         viewModelScope.launch {
             onDeviceModelRepository.nonPublicLibraryFlow.collect { nonPublicLibrary ->
                 _nonPublicOnDeviceModelLibrary.value = nonPublicLibrary
-                _onDeviceModelLibrary.value = _publicOnDeviceModelLibrary.value + nonPublicLibrary
             }
         }
         viewModelScope.launch {
@@ -409,6 +422,28 @@ class AgentEditViewModel(
                         e.message ?: "Unable to cancel the download"
                     )
                 }
+            }
+        }
+    }
+
+    fun importOnDeviceModel(uri: Uri) {
+        if (_agent.value.provider != AiProviderType.ON_DEVICE) return
+        viewModelScope.launch {
+            try {
+                val installed = onDeviceModelRepository.importModel(uri)
+                update {
+                    copy(
+                        model = installed.modelId,
+                        onDevice = onDevice.copy(selectedModelId = installed.modelId)
+                    )
+                }
+                _connectionTestState.value = ConnectionTestState.Success(
+                    "Imported the GGUF model and validated it locally."
+                )
+            } catch (e: Exception) {
+                _connectionTestState.value = ConnectionTestState.Failure(
+                    e.message ?: "Unable to import the GGUF model"
+                )
             }
         }
     }
@@ -796,16 +831,7 @@ class AgentEditViewModel(
 }
 
 private fun OnDeviceModelCatalogEntry.isPublicDefaultChoice(): Boolean {
-    val normalized = buildList {
-        add(id)
-        add(displayName)
-        add(description)
-    }.joinToString(separator = " ").lowercase()
-
-    return "preview" !in normalized &&
-        "gated" !in normalized &&
-        "external access" !in normalized &&
-        "access required" !in normalized
+    return isCatalogDownload
 }
 
 private fun validateDraft(

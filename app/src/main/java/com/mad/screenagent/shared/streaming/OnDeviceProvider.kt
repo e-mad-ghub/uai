@@ -44,6 +44,12 @@ class OnDeviceProvider(
                 emit(StreamChunk.Error(IllegalStateException(reason)))
                 return@flow
             }
+            val runtimeValidationError = runtime.validateModel(installed.localPath)
+            if (runtimeValidationError != null) {
+                modelRepository.markModelUnavailable(modelId, runtimeValidationError)
+                emit(StreamChunk.Error(IllegalStateException(runtimeValidationError)))
+                return@flow
+            }
 
             runtime.streamResponse(
                 messages = messages,

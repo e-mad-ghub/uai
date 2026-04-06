@@ -26,7 +26,7 @@ class OpenRouterModelsTest {
         val agent = AgentConfig()
 
         assertEquals(AiProviderType.ON_DEVICE, agent.provider)
-        assertEquals("deepseek-r1-distill-qwen-1.5b", agent.model)
+        assertEquals("gemma-3-1b-it-gguf", agent.model)
     }
 
     @Test

@@ -44,11 +44,11 @@ class OnDeviceProviderFeatureTest {
     @Test
     fun onDeviceRecommendedModelsStartWithTheCuratedStarterModel() {
         assertEquals(
-            "deepseek-r1-distill-qwen-1.5b",
+            "gemma-3-1b-it-gguf",
             defaultRecommendedModelId(AiProviderType.ON_DEVICE)
         )
         assertEquals(
-            listOf("deepseek-r1-distill-qwen-1.5b", "qwen2.5-1.5b-instruct", "phi-4-mini-instruct"),
+            listOf("gemma-3-1b-it-gguf", "gemma-3-4b-it-gguf"),
             recommendedModelChoices(AiProviderType.ON_DEVICE).map { it.id }
         )
     }
@@ -58,8 +58,8 @@ class OnDeviceProviderFeatureTest {
         val provider = AiProviderFactory.create(
             config = AgentConfig(
                 provider = AiProviderType.ON_DEVICE,
-                model = "deepseek-r1-distill-qwen-1.5b",
-                onDevice = OnDeviceProviderConfig(selectedModelId = "deepseek-r1-distill-qwen-1.5b")
+                model = "gemma-3-1b-it-gguf",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "gemma-3-1b-it-gguf")
             ),
             client = OkHttpClient(),
             onDeviceModelRepository = FakeOnDeviceModelSource(),
@@ -76,8 +76,8 @@ class OnDeviceProviderFeatureTest {
             messages = emptyList(),
             config = AgentConfig(
                 provider = AiProviderType.ON_DEVICE,
-                model = "deepseek-r1-distill-qwen-1.5b",
-                onDevice = OnDeviceProviderConfig(selectedModelId = "deepseek-r1-distill-qwen-1.5b")
+                model = "gemma-3-1b-it-gguf",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "gemma-3-1b-it-gguf")
             )
         ).first()
 
@@ -91,7 +91,7 @@ class OnDeviceProviderFeatureTest {
         val provider = OnDeviceProvider(
             FakeOnDeviceModelSource(
                 installed = InstalledOnDeviceModel(
-                    modelId = "deepseek-r1-distill-qwen-1.5b",
+                    modelId = "gemma-3-1b-it-gguf",
                     localPath = modelFile.absolutePath,
                     downloadState = OnDeviceDownloadState.DOWNLOADING,
                     installedAt = 123L
@@ -103,8 +103,8 @@ class OnDeviceProviderFeatureTest {
             messages = emptyList(),
             config = AgentConfig(
                 provider = AiProviderType.ON_DEVICE,
-                model = "deepseek-r1-distill-qwen-1.5b",
-                onDevice = OnDeviceProviderConfig(selectedModelId = "deepseek-r1-distill-qwen-1.5b")
+                model = "gemma-3-1b-it-gguf",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "gemma-3-1b-it-gguf")
             )
         ).first()
 
@@ -118,7 +118,7 @@ class OnDeviceProviderFeatureTest {
         val provider = OnDeviceProvider(
             FakeOnDeviceModelSource(
                 installed = InstalledOnDeviceModel(
-                    modelId = "deepseek-r1-distill-qwen-1.5b",
+                    modelId = "gemma-3-1b-it-gguf",
                     localPath = modelFile.absolutePath,
                     downloadState = OnDeviceDownloadState.VALIDATING,
                     installedAt = 123L
@@ -130,8 +130,8 @@ class OnDeviceProviderFeatureTest {
             messages = emptyList(),
             config = AgentConfig(
                 provider = AiProviderType.ON_DEVICE,
-                model = "deepseek-r1-distill-qwen-1.5b",
-                onDevice = OnDeviceProviderConfig(selectedModelId = "deepseek-r1-distill-qwen-1.5b")
+                model = "gemma-3-1b-it-gguf",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "gemma-3-1b-it-gguf")
             )
         ).first()
 
@@ -145,7 +145,7 @@ class OnDeviceProviderFeatureTest {
         val provider = OnDeviceProvider(
             FakeOnDeviceModelSource(
                 installed = InstalledOnDeviceModel(
-                    modelId = "deepseek-r1-distill-qwen-1.5b",
+                    modelId = "gemma-3-1b-it-gguf",
                     localPath = modelFile.absolutePath,
                     downloadState = OnDeviceDownloadState.READY,
                     installedAt = 123L
@@ -157,8 +157,8 @@ class OnDeviceProviderFeatureTest {
             messages = emptyList(),
             config = AgentConfig(
                 provider = AiProviderType.ON_DEVICE,
-                model = "deepseek-r1-distill-qwen-1.5b",
-                onDevice = OnDeviceProviderConfig(selectedModelId = "deepseek-r1-distill-qwen-1.5b")
+                model = "gemma-3-1b-it-gguf",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "gemma-3-1b-it-gguf")
             )
         ).toList()
 
@@ -174,6 +174,8 @@ class OnDeviceProviderFeatureTest {
     }
 
     private class FakeOnDeviceRuntime : OnDeviceRuntime {
+        override suspend fun validateModel(modelPath: String): String? = null
+
         override fun streamResponse(
             messages: List<com.mad.screenagent.shared.streaming.ChatMessage>,
             config: AgentConfig,
@@ -185,8 +187,8 @@ class OnDeviceProviderFeatureTest {
     }
 
     private fun tempModelFile(): File =
-        File.createTempFile("gemma-3n-e2b-it", ".task").apply {
-            writeText("stub")
+        File.createTempFile("gemma-3-1b-it", ".gguf").apply {
+            writeBytes(byteArrayOf(0x47, 0x47, 0x55, 0x46))
             deleteOnExit()
         }
 }

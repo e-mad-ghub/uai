@@ -46,11 +46,11 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = "11"
+        jvmTarget = "17"
     }
     buildFeatures {
         compose = true
@@ -78,7 +78,7 @@ dependencies {
     // OkHttp
     implementation(libs.okhttp)
     implementation("androidx.work:work-runtime-ktx:2.10.1")
-    implementation("com.google.mediapipe:tasks-genai:0.10.27")
+    implementation(project(":llama-android-lib"))
     // Gson
     implementation(libs.gson)
     // Navigation

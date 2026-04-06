@@ -183,11 +183,11 @@ fun providerUiInfo(provider: AiProviderType): ProviderUiInfo = when (provider) {
     AiProviderType.ON_DEVICE -> ProviderUiInfo(
         provider = provider,
         label = "On-Device",
-        description = "Run curated local models directly on the device with no API key.",
-        apiKeyHint = "No API key needed. Download a local model and use it on the device.",
+        description = "Run GGUF models directly on the device with no API key.",
+        apiKeyHint = "No API key needed. Download or import a GGUF model and use it on the device.",
         apiKeyPlaceholder = "Not required",
         apiKeyCalloutTitle = "On-device models",
-        apiKeyCalloutBody = "ScreenAgent keeps local models native to the app. Pick a model from the installed catalog and use it offline."
+        apiKeyCalloutBody = "ScreenAgent runs GGUF models locally. Download a curated model or import your own GGUF file, then pick a ready model from the installed list."
     )
 }
 
@@ -209,21 +209,15 @@ fun recommendedModelChoices(
     val baseChoices = when (provider) {
         AiProviderType.ON_DEVICE -> listOf(
             RecommendedModelChoice(
-                id = "deepseek-r1-distill-qwen-1.5b",
-                label = "DeepSeek-R1-Distill-Qwen-1.5B",
-                description = "Balanced public on-device starter model.",
+                id = "gemma-3-1b-it-gguf",
+                label = "Gemma 3 1B IT",
+                description = "Public GGUF starter model for local chat on phones.",
                 supportsDocuments = true
             ),
             RecommendedModelChoice(
-                id = "qwen2.5-1.5b-instruct",
-                label = "Qwen2.5-1.5B-Instruct",
-                description = "Lightweight public on-device chat model.",
-                supportsDocuments = true
-            ),
-            RecommendedModelChoice(
-                id = "phi-4-mini-instruct",
-                label = "Phi-4-mini-instruct",
-                description = "Compact public on-device chat model.",
+                id = "gemma-3-4b-it-gguf",
+                label = "Gemma 3 4B IT",
+                description = "Higher-quality GGUF model for stronger devices.",
                 supportsDocuments = true
             )
         )

@@ -1,11 +1,15 @@
 package com.mad.screenagent.data.model
 
-private const val DEEPSEEK_1_5B_MODEL_ID = "litert-community/DeepSeek-R1-Distill-Qwen-1.5B"
-private const val DEEPSEEK_1_5B_MODEL_FILE = "DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.task"
-private const val QWEN_1_5B_MODEL_ID = "litert-community/Qwen2.5-1.5B-Instruct"
-private const val QWEN_1_5B_MODEL_FILE = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.task"
-private const val PHI_4_MINI_MODEL_ID = "litert-community/Phi-4-mini-instruct"
-private const val PHI_4_MINI_MODEL_FILE = "Phi-4-mini-instruct_multi-prefill-seq_q8_ekv4096.task"
+private const val GEMMA_3_1B_IT_GGUF_REPO = "ggml-org/gemma-3-1b-it-GGUF"
+private const val GEMMA_3_1B_IT_GGUF_FILE = "gemma-3-1b-it-Q4_K_M.gguf"
+private const val GEMMA_3_4B_IT_GGUF_REPO = "ggml-org/gemma-3-4b-it-GGUF"
+private const val GEMMA_3_4B_IT_GGUF_FILE = "gemma-3-4b-it-Q4_K_M.gguf"
+
+private val LEGACY_ON_DEVICE_IDS = setOf(
+    "deepseek-r1-distill-qwen-1.5b",
+    "qwen2.5-1.5b-instruct",
+    "phi-4-mini-instruct"
+)
 
 enum class OnDeviceDownloadState {
     NOT_DOWNLOADED,
@@ -18,7 +22,7 @@ enum class OnDeviceDownloadState {
     UNAVAILABLE;
 
     val isReadyForUse: Boolean
-        get() = this == READY || this == DOWNLOADED
+        get() = this == READY
 
     val isInProgress: Boolean
         get() = this == DOWNLOADING || this == VALIDATING
@@ -50,6 +54,16 @@ enum class OnDeviceModelCapability {
     }
 }
 
+enum class OnDeviceModelSourceType {
+    CATALOG,
+    IMPORTED;
+
+    companion object {
+        fun fromKey(key: String?): OnDeviceModelSourceType =
+            values().firstOrNull { it.name.equals(key, ignoreCase = true) } ?: CATALOG
+    }
+}
+
 data class OnDeviceModelCatalogEntry(
     val id: String,
     val displayName: String = id,
@@ -59,7 +73,8 @@ data class OnDeviceModelCatalogEntry(
     val capabilityKey: String? = null,
     val supportsDocuments: Boolean = true,
     val estimatedSizeMb: Int = 0,
-    val accessStateKey: String? = null
+    val accessStateKey: String? = null,
+    val sourceTypeKey: String? = null
 ) {
     val accessState: OnDeviceModelAccessState
         get() = OnDeviceModelAccessState.fromKey(accessStateKey)
@@ -67,8 +82,19 @@ data class OnDeviceModelCatalogEntry(
     val capability: OnDeviceModelCapability
         get() = OnDeviceModelCapability.fromKey(capabilityKey)
 
+    val sourceType: OnDeviceModelSourceType
+        get() = OnDeviceModelSourceType.fromKey(sourceTypeKey)
+
     val isPublicPlugAndPlay: Boolean
         get() = accessState == OnDeviceModelAccessState.PUBLIC
+
+    val isCatalogDownload: Boolean
+        get() = sourceType == OnDeviceModelSourceType.CATALOG &&
+            isPublicPlugAndPlay &&
+            downloadUrl.isNotBlank()
+
+    val isImported: Boolean
+        get() = sourceType == OnDeviceModelSourceType.IMPORTED
 
     val supportsVision: Boolean
         get() = capability == OnDeviceModelCapability.LOCAL_VISION
@@ -96,58 +122,69 @@ data class OnDeviceModelLibraryItem(
 
 fun allOnDeviceCatalogEntries(): List<OnDeviceModelCatalogEntry> = listOf(
     OnDeviceModelCatalogEntry(
-        id = "deepseek-r1-distill-qwen-1.5b",
-        displayName = "DeepSeek-R1-Distill-Qwen-1.5B",
-        description = "Public on-device text model for general chat.",
-        downloadUrl = "https://huggingface.co/$DEEPSEEK_1_5B_MODEL_ID/resolve/main/$DEEPSEEK_1_5B_MODEL_FILE",
-        fileName = DEEPSEEK_1_5B_MODEL_FILE,
+        id = "gemma-3-1b-it-gguf",
+        displayName = "Gemma 3 1B IT",
+        description = "Public GGUF starter model for local text chat.",
+        downloadUrl = "https://huggingface.co/$GEMMA_3_1B_IT_GGUF_REPO/resolve/main/$GEMMA_3_1B_IT_GGUF_FILE",
+        fileName = GEMMA_3_1B_IT_GGUF_FILE,
         capabilityKey = OnDeviceModelCapability.LOCAL_TEXT.name,
-        estimatedSizeMb = 2600,
-        accessStateKey = OnDeviceModelAccessState.PUBLIC.name
+        estimatedSizeMb = 815,
+        accessStateKey = OnDeviceModelAccessState.PUBLIC.name,
+        sourceTypeKey = OnDeviceModelSourceType.CATALOG.name
     ),
     OnDeviceModelCatalogEntry(
-        id = "qwen2.5-1.5b-instruct",
-        displayName = "Qwen2.5-1.5B-Instruct",
-        description = "Public on-device text model with strong instruction following.",
-        downloadUrl = "https://huggingface.co/$QWEN_1_5B_MODEL_ID/resolve/main/$QWEN_1_5B_MODEL_FILE",
-        fileName = QWEN_1_5B_MODEL_FILE,
+        id = "gemma-3-4b-it-gguf",
+        displayName = "Gemma 3 4B IT",
+        description = "Larger public GGUF model with better local text quality on stronger phones.",
+        downloadUrl = "https://huggingface.co/$GEMMA_3_4B_IT_GGUF_REPO/resolve/main/$GEMMA_3_4B_IT_GGUF_FILE",
+        fileName = GEMMA_3_4B_IT_GGUF_FILE,
         capabilityKey = OnDeviceModelCapability.LOCAL_TEXT.name,
-        estimatedSizeMb = 1500,
-        accessStateKey = OnDeviceModelAccessState.PUBLIC.name
-    ),
-    OnDeviceModelCatalogEntry(
-        id = "phi-4-mini-instruct",
-        displayName = "Phi-4-mini-instruct",
-        description = "Public compact on-device text model.",
-        downloadUrl = "https://huggingface.co/$PHI_4_MINI_MODEL_ID/resolve/main/$PHI_4_MINI_MODEL_FILE",
-        fileName = PHI_4_MINI_MODEL_FILE,
-        capabilityKey = OnDeviceModelCapability.LOCAL_TEXT.name,
-        estimatedSizeMb = 3940,
-        accessStateKey = OnDeviceModelAccessState.PUBLIC.name
+        estimatedSizeMb = 3115,
+        accessStateKey = OnDeviceModelAccessState.PUBLIC.name,
+        sourceTypeKey = OnDeviceModelSourceType.CATALOG.name
     )
 )
 
 fun defaultOnDeviceCatalogEntries(): List<OnDeviceModelCatalogEntry> =
-    allOnDeviceCatalogEntries().filter { it.isPublicPlugAndPlay }
+    allOnDeviceCatalogEntries().filter { it.isCatalogDownload }
 
 fun nonPublicOnDeviceCatalogEntries(): List<OnDeviceModelCatalogEntry> =
-    allOnDeviceCatalogEntries().filterNot { it.isPublicPlugAndPlay }
+    allOnDeviceCatalogEntries().filterNot { it.isCatalogDownload }
 
 fun normalizeOnDeviceCatalog(catalog: OnDeviceModelCatalog): OnDeviceModelCatalog {
     val canonicalById = allOnDeviceCatalogEntries().associateBy { it.id }
-    return catalog.copy(
-        models = catalog.models.map { entry ->
-            val canonical = canonicalById[entry.id] ?: return@map entry
-            entry.copy(
-                displayName = entry.displayName.ifBlank { canonical.displayName },
-                description = entry.description.ifBlank { canonical.description },
-                downloadUrl = entry.downloadUrl.ifBlank { canonical.downloadUrl },
-                fileName = entry.fileName.ifBlank { canonical.fileName },
-                capabilityKey = entry.capabilityKey ?: canonical.capabilityKey,
-                supportsDocuments = entry.supportsDocuments || canonical.supportsDocuments,
-                estimatedSizeMb = if (entry.estimatedSizeMb > 0) entry.estimatedSizeMb else canonical.estimatedSizeMb,
-                accessStateKey = entry.accessStateKey ?: canonical.accessStateKey
-            )
+    val normalized = buildList {
+        val seen = mutableSetOf<String>()
+
+        catalog.models.forEach { entry ->
+            if (entry.id in LEGACY_ON_DEVICE_IDS && !entry.isImported) return@forEach
+
+            val canonical = canonicalById[entry.id]
+            val merged = when {
+                entry.isImported -> entry.copy(
+                    sourceTypeKey = OnDeviceModelSourceType.IMPORTED.name,
+                    capabilityKey = entry.capabilityKey ?: OnDeviceModelCapability.LOCAL_TEXT.name,
+                    accessStateKey = entry.accessStateKey ?: OnDeviceModelAccessState.EXTERNAL.name
+                )
+                canonical != null -> entry.copy(
+                    displayName = entry.displayName.ifBlank { canonical.displayName },
+                    description = entry.description.ifBlank { canonical.description },
+                    downloadUrl = entry.downloadUrl.ifBlank { canonical.downloadUrl },
+                    fileName = entry.fileName.ifBlank { canonical.fileName },
+                    capabilityKey = entry.capabilityKey ?: canonical.capabilityKey,
+                    supportsDocuments = entry.supportsDocuments || canonical.supportsDocuments,
+                    estimatedSizeMb = if (entry.estimatedSizeMb > 0) entry.estimatedSizeMb else canonical.estimatedSizeMb,
+                    accessStateKey = entry.accessStateKey ?: canonical.accessStateKey,
+                    sourceTypeKey = OnDeviceModelSourceType.CATALOG.name
+                )
+                else -> entry
+            }
+            if (seen.add(merged.id)) add(merged)
         }
-    )
+
+        allOnDeviceCatalogEntries().forEach { canonical ->
+            if (seen.add(canonical.id)) add(canonical)
+        }
+    }
+    return catalog.copy(models = normalized)
 }

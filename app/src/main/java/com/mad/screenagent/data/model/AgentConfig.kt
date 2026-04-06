@@ -15,7 +15,7 @@ data class AgentConfig(
     val name: String = "New Agent",
     val provider: AiProviderType = AiProviderType.ON_DEVICE,
     val apiKey: String = "",
-    val model: String = "deepseek-r1-distill-qwen-1.5b",
+    val model: String = "gemma-3-1b-it-gguf",
     val onDevice: OnDeviceProviderConfig = OnDeviceProviderConfig(),
     val customPreset: CustomProviderPreset = CustomProviderPreset.MANUAL,
     val customBaseUrl: String = "",
@@ -83,9 +83,8 @@ data class AgentConfig(
                 "claude-opus-4-6"
             ),
             AiProviderType.ON_DEVICE to listOf(
-                "deepseek-r1-distill-qwen-1.5b",
-                "qwen2.5-1.5b-instruct",
-                "phi-4-mini-instruct"
+                "gemma-3-1b-it-gguf",
+                "gemma-3-4b-it-gguf"
             ),
             AiProviderType.OPENROUTER to listOf(
                 SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,

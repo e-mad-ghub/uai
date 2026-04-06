@@ -1,5 +1,7 @@
 package com.mad.screenagent.feature.agents
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -79,6 +81,7 @@ fun AgentEditScreen(
     val providerModels by viewModel.providerModels.collectAsStateWithLifecycle()
     val publicOnDeviceModelLibrary by viewModel.publicOnDeviceModelLibrary.collectAsStateWithLifecycle()
     val readyOnDeviceModelLibrary by viewModel.readyOnDeviceModelLibrary.collectAsStateWithLifecycle()
+    val importedOnDeviceModelLibrary by viewModel.importedOnDeviceModelLibrary.collectAsStateWithLifecycle()
     val nonPublicOnDeviceModelLibrary by viewModel.nonPublicOnDeviceModelLibrary.collectAsStateWithLifecycle()
     val onDeviceDownloadState by viewModel.onDeviceDownloadState.collectAsStateWithLifecycle()
     val isLoadingModels by viewModel.isLoadingModels.collectAsStateWithLifecycle()
@@ -106,6 +109,9 @@ fun AgentEditScreen(
     val selectedPublicOnDeviceItem = publicOnDeviceModelLibrary.firstOrNull {
         it.catalogEntry.id == selectedOnDeviceModelId
     }
+    val selectedReadyOnDeviceItem = readyOnDeviceModelLibrary.firstOrNull {
+        it.catalogEntry.id == selectedOnDeviceModelId
+    }
     val canSave = saveValidationMessage == null
     val saveButtonLabel = when {
         viewModel.isEditing -> stringResource(R.string.assistants_save_changes)
@@ -126,6 +132,13 @@ fun AgentEditScreen(
     var showApiKey by rememberSaveable { mutableStateOf(false) }
     var advancedExpanded by rememberSaveable(viewModel.isEditing) {
         mutableStateOf(viewModel.isEditing)
+    }
+    val ggufImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importOnDeviceModel(uri)
+        }
     }
 
     LaunchedEffect(isSaved) {
@@ -271,6 +284,7 @@ fun AgentEditScreen(
                     OnDeviceModelSection(
                         publicLibrary = publicOnDeviceModelLibrary,
                         readyLibrary = readyOnDeviceModelLibrary,
+                        importedLibrary = importedOnDeviceModelLibrary,
                         nonPublicLibrary = nonPublicOnDeviceModelLibrary,
                         selectedModelId = agent.onDevice.selectedModelId.ifBlank { agent.model },
                         downloadState = onDeviceDownloadState,
@@ -283,6 +297,7 @@ fun AgentEditScreen(
                             }
                         },
                         onDownload = viewModel::downloadOnDeviceModel,
+                        onImport = { ggufImportLauncher.launch(arrayOf("*/*")) },
                         onCancel = viewModel::cancelOnDeviceDownload,
                         onDelete = viewModel::deleteOnDeviceModel,
                     )
@@ -387,7 +402,7 @@ fun AgentEditScreen(
                         isLoadingModels = isLoadingModels,
                         selectedModel = agent.onDevice.selectedModelId,
                         selectedIsPublic = selectedPublicOnDeviceItem != null,
-                        isReady = selectedPublicOnDeviceItem?.installRecord?.downloadState?.isReadyForUse == true
+                        isReady = selectedReadyOnDeviceItem?.installRecord?.downloadState?.isReadyForUse == true
                     )
                 } else {
                     ProviderCatalogStatusNote(
@@ -404,7 +419,7 @@ fun AgentEditScreen(
                 OutlinedButton(
                     onClick = viewModel::testConnection,
                     enabled = when {
-                        isOnDeviceProvider -> selectedPublicOnDeviceItem?.installRecord?.downloadState?.isReadyForUse == true
+                        isOnDeviceProvider -> selectedReadyOnDeviceItem?.installRecord?.downloadState?.isReadyForUse == true
                         else -> agent.apiKey.isNotBlank() &&
                             (!isCustomProvider || normalizeOpenAiCompatibleBaseUrl(agent.customBaseUrl).isNotBlank()) &&
                             agent.model.isNotBlank()
@@ -1469,21 +1484,25 @@ private fun NativeWebSearchToggle(
 private fun OnDeviceModelSection(
     publicLibrary: List<OnDeviceModelLibraryItem>,
     readyLibrary: List<OnDeviceModelLibraryItem>,
+    importedLibrary: List<OnDeviceModelLibraryItem>,
     nonPublicLibrary: List<OnDeviceModelLibraryItem>,
     selectedModelId: String,
     downloadState: OnDeviceDownloadState,
     onModelSelect: (String) -> Unit,
     onDownload: (String) -> Unit,
+    onImport: () -> Unit,
     onCancel: (String) -> Unit,
     onDelete: (String) -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
-    val selectedItem = (publicLibrary + nonPublicLibrary).firstOrNull { it.catalogEntry.id == selectedModelId }
+    val selectedItem = (publicLibrary + importedLibrary + nonPublicLibrary).firstOrNull { it.catalogEntry.id == selectedModelId }
     val selectedPublicItem = publicLibrary.firstOrNull { it.catalogEntry.id == selectedModelId }
     val selectedReadyItem = readyLibrary.firstOrNull { it.catalogEntry.id == selectedModelId }
+    val selectedImportedItem = importedLibrary.firstOrNull { it.catalogEntry.id == selectedModelId }
     val selectedInstallRecord = selectedPublicItem?.installRecord
     val selectedStatusText = when {
-        selectedItem == null -> "Choose a public model"
+        selectedItem == null -> "Choose or import a GGUF model"
+        selectedImportedItem != null && selectedReadyItem != null -> "Ready"
         selectedPublicItem == null -> "Not publicly downloadable"
         selectedReadyItem != null -> "Ready"
         else -> when (selectedInstallRecord?.downloadState ?: downloadState) {
@@ -1515,7 +1534,7 @@ private fun OnDeviceModelSection(
             Column(modifier = Modifier.weight(1f)) {
                 Text("On-Device", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    text = "Download public local models here. Ready models appear in the dropdown below.",
+                    text = "Download curated GGUF models or import your own GGUF files here. Ready models appear in the dropdown below.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1548,13 +1567,16 @@ private fun OnDeviceModelSection(
             ) {
                 Text("Download models", style = MaterialTheme.typography.labelLarge)
                 Text(
-                    text = "Pick a public model to download. Downloads keep running in the background and can be cancelled at any time.",
+                    text = "Pick a public GGUF model to download. Downloads keep running in the background and can be cancelled at any time.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                OutlinedButton(onClick = onImport) {
+                    Text("Import GGUF")
+                }
                 if (publicLibrary.isEmpty()) {
                     Text(
-                        text = "No public on-device models are available.",
+                        text = "No public GGUF models are available.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1563,9 +1585,10 @@ private fun OnDeviceModelSection(
                         val entry = item.catalogEntry
                         val install = item.installRecord
                         val state = install?.downloadState ?: OnDeviceDownloadState.NOT_DOWNLOADED
+                        val progressText = install.progressText()
                         val status = when (state) {
-                            OnDeviceDownloadState.DOWNLOADING -> install.progressText() ?: "Downloading"
-                            OnDeviceDownloadState.VALIDATING -> install.progressText() ?: "Validating"
+                            OnDeviceDownloadState.DOWNLOADING -> "Downloading"
+                            OnDeviceDownloadState.VALIDATING -> "Validating"
                             OnDeviceDownloadState.READY,
                             OnDeviceDownloadState.DOWNLOADED -> "Ready"
                             OnDeviceDownloadState.CANCELLED -> "Cancelled"
@@ -1597,7 +1620,7 @@ private fun OnDeviceModelSection(
                                     text = listOfNotNull(
                                         status,
                                         entry.estimatedSizeText(),
-                                        install.progressText(),
+                                        progressText,
                                         entry.description.ifBlank { entry.id }
                                     ).joinToString(" · "),
                                     style = MaterialTheme.typography.bodySmall,
@@ -1621,14 +1644,74 @@ private fun OnDeviceModelSection(
             }
         }
 
+        if (importedLibrary.isNotEmpty()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surface
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Imported GGUF models", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        text = "Imported files are validated locally and become selectable once ready.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    importedLibrary.forEach { item ->
+                        val entry = item.catalogEntry
+                        val record = item.installRecord
+                        val state = record?.downloadState ?: OnDeviceDownloadState.NOT_DOWNLOADED
+                        val status = when (state) {
+                            OnDeviceDownloadState.DOWNLOADING -> record.progressText() ?: "Importing"
+                            OnDeviceDownloadState.VALIDATING -> record.progressText() ?: "Validating"
+                            OnDeviceDownloadState.READY,
+                            OnDeviceDownloadState.DOWNLOADED -> "Ready"
+                            OnDeviceDownloadState.CANCELLED -> "Cancelled"
+                            OnDeviceDownloadState.FAILED -> record?.errorMessage ?: "Import failed"
+                            OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
+                            OnDeviceDownloadState.NOT_DOWNLOADED -> "Not installed"
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(entry.displayName, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    text = listOfNotNull(
+                                        status,
+                                        record?.downloadedBytes?.takeIf { it > 0L }?.humanReadableBytes(),
+                                        entry.description.ifBlank { entry.id }
+                                    ).joinToString(" · "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(onClick = { onDelete(entry.id) }) {
+                                Text("Delete")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         ExposedDropdownMenuBox(
             expanded = expanded,
             onExpandedChange = { expanded = it }
         ) {
             OutlinedTextField(
                 value = selectedReadyItem?.catalogEntry?.displayName
+                    ?: selectedImportedItem?.catalogEntry?.displayName
                     ?: selectedPublicItem?.catalogEntry?.displayName
-                    ?: "Choose downloaded model",
+                    ?: "Choose ready GGUF model",
                 onValueChange = {},
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1638,7 +1721,7 @@ private fun OnDeviceModelSection(
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                 supportingText = {
                     val supportingText = when {
-                        selectedItem == null -> "Pick a public model from the download area first."
+                        selectedItem == null -> "Download a curated GGUF model or import your own GGUF file first."
                         selectedReadyItem == null -> selectedStatusText
                         else -> selectedItem.catalogEntry.description.ifBlank { selectedStatusText }
                     }
@@ -1653,7 +1736,7 @@ private fun OnDeviceModelSection(
             ) {
                 if (readyLibrary.isEmpty()) {
                     DropdownMenuItem(
-                        text = { Text("No downloaded models ready yet") },
+                        text = { Text("No ready GGUF models yet") },
                         onClick = { expanded = false },
                         enabled = false
                     )
@@ -1677,6 +1760,7 @@ private fun OnDeviceModelSection(
                                     Text(
                                         listOfNotNull(
                                             status,
+                                            if (entry.isImported) "Imported GGUF" else null,
                                             entry.description.ifBlank { entry.id }
                                         ).joinToString(" · "),
                                         style = MaterialTheme.typography.bodySmall,

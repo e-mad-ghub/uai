@@ -1,20 +1,22 @@
 package com.mad.screenagent.shared.streaming
 
 import android.content.Context
-import com.google.mediapipe.tasks.genai.llminference.LlmInference
-import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
+import com.arm.aichat.AiChat
+import com.arm.aichat.InferenceEngine
+import com.arm.aichat.isModelLoaded
 import com.mad.screenagent.data.model.AgentConfig
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 interface OnDeviceRuntime {
+    suspend fun validateModel(modelPath: String): String?
+
     fun streamResponse(
         messages: List<ChatMessage>,
         config: AgentConfig,
@@ -22,116 +24,99 @@ interface OnDeviceRuntime {
     ): Flow<StreamChunk>
 }
 
-class MediaPipeOnDeviceRuntime(
-    private val context: Context
+class LlamaCppOnDeviceRuntime(
+    context: Context
 ) : OnDeviceRuntime {
+    private val appContext = context.applicationContext
+    private val loadMutex = Mutex()
+    private val engine by lazy { AiChat.getInferenceEngine(appContext) }
+    private var loadedModelPath: String? = null
+    private var loadedSystemPrompt: String? = null
+
+    override suspend fun validateModel(modelPath: String): String? {
+        val modelFile = File(modelPath)
+        if (!modelFile.exists() || modelFile.length() == 0L) {
+            return "The On-Device GGUF model file is missing at $modelPath."
+        }
+
+        return loadMutex.withLock {
+            try {
+                if (engine.state.value.isModelLoaded || engine.state.value is InferenceEngine.State.Error) {
+                    runCatching { engine.cleanUp() }
+                }
+                engine.loadModel(modelPath)
+                runCatching { engine.cleanUp() }
+                loadedModelPath = null
+                loadedSystemPrompt = null
+                null
+            } catch (t: Throwable) {
+                runCatching { engine.cleanUp() }
+                loadedModelPath = null
+                loadedSystemPrompt = null
+                t.unwrapOnDeviceThrowable().message
+                    ?: "The selected GGUF model could not be opened by the on-device llama runtime."
+            }
+        }
+    }
 
     override fun streamResponse(
         messages: List<ChatMessage>,
         config: AgentConfig,
         modelPath: String
-    ): Flow<StreamChunk> = callbackFlow {
-        val modelFile = File(modelPath)
-        if (!modelFile.exists() || modelFile.length() == 0L) {
-            trySend(
-                StreamChunk.Error(
-                    IllegalStateException("On-Device model file is missing at $modelPath.")
+    ): Flow<StreamChunk> = flow {
+        try {
+            val modelFile = File(modelPath)
+            if (!modelFile.exists() || modelFile.length() == 0L) {
+                emit(
+                    StreamChunk.Error(
+                        IllegalStateException("On-Device GGUF model file is missing at $modelPath.")
+                    )
                 )
-            )
-            close()
-            return@callbackFlow
-        }
-
-        val inference = try {
-            LlmInference.createFromOptions(
-                context,
-                LlmInference.LlmInferenceOptions.builder()
-                    .setModelPath(modelPath)
-                    .setMaxTokens(config.onDevice.maxOutputTokens)
-                    .setMaxTopK(config.onDevice.topK)
-                    .build()
-            )
-        } catch (t: Throwable) {
-            trySend(StreamChunk.Error(t.unwrapOnDeviceThrowable()))
-            close()
-            return@callbackFlow
-        }
-
-        val session = try {
-            val sessionOptions = LlmInferenceSession.LlmInferenceSessionOptions.builder()
-                .setTopK(config.onDevice.topK)
-                .setTopP(0.95f)
-                .setTemperature(config.onDevice.temperature)
-                .setRandomSeed(config.onDevice.randomSeed)
-            config.onDevice.loraAdapterId?.takeIf { it.isNotBlank() }?.let(sessionOptions::setLoraPath)
-            LlmInferenceSession.createFromOptions(inference, sessionOptions.build())
-        } catch (t: Throwable) {
-            inference.close()
-            trySend(StreamChunk.Error(t.unwrapOnDeviceThrowable()))
-            close()
-            return@callbackFlow
-        }
-
-        val prompt = buildOnDevicePrompt(messages, config.systemPrompt)
-        val emittedText = AtomicReference("")
-        val emittedAnyToken = AtomicBoolean(false)
-        val completed = AtomicBoolean(false)
-        val closed = AtomicBoolean(false)
-
-        fun closeResources() {
-            if (closed.compareAndSet(false, true)) {
-                runCatching { session.close() }
-                runCatching { inference.close() }
+                return@flow
             }
-        }
 
-        val future = try {
-            session.addQueryChunk(prompt)
-            session.generateResponseAsync { partialResult, done ->
-                val previous = emittedText.getAndSet(partialResult)
-                val delta = if (partialResult.startsWith(previous)) {
-                    partialResult.removePrefix(previous)
-                } else {
-                    partialResult
-                }
-                if (delta.isNotBlank()) {
-                    emittedAnyToken.set(true)
-                    trySend(StreamChunk.Token(delta))
-                }
-                if (done && completed.compareAndSet(false, true)) {
-                    trySend(StreamChunk.Done)
+            ensureLoaded(modelPath = modelPath, config = config)
+            val prompt = buildOnDevicePrompt(messages, systemPrompt = "")
+            engine.sendUserPrompt(
+                message = prompt,
+                predictLength = config.onDevice.maxOutputTokens
+            ).collect { token ->
+                if (token.isNotBlank()) {
+                    emit(StreamChunk.Token(token))
                 }
             }
+            emit(StreamChunk.Done)
         } catch (t: Throwable) {
-            closeResources()
-            trySend(StreamChunk.Error(t.unwrapOnDeviceThrowable()))
-            close()
-            return@callbackFlow
-        }
-
-        launch(Dispatchers.IO) {
-            try {
-                val finalText = future.get()
-                if (!emittedAnyToken.get() && finalText.isNotBlank()) {
-                    trySend(StreamChunk.Token(finalText))
-                }
-                if (completed.compareAndSet(false, true)) {
-                    trySend(StreamChunk.Done)
-                }
-                close()
-            } catch (t: Throwable) {
-                trySend(StreamChunk.Error(t.unwrapOnDeviceThrowable()))
-                close()
-            } finally {
-                closeResources()
-            }
-        }
-
-        awaitClose {
-            future.cancel(true)
-            closeResources()
+            emit(StreamChunk.Error(t.unwrapOnDeviceThrowable()))
         }
     }.flowOn(Dispatchers.IO)
+
+    private suspend fun ensureLoaded(modelPath: String, config: AgentConfig) {
+        val desiredSystemPrompt = config.systemPrompt.trim()
+        loadMutex.withLock {
+            val currentState = engine.state.value
+            if (currentState is InferenceEngine.State.Error) {
+                runCatching { engine.cleanUp() }
+            }
+
+            val needsReload = loadedModelPath != modelPath ||
+                loadedSystemPrompt != desiredSystemPrompt ||
+                !engine.state.value.isModelLoaded
+
+            if (!needsReload) return
+
+            if (engine.state.value.isModelLoaded || engine.state.value is InferenceEngine.State.Error) {
+                runCatching { engine.cleanUp() }
+            }
+
+            engine.loadModel(modelPath)
+            if (desiredSystemPrompt.isNotBlank()) {
+                engine.setSystemPrompt(desiredSystemPrompt)
+            }
+            loadedModelPath = modelPath
+            loadedSystemPrompt = desiredSystemPrompt
+        }
+    }
 }
 
 private fun buildOnDevicePrompt(messages: List<ChatMessage>, systemPrompt: String): String =
@@ -166,4 +151,14 @@ private fun buildOnDevicePrompt(messages: List<ChatMessage>, systemPrompt: Strin
     }
 
 private fun Throwable.unwrapOnDeviceThrowable(): Throwable =
-    (cause ?: this).takeUnless { it === this } ?: this
+    (cause ?: this).takeUnless { it === this }?.withFallbackMessage() ?: this.withFallbackMessage()
+
+private fun Throwable.withFallbackMessage(): Throwable =
+    if (!message.isNullOrBlank()) {
+        this
+    } else {
+        IllegalStateException(
+            "The on-device llama runtime failed to generate a response.",
+            this
+        )
+    }

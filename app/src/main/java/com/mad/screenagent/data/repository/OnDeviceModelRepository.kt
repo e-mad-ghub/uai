@@ -1,19 +1,27 @@
 package com.mad.screenagent.data.repository
 
 import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.arm.aichat.gguf.GgufMetadataReader
+import com.arm.aichat.gguf.InvalidFileFormatException
 import com.mad.screenagent.data.model.InstalledOnDeviceModel
 import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.model.OnDeviceModelAccessState
 import com.mad.screenagent.data.model.OnDeviceModelCatalog
 import com.mad.screenagent.data.model.OnDeviceModelCatalogEntry
 import com.mad.screenagent.data.model.OnDeviceModelLibraryItem
+import com.mad.screenagent.data.model.OnDeviceModelSourceType
 import com.mad.screenagent.data.model.defaultOnDeviceCatalogEntries
+import com.mad.screenagent.data.model.normalizeOnDeviceCatalog
 import com.mad.screenagent.data.prefs.AppPreferences
+import com.mad.screenagent.shared.streaming.OnDeviceRuntime
 import java.io.File
 import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.CancellationException
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -32,8 +40,11 @@ interface OnDeviceModelSource {
 class OnDeviceModelRepository(
     private val prefs: AppPreferences,
     private val context: Context,
-    private val client: OkHttpClient
+    private val client: OkHttpClient,
+    private val runtime: OnDeviceRuntime
 ) : OnDeviceModelSource {
+    private val ggufMetadataReader = GgufMetadataReader.create()
+
     val catalogFlow: Flow<OnDeviceModelCatalog> = prefs.onDeviceModelCatalogFlow
     val installedModelsFlow: Flow<List<InstalledOnDeviceModel>> = prefs.installedOnDeviceModelsFlow
     val downloadStateFlow: Flow<OnDeviceDownloadState> = prefs.onDeviceDownloadStateFlow
@@ -42,7 +53,7 @@ class OnDeviceModelRepository(
         installedModelsFlow
     ) { catalog, installed ->
         catalog.models
-            .filter { it.isPublicPlugAndPlay }
+            .filter { it.isCatalogDownload }
             .map { entry -> entry.toLibraryItem(installed) }
     }
     val allLibraryFlow: Flow<List<OnDeviceModelLibraryItem>> = combine(
@@ -56,23 +67,33 @@ class OnDeviceModelRepository(
         installedModelsFlow
     ) { catalog, installed ->
         catalog.models
-            .filterNot { it.isPublicPlugAndPlay }
+            .filter { !it.isCatalogDownload && !it.isImported }
+            .map { entry -> entry.toLibraryItem(installed) }
+    }
+    val importedLibraryFlow: Flow<List<OnDeviceModelLibraryItem>> = combine(
+        catalogFlow,
+        installedModelsFlow
+    ) { catalog, installed ->
+        catalog.models
+            .filter { it.isImported }
             .map { entry -> entry.toLibraryItem(installed) }
     }
 
     suspend fun ensureDefaultCatalog(): OnDeviceModelCatalog {
         val current = catalogFlow.first()
-        if (current.models.isNotEmpty()) return current
-        val seeded = OnDeviceModelCatalog(
-            models = defaultOnDeviceCatalogEntries()
-        )
-        prefs.saveOnDeviceModelCatalog(seeded)
-        return seeded
+        val seeded = if (current.models.isEmpty()) {
+            OnDeviceModelCatalog(models = defaultOnDeviceCatalogEntries())
+        } else {
+            current
+        }
+        val normalized = normalizeOnDeviceCatalog(seeded)
+        if (normalized != current) {
+            prefs.saveOnDeviceModelCatalog(normalized)
+        }
+        return normalized
     }
 
     suspend fun refreshCatalogIfStale(force: Boolean = false): OnDeviceModelCatalog {
-        // Placeholder catalog source for the first pass.
-        // The actual download/discovery backend will be wired in the next stage.
         return ensureDefaultCatalog()
     }
 
@@ -118,6 +139,66 @@ class OnDeviceModelRepository(
         if (idx >= 0) current[idx] = updated else current.add(updated)
         prefs.saveInstalledOnDeviceModels(current)
         return updated
+    }
+
+    suspend fun importModel(uri: Uri): InstalledOnDeviceModel = withContext(Dispatchers.IO) {
+        val fileName = resolveImportFileName(uri)
+        require(fileName.endsWith(".gguf", ignoreCase = true)) {
+            "Only GGUF model files can be imported."
+        }
+
+        val modelId = "imported-${UUID.randomUUID()}"
+        val targetEntry = OnDeviceModelCatalogEntry(
+            id = modelId,
+            displayName = fileName.removeSuffix(".gguf"),
+            description = "Imported GGUF model",
+            fileName = fileName,
+            capabilityKey = com.mad.screenagent.data.model.OnDeviceModelCapability.LOCAL_TEXT.name,
+            accessStateKey = OnDeviceModelAccessState.EXTERNAL.name,
+            sourceTypeKey = OnDeviceModelSourceType.IMPORTED.name
+        )
+        val targetFile = resolveTargetFile(targetEntry)
+        targetFile.parentFile?.mkdirs()
+
+        saveDownloadState(OnDeviceDownloadState.VALIDATING)
+        saveInstalledModel(
+            modelId = modelId,
+            localPath = targetFile.absolutePath,
+            downloadState = OnDeviceDownloadState.VALIDATING
+        )
+
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            targetFile.outputStream().use { output -> input.copyTo(output) }
+        } ?: throw IOException("Unable to read the selected GGUF file.")
+
+        val validationError = validateDownloadedModel(targetFile)
+        if (validationError != null) {
+            targetFile.delete()
+            saveInstalledModel(
+                modelId = modelId,
+                localPath = targetFile.absolutePath,
+                downloadState = OnDeviceDownloadState.FAILED,
+                errorMessage = validationError
+            )
+            saveDownloadState(OnDeviceDownloadState.FAILED)
+            throw IOException(validationError)
+        }
+
+        upsertCatalogEntry(
+            targetEntry.copy(
+                estimatedSizeMb = (targetFile.length() / (1024L * 1024L)).toInt().coerceAtLeast(1)
+            )
+        )
+
+        val readyRecord = saveInstalledModel(
+            modelId = modelId,
+            localPath = targetFile.absolutePath,
+            downloadState = OnDeviceDownloadState.READY,
+            downloadedBytes = targetFile.length(),
+            totalBytes = targetFile.length()
+        )
+        saveDownloadState(OnDeviceDownloadState.READY)
+        readyRecord
     }
 
     private suspend fun updateInstalledModelProgress(
@@ -213,8 +294,9 @@ class OnDeviceModelRepository(
                     totalBytes,
                     targetFile.absolutePath
                 )
-                if (!validateDownloadedModel(targetFile)) {
-                    throw IOException("Downloaded file failed validation for $modelId")
+                val validationError = validateDownloadedModel(targetFile)
+                if (validationError != null) {
+                    throw IOException(validationError)
                 }
                 val readyRecord = saveInstalledModel(
                     modelId = modelId,
@@ -299,8 +381,9 @@ class OnDeviceModelRepository(
                 targetFile.absolutePath
             )
 
-            if (!validateDownloadedModel(targetFile)) {
-                throw IOException("Downloaded file is missing for $modelId")
+            val validationError = validateDownloadedModel(targetFile)
+            if (validationError != null) {
+                throw IOException(validationError)
             }
 
             val readyRecord = saveInstalledModel(
@@ -351,6 +434,13 @@ class OnDeviceModelRepository(
         record?.let { File(it.localPath).delete() }
         current.removeAll { it.modelId == modelId }
         prefs.saveInstalledOnDeviceModels(current)
+        val catalog = catalogFlow.first()
+        val entry = catalog.models.firstOrNull { it.id == modelId }
+        if (entry?.isImported == true) {
+            prefs.saveOnDeviceModelCatalog(
+                catalog.copy(models = catalog.models.filterNot { it.id == modelId })
+            )
+        }
     }
 
     suspend fun saveDownloadState(state: OnDeviceDownloadState) {
@@ -358,7 +448,7 @@ class OnDeviceModelRepository(
     }
 
     fun modelFilePath(modelId: String): String =
-        "${context.filesDir.absolutePath}/on-device/$modelId"
+        "${context.filesDir.absolutePath}/on-device/$modelId/$modelId.gguf"
 
     private suspend fun downgradeCatalogEntryAccess(
         modelId: String,
@@ -377,13 +467,57 @@ class OnDeviceModelRepository(
         prefs.saveOnDeviceModelCatalog(updated)
     }
 
-    private fun validateDownloadedModel(file: File): Boolean =
-        file.exists() && file.length() > 0L
+    private suspend fun validateDownloadedModel(file: File): String? {
+        if (!file.exists() || file.length() == 0L) {
+            return "The GGUF model file is missing or empty."
+        }
+        if (!file.name.endsWith(".gguf", ignoreCase = true)) {
+            return "Only GGUF model files are supported."
+        }
+        return try {
+            val valid = ggufMetadataReader.ensureSourceFileFormat(file)
+            if (!valid) {
+                "The selected file is not a valid GGUF model."
+            } else {
+                runtime.validateModel(file.absolutePath)
+            }
+        } catch (_: InvalidFileFormatException) {
+            "The selected file is not a valid GGUF model."
+        } catch (t: Throwable) {
+            t.message ?: "GGUF validation failed."
+        }
+    }
 
     private fun resolveTargetFile(entry: OnDeviceModelCatalogEntry): File {
         val baseDir = File(context.filesDir, "on-device/${entry.id}")
-        val fileName = entry.fileName.ifBlank { "${entry.id}.task" }
+        val fileName = entry.fileName.ifBlank { "${entry.id}.gguf" }
         return File(baseDir, fileName)
+    }
+
+    private suspend fun upsertCatalogEntry(entry: OnDeviceModelCatalogEntry) {
+        val catalog = catalogFlow.first()
+        val updated = normalizeOnDeviceCatalog(
+            catalog.copy(
+                models = catalog.models
+                    .filterNot { it.id == entry.id }
+                    .plus(entry)
+            )
+        )
+        prefs.saveOnDeviceModelCatalog(updated)
+    }
+
+    private fun resolveImportFileName(uri: Uri): String {
+        val nameFromCursor = runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                }
+        }.getOrNull()
+        val raw = nameFromCursor?.takeIf { it.isNotBlank() }
+            ?: uri.lastPathSegment?.substringAfterLast('/')
+            ?: "imported-model.gguf"
+        val sanitized = raw.replace(Regex("[^A-Za-z0-9._-]"), "-")
+        return if (sanitized.endsWith(".gguf", ignoreCase = true)) sanitized else "$sanitized.gguf"
     }
 
     private suspend fun markDownloadCancelled(

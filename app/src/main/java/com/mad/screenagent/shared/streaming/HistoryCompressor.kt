@@ -48,6 +48,15 @@ fun compressHistory(
     return olderMessages + midMessages + recentMessages
 }
 
+fun compressOnDeviceHistory(messages: List<ChatMessage>): List<ChatMessage> =
+    compressHistory(
+        messages = messages,
+        maxRecentMessages = 8,
+        maxMidMessages = 6,
+        maxOlderMessages = 4,
+        olderMessageMaxLength = 160
+    )
+
 private fun ChatMessage.withoutAttachmentContext(): ChatMessage =
     copy(images = emptyList(), fileAttachment = null, documentBase64 = null)
 

@@ -14,11 +14,12 @@ android {
         consumerProguardFiles("consumer-rules.pro")
 
         ndk {
-             abiFilters += listOf("arm64-v8a", "x86_64")
+             abiFilters += listOf("arm64-v8a")
         }
         externalNativeBuild {
             cmake {
-                arguments += "-DCMAKE_BUILD_TYPE=Release"
+                // Pinned runtime profile for curated On-Device GGUF support:
+                // llama.cpp af76639 on arm64-v8a with backend dl + CPU all variants.
                 arguments += "-DCMAKE_MESSAGE_LOG_LEVEL=DEBUG"
                 arguments += "-DCMAKE_VERBOSE_MAKEFILE=ON"
 
@@ -28,10 +29,24 @@ android {
 
                 arguments += "-DGGML_NATIVE=OFF"
                 arguments += "-DGGML_BACKEND_DL=ON"
-                arguments += "-DGGML_CPU_ALL_VARIANTS=OFF"
+                arguments += "-DGGML_CPU_ALL_VARIANTS=ON"
                 arguments += "-DGGML_LLAMAFILE=OFF"
-                arguments += "-DGGML_CPU_KLEIDIAI=OFF"
-                arguments += "-DGGML_OPENMP=OFF"
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DCMAKE_BUILD_TYPE=Debug"
+                }
+            }
+        }
+        release {
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DCMAKE_BUILD_TYPE=Release"
+                }
             }
         }
     }

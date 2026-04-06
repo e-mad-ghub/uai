@@ -51,6 +51,7 @@ import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AiProviderType
 import com.mad.screenagent.data.model.CustomProviderPreset
 import com.mad.screenagent.data.model.OnDeviceDownloadState
+import com.mad.screenagent.data.model.OnDeviceFailureKind
 import com.mad.screenagent.data.model.InstalledOnDeviceModel
 import com.mad.screenagent.data.model.OnDeviceModelCatalogEntry
 import com.mad.screenagent.data.model.OnDeviceModelLibraryItem
@@ -1505,16 +1506,7 @@ private fun OnDeviceModelSection(
         selectedImportedItem != null && selectedReadyItem != null -> "Ready"
         selectedPublicItem == null -> "Not publicly downloadable"
         selectedReadyItem != null -> "Ready"
-        else -> when (selectedInstallRecord?.downloadState ?: downloadState) {
-            OnDeviceDownloadState.DOWNLOADING -> "Downloading"
-            OnDeviceDownloadState.VALIDATING -> "Validating"
-            OnDeviceDownloadState.READY,
-            OnDeviceDownloadState.DOWNLOADED -> "Ready"
-            OnDeviceDownloadState.CANCELLED -> "Cancelled"
-            OnDeviceDownloadState.FAILED -> "Download failed"
-            OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
-            OnDeviceDownloadState.NOT_DOWNLOADED -> "Not installed"
-        }
+        else -> selectedInstallRecord.statusHeadline(downloadState)
     }
 
     Surface(
@@ -1548,7 +1540,7 @@ private fun OnDeviceModelSection(
                 OnDeviceDownloadState.READY,
                 OnDeviceDownloadState.DOWNLOADED -> "Status: Ready models are available in the dropdown."
                 OnDeviceDownloadState.CANCELLED -> "Status: The last download was cancelled."
-                OnDeviceDownloadState.FAILED -> "Status: The last download failed."
+                OnDeviceDownloadState.FAILED -> "Status: The last local model failed validation or runtime checks."
                 OnDeviceDownloadState.UNAVAILABLE -> "Status: Local models are unavailable on this device."
                 OnDeviceDownloadState.NOT_DOWNLOADED -> "Status: No local models have been downloaded yet."
             },
@@ -1586,16 +1578,7 @@ private fun OnDeviceModelSection(
                         val install = item.installRecord
                         val state = install?.downloadState ?: OnDeviceDownloadState.NOT_DOWNLOADED
                         val progressText = install.progressText()
-                        val status = when (state) {
-                            OnDeviceDownloadState.DOWNLOADING -> "Downloading"
-                            OnDeviceDownloadState.VALIDATING -> "Validating"
-                            OnDeviceDownloadState.READY,
-                            OnDeviceDownloadState.DOWNLOADED -> "Ready"
-                            OnDeviceDownloadState.CANCELLED -> "Cancelled"
-                            OnDeviceDownloadState.FAILED -> "Download failed"
-                            OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
-                            OnDeviceDownloadState.NOT_DOWNLOADED -> "Not installed"
-                        }
+                        val status = install.statusHeadline(state)
                         val canCancel = state == OnDeviceDownloadState.DOWNLOADING ||
                             state == OnDeviceDownloadState.VALIDATING
                         val canDelete = state.isReadyForUse
@@ -1621,6 +1604,7 @@ private fun OnDeviceModelSection(
                                         status,
                                         entry.estimatedSizeText(),
                                         progressText,
+                                        install.failureReasonSummary(),
                                         entry.description.ifBlank { entry.id }
                                     ).joinToString(" · "),
                                     style = MaterialTheme.typography.bodySmall,
@@ -1670,8 +1654,8 @@ private fun OnDeviceModelSection(
                             OnDeviceDownloadState.READY,
                             OnDeviceDownloadState.DOWNLOADED -> "Ready"
                             OnDeviceDownloadState.CANCELLED -> "Cancelled"
-                            OnDeviceDownloadState.FAILED -> record?.errorMessage ?: "Import failed"
-                            OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
+                            OnDeviceDownloadState.FAILED -> record.statusHeadline(state)
+                            OnDeviceDownloadState.UNAVAILABLE -> record.statusHeadline(state)
                             OnDeviceDownloadState.NOT_DOWNLOADED -> "Not installed"
                         }
                         Row(
@@ -1688,6 +1672,7 @@ private fun OnDeviceModelSection(
                                     text = listOfNotNull(
                                         status,
                                         record?.downloadedBytes?.takeIf { it > 0L }?.humanReadableBytes(),
+                                        record.failureReasonSummary(),
                                         entry.description.ifBlank { entry.id }
                                     ).joinToString(" · "),
                                     style = MaterialTheme.typography.bodySmall,
@@ -1749,8 +1734,8 @@ private fun OnDeviceModelSection(
                             OnDeviceDownloadState.READY,
                             OnDeviceDownloadState.DOWNLOADED -> "Ready"
                             OnDeviceDownloadState.CANCELLED -> "Cancelled"
-                            OnDeviceDownloadState.FAILED -> "Download failed"
-                            OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
+                            OnDeviceDownloadState.FAILED -> item.installRecord.statusHeadline(OnDeviceDownloadState.FAILED)
+                            OnDeviceDownloadState.UNAVAILABLE -> item.installRecord.statusHeadline(OnDeviceDownloadState.UNAVAILABLE)
                             OnDeviceDownloadState.NOT_DOWNLOADED -> "Not installed"
                         }
                         DropdownMenuItem(
@@ -1849,6 +1834,42 @@ private fun InstalledOnDeviceModel?.progressText(): String? {
         record.downloadState == OnDeviceDownloadState.DOWNLOADING -> "Downloading"
         record.downloadState == OnDeviceDownloadState.VALIDATING -> "Validating"
         else -> null
+    }
+}
+
+private fun InstalledOnDeviceModel?.statusHeadline(
+    fallbackState: OnDeviceDownloadState
+): String {
+    val record = this
+    val state = record?.downloadState ?: fallbackState
+    return when (state) {
+        OnDeviceDownloadState.DOWNLOADING -> "Downloading"
+        OnDeviceDownloadState.VALIDATING -> "Validating"
+        OnDeviceDownloadState.READY,
+        OnDeviceDownloadState.DOWNLOADED -> "Ready"
+        OnDeviceDownloadState.CANCELLED -> "Cancelled"
+        OnDeviceDownloadState.FAILED -> when {
+            record?.failureKind == OnDeviceFailureKind.RUNTIME_INCOMPATIBLE -> "Runtime incompatible"
+            record?.failureKind == OnDeviceFailureKind.INVALID_GGUF -> "Invalid GGUF"
+            else -> "Download failed"
+        }
+        OnDeviceDownloadState.UNAVAILABLE -> "Unavailable on this device"
+        OnDeviceDownloadState.NOT_DOWNLOADED -> "Not installed"
+    }
+}
+
+private fun InstalledOnDeviceModel?.failureReasonSummary(): String? {
+    val record = this
+    val message = record?.errorMessage?.trim().orEmpty()
+    if (message.isBlank()) return null
+    return when {
+        record?.failureKind == OnDeviceFailureKind.RUNTIME_INCOMPATIBLE ->
+            "This GGUF model is not loadable by the bundled llama runtime on this device"
+        record?.failureKind == OnDeviceFailureKind.INVALID_GGUF ->
+            "The downloaded file is not a valid GGUF model"
+        record?.failureKind == OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE ->
+            "The downloaded model file is missing or empty"
+        else -> message
     }
 }
 

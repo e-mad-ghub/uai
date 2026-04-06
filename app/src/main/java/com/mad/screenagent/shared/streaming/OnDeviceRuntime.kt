@@ -1,8 +1,10 @@
 package com.mad.screenagent.shared.streaming
 
 import android.content.Context
+import android.util.Log
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
+import com.mad.screenagent.data.model.OnDeviceFailureKind
 import com.arm.aichat.isModelLoaded
 import com.mad.screenagent.data.model.AgentConfig
 import java.io.File
@@ -15,7 +17,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 interface OnDeviceRuntime {
-    suspend fun validateModel(modelPath: String): String?
+    val runtimeProfileId: String
+
+    suspend fun validateModel(modelPath: String): OnDeviceValidationResult
 
     fun streamResponse(
         messages: List<ChatMessage>,
@@ -24,19 +28,48 @@ interface OnDeviceRuntime {
     ): Flow<StreamChunk>
 }
 
+data class OnDeviceValidationResult(
+    val isSuccess: Boolean,
+    val failureKind: OnDeviceFailureKind = OnDeviceFailureKind.NONE,
+    val message: String? = null
+) {
+    companion object {
+        fun success(): OnDeviceValidationResult = OnDeviceValidationResult(isSuccess = true)
+
+        fun failure(
+            failureKind: OnDeviceFailureKind,
+            message: String
+        ): OnDeviceValidationResult = OnDeviceValidationResult(
+            isSuccess = false,
+            failureKind = failureKind,
+            message = message
+        )
+    }
+}
+
 class LlamaCppOnDeviceRuntime(
     context: Context
 ) : OnDeviceRuntime {
+    private companion object {
+        private const val TAG = "OnDevicePerf"
+    }
+
+    override val runtimeProfileId: String =
+        "llama.android-af76639-arm64-v8a-kleidiai-openmp"
+
     private val appContext = context.applicationContext
     private val loadMutex = Mutex()
     private val engine by lazy { AiChat.getInferenceEngine(appContext) }
     private var loadedModelPath: String? = null
     private var loadedSystemPrompt: String? = null
 
-    override suspend fun validateModel(modelPath: String): String? {
+    override suspend fun validateModel(modelPath: String): OnDeviceValidationResult {
         val modelFile = File(modelPath)
         if (!modelFile.exists() || modelFile.length() == 0L) {
-            return "The On-Device GGUF model file is missing at $modelPath."
+            return OnDeviceValidationResult.failure(
+                OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
+                "The On-Device GGUF model file is missing at $modelPath."
+            )
         }
 
         return loadMutex.withLock {
@@ -48,13 +81,17 @@ class LlamaCppOnDeviceRuntime(
                 runCatching { engine.cleanUp() }
                 loadedModelPath = null
                 loadedSystemPrompt = null
-                null
+                OnDeviceValidationResult.success()
             } catch (t: Throwable) {
                 runCatching { engine.cleanUp() }
                 loadedModelPath = null
                 loadedSystemPrompt = null
-                t.unwrapOnDeviceThrowable().message
-                    ?: "The selected GGUF model could not be opened by the on-device llama runtime."
+                val cause = t.unwrapOnDeviceThrowable()
+                OnDeviceValidationResult.failure(
+                    failureKind = cause.toFailureKind(),
+                    message = cause.message
+                        ?: "The selected GGUF model could not be opened by the on-device llama runtime."
+                )
             }
         }
     }
@@ -65,6 +102,7 @@ class LlamaCppOnDeviceRuntime(
         modelPath: String
     ): Flow<StreamChunk> = flow {
         try {
+            val startedAt = System.nanoTime()
             val modelFile = File(modelPath)
             if (!modelFile.exists() || modelFile.length() == 0L) {
                 emit(
@@ -77,14 +115,29 @@ class LlamaCppOnDeviceRuntime(
 
             ensureLoaded(modelPath = modelPath, config = config)
             val prompt = buildOnDevicePrompt(messages, systemPrompt = "")
+            Log.i(
+                TAG,
+                "REQUEST model=${File(modelPath).name} messages=${messages.size} prompt_chars=${prompt.length} max_output_tokens=${config.onDevice.maxOutputTokens}"
+            )
+            var firstTokenAt = 0L
+            var tokenCount = 0
             engine.sendUserPrompt(
                 message = prompt,
                 predictLength = config.onDevice.maxOutputTokens
             ).collect { token ->
                 if (token.isNotBlank()) {
+                    if (firstTokenAt == 0L) {
+                        firstTokenAt = System.nanoTime()
+                        Log.i(TAG, "TTFT ms=${(firstTokenAt - startedAt) / 1_000_000L}")
+                    }
+                    tokenCount += 1
                     emit(StreamChunk.Token(token))
                 }
             }
+            Log.i(
+                TAG,
+                "COMPLETE total_ms=${(System.nanoTime() - startedAt) / 1_000_000L} output_tokens=$tokenCount model=${File(modelPath).name}"
+            )
             emit(StreamChunk.Done)
         } catch (t: Throwable) {
             emit(StreamChunk.Error(t.unwrapOnDeviceThrowable()))
@@ -152,6 +205,19 @@ private fun buildOnDevicePrompt(messages: List<ChatMessage>, systemPrompt: Strin
 
 private fun Throwable.unwrapOnDeviceThrowable(): Throwable =
     (cause ?: this).takeUnless { it === this }?.withFallbackMessage() ?: this.withFallbackMessage()
+
+private fun Throwable.toFailureKind(): OnDeviceFailureKind {
+    val message = message.orEmpty()
+    return when {
+        message.contains("not a valid GGUF", ignoreCase = true) -> OnDeviceFailureKind.INVALID_GGUF
+        message.contains("could not be opened by the on-device llama runtime", ignoreCase = true) ||
+            message.contains("cannot be opened by the on-device llama runtime", ignoreCase = true) ->
+            OnDeviceFailureKind.RUNTIME_INCOMPATIBLE
+        message.contains("missing", ignoreCase = true) || message.contains("empty", ignoreCase = true) ->
+            OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE
+        else -> OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR
+    }
+}
 
 private fun Throwable.withFallbackMessage(): Throwable =
     if (!message.isNullOrBlank()) {

@@ -329,7 +329,7 @@ class AgentEditViewModel(
                 ) {
                     ConnectionTestState.Failure("The selected on-device model is still downloading.")
                 } else if (!installed.downloadState.isReadyForUse) {
-                    ConnectionTestState.Failure("The selected on-device model is not ready yet.")
+                    ConnectionTestState.Failure(installed.errorMessage ?: "The selected on-device model is not ready yet.")
                 } else {
                     ConnectionTestState.Success("Installed locally at ${installed.localPath}")
                 }

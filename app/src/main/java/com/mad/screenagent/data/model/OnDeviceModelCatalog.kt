@@ -31,6 +31,20 @@ enum class OnDeviceDownloadState {
         get() = this == FAILED || this == CANCELLED || this == UNAVAILABLE
 }
 
+enum class OnDeviceFailureKind {
+    NONE,
+    DOWNLOAD,
+    INVALID_GGUF,
+    RUNTIME_INCOMPATIBLE,
+    UNAVAILABLE_ON_DEVICE,
+    INTERNAL_RUNTIME_ERROR;
+
+    companion object {
+        fun fromKey(key: String?): OnDeviceFailureKind =
+            values().firstOrNull { it.name.equals(key, ignoreCase = true) } ?: NONE
+    }
+}
+
 enum class OnDeviceModelAccessState {
     PUBLIC,
     GATED,
@@ -74,7 +88,9 @@ data class OnDeviceModelCatalogEntry(
     val supportsDocuments: Boolean = true,
     val estimatedSizeMb: Int = 0,
     val accessStateKey: String? = null,
-    val sourceTypeKey: String? = null
+    val sourceTypeKey: String? = null,
+    val runtimeProfileId: String? = null,
+    val curatedVerified: Boolean = false
 ) {
     val accessState: OnDeviceModelAccessState
         get() = OnDeviceModelAccessState.fromKey(accessStateKey)
@@ -112,12 +128,39 @@ data class InstalledOnDeviceModel(
     val installedAt: Long = 0L,
     val downloadedBytes: Long = 0L,
     val totalBytes: Long = 0L,
-    val errorMessage: String? = null
-)
+    val errorMessage: String? = null,
+    val failureKindKey: String? = null,
+    val validatedAt: Long = 0L,
+    val validatedRuntimeProfileId: String? = null
+) {
+    val failureKind: OnDeviceFailureKind
+        get() = OnDeviceFailureKind.fromKey(failureKindKey)
+}
 
 data class OnDeviceModelLibraryItem(
     val catalogEntry: OnDeviceModelCatalogEntry,
     val installRecord: InstalledOnDeviceModel? = null
+)
+
+data class OnDeviceRuntimeCompatibilityRule(
+    val modelId: String,
+    val fileName: String,
+    val runtimeProfileId: String
+)
+
+private const val CURATED_GGUF_RUNTIME_PROFILE = "llama.android-af76639-arm64-v8a-kleidiai-openmp"
+
+fun curatedOnDeviceCompatibilityManifest(): List<OnDeviceRuntimeCompatibilityRule> = listOf(
+    OnDeviceRuntimeCompatibilityRule(
+        modelId = "gemma-3-1b-it-gguf",
+        fileName = GEMMA_3_1B_IT_GGUF_FILE,
+        runtimeProfileId = CURATED_GGUF_RUNTIME_PROFILE
+    ),
+    OnDeviceRuntimeCompatibilityRule(
+        modelId = "gemma-3-4b-it-gguf",
+        fileName = GEMMA_3_4B_IT_GGUF_FILE,
+        runtimeProfileId = CURATED_GGUF_RUNTIME_PROFILE
+    )
 )
 
 fun allOnDeviceCatalogEntries(): List<OnDeviceModelCatalogEntry> = listOf(
@@ -130,7 +173,9 @@ fun allOnDeviceCatalogEntries(): List<OnDeviceModelCatalogEntry> = listOf(
         capabilityKey = OnDeviceModelCapability.LOCAL_TEXT.name,
         estimatedSizeMb = 815,
         accessStateKey = OnDeviceModelAccessState.PUBLIC.name,
-        sourceTypeKey = OnDeviceModelSourceType.CATALOG.name
+        sourceTypeKey = OnDeviceModelSourceType.CATALOG.name,
+        runtimeProfileId = CURATED_GGUF_RUNTIME_PROFILE,
+        curatedVerified = true
     ),
     OnDeviceModelCatalogEntry(
         id = "gemma-3-4b-it-gguf",
@@ -141,7 +186,9 @@ fun allOnDeviceCatalogEntries(): List<OnDeviceModelCatalogEntry> = listOf(
         capabilityKey = OnDeviceModelCapability.LOCAL_TEXT.name,
         estimatedSizeMb = 3115,
         accessStateKey = OnDeviceModelAccessState.PUBLIC.name,
-        sourceTypeKey = OnDeviceModelSourceType.CATALOG.name
+        sourceTypeKey = OnDeviceModelSourceType.CATALOG.name,
+        runtimeProfileId = CURATED_GGUF_RUNTIME_PROFILE,
+        curatedVerified = true
     )
 )
 
@@ -164,7 +211,8 @@ fun normalizeOnDeviceCatalog(catalog: OnDeviceModelCatalog): OnDeviceModelCatalo
                 entry.isImported -> entry.copy(
                     sourceTypeKey = OnDeviceModelSourceType.IMPORTED.name,
                     capabilityKey = entry.capabilityKey ?: OnDeviceModelCapability.LOCAL_TEXT.name,
-                    accessStateKey = entry.accessStateKey ?: OnDeviceModelAccessState.EXTERNAL.name
+                    accessStateKey = entry.accessStateKey ?: OnDeviceModelAccessState.EXTERNAL.name,
+                    runtimeProfileId = entry.runtimeProfileId ?: CURATED_GGUF_RUNTIME_PROFILE
                 )
                 canonical != null -> entry.copy(
                     displayName = entry.displayName.ifBlank { canonical.displayName },
@@ -175,7 +223,9 @@ fun normalizeOnDeviceCatalog(catalog: OnDeviceModelCatalog): OnDeviceModelCatalo
                     supportsDocuments = entry.supportsDocuments || canonical.supportsDocuments,
                     estimatedSizeMb = if (entry.estimatedSizeMb > 0) entry.estimatedSizeMb else canonical.estimatedSizeMb,
                     accessStateKey = entry.accessStateKey ?: canonical.accessStateKey,
-                    sourceTypeKey = OnDeviceModelSourceType.CATALOG.name
+                    sourceTypeKey = OnDeviceModelSourceType.CATALOG.name,
+                    runtimeProfileId = entry.runtimeProfileId ?: canonical.runtimeProfileId,
+                    curatedVerified = entry.curatedVerified || canonical.curatedVerified
                 )
                 else -> entry
             }

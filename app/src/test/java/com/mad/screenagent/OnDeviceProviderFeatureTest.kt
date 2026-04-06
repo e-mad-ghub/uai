@@ -3,6 +3,7 @@ package com.mad.screenagent
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AiProviderType
 import com.mad.screenagent.data.model.InstalledOnDeviceModel
+import com.mad.screenagent.data.model.OnDeviceFailureKind
 import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.model.OnDeviceProviderConfig
 import com.mad.screenagent.data.repository.OnDeviceModelSource
@@ -14,6 +15,7 @@ import com.mad.screenagent.feature.agents.recommendedModelChoices
 import com.mad.screenagent.shared.streaming.AiProviderFactory
 import com.mad.screenagent.shared.streaming.OnDeviceProvider
 import com.mad.screenagent.shared.streaming.OnDeviceRuntime
+import com.mad.screenagent.shared.streaming.OnDeviceValidationResult
 import com.mad.screenagent.shared.streaming.StreamChunk
 import java.io.File
 import kotlinx.coroutines.runBlocking
@@ -67,6 +69,11 @@ class OnDeviceProviderFeatureTest {
         )
 
         assertTrue(provider is OnDeviceProvider)
+    }
+
+    @Test
+    fun onDeviceProviderDefaultsTo256OutputTokens() {
+        assertEquals(256, OnDeviceProviderConfig().maxOutputTokens)
     }
 
     @Test
@@ -142,16 +149,18 @@ class OnDeviceProviderFeatureTest {
     @Test
     fun onDeviceProviderUsesTheRuntimeSeamAfterInstall() = runBlocking {
         val modelFile = tempModelFile()
+        val runtime = FakeOnDeviceRuntime()
         val provider = OnDeviceProvider(
             FakeOnDeviceModelSource(
                 installed = InstalledOnDeviceModel(
                     modelId = "gemma-3-1b-it-gguf",
                     localPath = modelFile.absolutePath,
                     downloadState = OnDeviceDownloadState.READY,
-                    installedAt = 123L
+                    installedAt = 123L,
+                    validatedRuntimeProfileId = "llama.android-af76639-arm64-v8a-kleidiai-openmp"
                 )
             ),
-            runtime = FakeOnDeviceRuntime()
+            runtime = runtime
         )
         val chunks = provider.streamResponse(
             messages = emptyList(),
@@ -164,6 +173,43 @@ class OnDeviceProviderFeatureTest {
 
         assertTrue(chunks.first() is StreamChunk.Token)
         assertTrue(chunks.last() is StreamChunk.Done)
+        assertEquals(0, runtime.validateCallCount)
+    }
+
+    @Test
+    fun onDeviceProviderRevalidatesWhenRuntimeProfileChanges() = runBlocking {
+        val modelFile = tempModelFile()
+        val runtime = FakeOnDeviceRuntime(
+            validationResult = OnDeviceValidationResult.failure(
+                OnDeviceFailureKind.RUNTIME_INCOMPATIBLE,
+                "The selected GGUF model is runtime incompatible on this device."
+            )
+        )
+        val provider = OnDeviceProvider(
+            FakeOnDeviceModelSource(
+                installed = InstalledOnDeviceModel(
+                    modelId = "gemma-3-1b-it-gguf",
+                    localPath = modelFile.absolutePath,
+                    downloadState = OnDeviceDownloadState.READY,
+                    installedAt = 123L,
+                    validatedRuntimeProfileId = "older-runtime-profile"
+                )
+            ),
+            runtime = runtime
+        )
+
+        val chunk = provider.streamResponse(
+            messages = emptyList(),
+            config = AgentConfig(
+                provider = AiProviderType.ON_DEVICE,
+                model = "gemma-3-1b-it-gguf",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "gemma-3-1b-it-gguf")
+            )
+        ).first()
+
+        assertTrue(chunk is StreamChunk.Error)
+        assertTrue((chunk as StreamChunk.Error).cause.message!!.contains("runtime incompatible"))
+        assertEquals(1, runtime.validateCallCount)
     }
 
     private class FakeOnDeviceModelSource(
@@ -173,8 +219,16 @@ class OnDeviceProviderFeatureTest {
             installed?.takeIf { it.modelId == modelId }
     }
 
-    private class FakeOnDeviceRuntime : OnDeviceRuntime {
-        override suspend fun validateModel(modelPath: String): String? = null
+    private class FakeOnDeviceRuntime(
+        private val validationResult: OnDeviceValidationResult = OnDeviceValidationResult.success()
+    ) : OnDeviceRuntime {
+        override val runtimeProfileId: String = "llama.android-af76639-arm64-v8a-kleidiai-openmp"
+        var validateCallCount: Int = 0
+
+        override suspend fun validateModel(modelPath: String): OnDeviceValidationResult {
+            validateCallCount += 1
+            return validationResult
+        }
 
         override fun streamResponse(
             messages: List<com.mad.screenagent.shared.streaming.ChatMessage>,

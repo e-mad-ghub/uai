@@ -24,6 +24,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import kotlin.math.max
 
 /**
  * JNI wrapper for the llama.cpp library providing Android-friendly access to large language models.
@@ -168,6 +169,7 @@ internal class InferenceEngineImpl private constructor(
             }
 
             try {
+                val startedAtNanos = System.nanoTime()
                 Log.i(TAG, "Checking access to model file... \n$pathToModel")
                 File(pathToModel).let {
                     require(it.exists()) { "File not found" }
@@ -187,6 +189,10 @@ internal class InferenceEngineImpl private constructor(
                     }
                 }
                 Log.i(TAG, "Model loaded!")
+                Log.i(
+                    TAG,
+                    "PERF load_ms=${nanosToMillis(System.nanoTime() - startedAtNanos)} model=${File(pathToModel).name}"
+                )
                 _readyForSystemPrompt = true
 
                 _cancelGeneration = false
@@ -239,6 +245,7 @@ internal class InferenceEngineImpl private constructor(
         }
 
         try {
+            val requestStartedAtNanos = System.nanoTime()
             Log.i(TAG, "Sending user prompt...")
             _readyForSystemPrompt = false
             _state.value = InferenceEngine.State.ProcessingUserPrompt
@@ -249,16 +256,49 @@ internal class InferenceEngineImpl private constructor(
                 }
             }
 
+            val generationStartedAtNanos = System.nanoTime()
+            val promptProcessingMs = nanosToMillis(generationStartedAtNanos - requestStartedAtNanos)
             Log.i(TAG, "User prompt processed. Generating assistant prompt...")
+            Log.i(
+                TAG,
+                "PERF prompt_processing_ms=$promptProcessingMs predict_length=$predictLength chars=${message.length}"
+            )
             _state.value = InferenceEngine.State.Generating
+            var firstTokenAtNanos = 0L
+            var emittedTokenCount = 0
+            var emittedCharCount = 0
             while (!_cancelGeneration) {
                 generateNextToken()?.let { utf8token ->
-                    if (utf8token.isNotEmpty()) emit(utf8token)
+                    if (utf8token.isNotEmpty()) {
+                        if (firstTokenAtNanos == 0L) {
+                            firstTokenAtNanos = System.nanoTime()
+                            Log.i(
+                                TAG,
+                                "PERF ttft_ms=${nanosToMillis(firstTokenAtNanos - requestStartedAtNanos)}"
+                            )
+                        }
+                        emittedTokenCount += 1
+                        emittedCharCount += utf8token.length
+                        emit(utf8token)
+                    }
                 } ?: break
             }
+            val finishedAtNanos = System.nanoTime()
             if (_cancelGeneration) {
                 Log.i(TAG, "Assistant generation aborted per requested.")
             } else {
+                val totalMs = nanosToMillis(finishedAtNanos - requestStartedAtNanos)
+                val generationMs = nanosToMillis(finishedAtNanos - generationStartedAtNanos)
+                val decodeWindowMs =
+                    if (firstTokenAtNanos == 0L) generationMs
+                    else nanosToMillis(finishedAtNanos - firstTokenAtNanos)
+                val tokensPerSecond =
+                    if (decodeWindowMs <= 0L) 0.0
+                    else emittedTokenCount * 1000.0 / max(1L, decodeWindowMs)
+                Log.i(
+                    TAG,
+                    "PERF total_ms=$totalMs generation_ms=$generationMs output_tokens=$emittedTokenCount output_chars=$emittedCharCount tok_per_sec=${"%.2f".format(tokensPerSecond)}"
+                )
                 Log.i(TAG, "Assistant generation complete. Awaiting user prompt...")
             }
             _state.value = InferenceEngine.State.ModelReady
@@ -335,4 +375,6 @@ internal class InferenceEngineImpl private constructor(
         }
         llamaScope.cancel()
     }
+
+    private fun nanosToMillis(durationNanos: Long): Long = durationNanos / 1_000_000L
 }

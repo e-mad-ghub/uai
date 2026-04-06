@@ -9,6 +9,7 @@ import androidx.work.WorkManager
 import com.arm.aichat.gguf.GgufMetadataReader
 import com.arm.aichat.gguf.InvalidFileFormatException
 import com.mad.screenagent.data.model.InstalledOnDeviceModel
+import com.mad.screenagent.data.model.OnDeviceFailureKind
 import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.model.OnDeviceModelAccessState
 import com.mad.screenagent.data.model.OnDeviceModelCatalog
@@ -19,6 +20,7 @@ import com.mad.screenagent.data.model.defaultOnDeviceCatalogEntries
 import com.mad.screenagent.data.model.normalizeOnDeviceCatalog
 import com.mad.screenagent.data.prefs.AppPreferences
 import com.mad.screenagent.shared.streaming.OnDeviceRuntime
+import com.mad.screenagent.shared.streaming.OnDeviceValidationResult
 import java.io.File
 import java.io.IOException
 import java.util.UUID
@@ -34,7 +36,11 @@ import kotlinx.coroutines.withContext
 
 interface OnDeviceModelSource {
     suspend fun getInstalledModel(modelId: String): InstalledOnDeviceModel?
-    suspend fun markModelUnavailable(modelId: String, reason: String) {}
+    suspend fun markModelUnavailable(
+        modelId: String,
+        reason: String,
+        failureKind: OnDeviceFailureKind = OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE
+    ) {}
 }
 
 class OnDeviceModelRepository(
@@ -103,14 +109,21 @@ class OnDeviceModelRepository(
     override suspend fun getInstalledModel(modelId: String): InstalledOnDeviceModel? =
         installedModelsFlow.first().firstOrNull { it.modelId == modelId }
 
-    override suspend fun markModelUnavailable(modelId: String, reason: String) {
+    override suspend fun markModelUnavailable(
+        modelId: String,
+        reason: String,
+        failureKind: OnDeviceFailureKind
+    ) {
         val current = installedModelsFlow.first().toMutableList()
         val idx = current.indexOfFirst { it.modelId == modelId }
         if (idx < 0) return
         val existing = current[idx]
         current[idx] = existing.copy(
             downloadState = OnDeviceDownloadState.UNAVAILABLE,
-            errorMessage = reason
+            errorMessage = reason,
+            failureKindKey = failureKind.name,
+            validatedAt = System.currentTimeMillis(),
+            validatedRuntimeProfileId = runtime.runtimeProfileId
         )
         prefs.saveInstalledOnDeviceModels(current)
         saveDownloadState(OnDeviceDownloadState.UNAVAILABLE)
@@ -122,7 +135,10 @@ class OnDeviceModelRepository(
         downloadState: OnDeviceDownloadState = OnDeviceDownloadState.READY,
         downloadedBytes: Long = 0L,
         totalBytes: Long = 0L,
-        errorMessage: String? = null
+        errorMessage: String? = null,
+        failureKind: OnDeviceFailureKind = OnDeviceFailureKind.NONE,
+        validatedAt: Long = 0L,
+        validatedRuntimeProfileId: String? = null
     ): InstalledOnDeviceModel {
         val current = installedModelsFlow.first().toMutableList()
         val existing = current.firstOrNull { it.modelId == modelId }
@@ -133,7 +149,10 @@ class OnDeviceModelRepository(
             installedAt = existing?.installedAt ?: System.currentTimeMillis(),
             downloadedBytes = downloadedBytes,
             totalBytes = totalBytes,
-            errorMessage = errorMessage
+            errorMessage = errorMessage,
+            failureKindKey = failureKind.name,
+            validatedAt = validatedAt,
+            validatedRuntimeProfileId = validatedRuntimeProfileId
         )
         val idx = current.indexOfFirst { it.modelId == modelId }
         if (idx >= 0) current[idx] = updated else current.add(updated)
@@ -171,17 +190,20 @@ class OnDeviceModelRepository(
             targetFile.outputStream().use { output -> input.copyTo(output) }
         } ?: throw IOException("Unable to read the selected GGUF file.")
 
-        val validationError = validateDownloadedModel(targetFile)
-        if (validationError != null) {
+        val validationResult = validateDownloadedModel(targetFile)
+        if (!validationResult.isSuccess) {
             targetFile.delete()
             saveInstalledModel(
                 modelId = modelId,
                 localPath = targetFile.absolutePath,
                 downloadState = OnDeviceDownloadState.FAILED,
-                errorMessage = validationError
+                errorMessage = validationResult.message,
+                failureKind = validationResult.failureKind,
+                validatedAt = System.currentTimeMillis(),
+                validatedRuntimeProfileId = runtime.runtimeProfileId
             )
             saveDownloadState(OnDeviceDownloadState.FAILED)
-            throw IOException(validationError)
+            throw IOException(validationResult.message)
         }
 
         upsertCatalogEntry(
@@ -195,7 +217,10 @@ class OnDeviceModelRepository(
             localPath = targetFile.absolutePath,
             downloadState = OnDeviceDownloadState.READY,
             downloadedBytes = targetFile.length(),
-            totalBytes = targetFile.length()
+            totalBytes = targetFile.length(),
+            failureKind = OnDeviceFailureKind.NONE,
+            validatedAt = System.currentTimeMillis(),
+            validatedRuntimeProfileId = runtime.runtimeProfileId
         )
         saveDownloadState(OnDeviceDownloadState.READY)
         readyRecord
@@ -254,12 +279,27 @@ class OnDeviceModelRepository(
     ): InstalledOnDeviceModel = withContext(Dispatchers.IO) {
         val catalogEntry = catalogFlow.first().models.firstOrNull { it.id == modelId }
             ?: throw IllegalArgumentException("Unknown on-device model: $modelId")
+        val existingInstall = getInstalledModel(modelId)
         val downloadUrl = catalogEntry.downloadUrl.takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("No download URL is configured for $modelId")
 
         val targetFile = resolveTargetFile(catalogEntry)
         val downloadFile = File(targetFile.parentFile, "${targetFile.name}.download")
         targetFile.parentFile?.mkdirs()
+
+        if (shouldDiscardExistingArtifact(existingInstall, targetFile, downloadFile)) {
+            downloadFile.delete()
+            targetFile.delete()
+            saveInstalledModel(
+                modelId = modelId,
+                localPath = targetFile.absolutePath,
+                downloadState = OnDeviceDownloadState.NOT_DOWNLOADED,
+                downloadedBytes = 0L,
+                totalBytes = 0L,
+                errorMessage = null,
+                failureKind = OnDeviceFailureKind.NONE
+            )
+        }
 
         saveDownloadState(OnDeviceDownloadState.DOWNLOADING)
         saveInstalledModel(
@@ -277,7 +317,7 @@ class OnDeviceModelRepository(
         var downloadedBytes = 0L
         var totalBytes = 0L
         try {
-            if (targetFile.exists() && targetFile.length() > 0L) {
+            if (existingInstall?.downloadState == OnDeviceDownloadState.READY && targetFile.exists() && targetFile.length() > 0L) {
                 totalBytes = targetFile.length()
                 downloadedBytes = totalBytes
                 saveDownloadState(OnDeviceDownloadState.VALIDATING)
@@ -294,16 +334,22 @@ class OnDeviceModelRepository(
                     totalBytes,
                     targetFile.absolutePath
                 )
-                val validationError = validateDownloadedModel(targetFile)
-                if (validationError != null) {
-                    throw IOException(validationError)
+                val validationResult = validateDownloadedModel(targetFile)
+                if (!validationResult.isSuccess) {
+                    throw ModelValidationException(
+                        message = validationResult.message ?: "GGUF validation failed.",
+                        failureKind = validationResult.failureKind
+                    )
                 }
                 val readyRecord = saveInstalledModel(
                     modelId = modelId,
                     localPath = targetFile.absolutePath,
                     downloadState = OnDeviceDownloadState.READY,
                     downloadedBytes = downloadedBytes,
-                    totalBytes = totalBytes
+                    totalBytes = totalBytes,
+                    failureKind = OnDeviceFailureKind.NONE,
+                    validatedAt = System.currentTimeMillis(),
+                    validatedRuntimeProfileId = runtime.runtimeProfileId
                 )
                 saveDownloadState(OnDeviceDownloadState.READY)
                 onProgress(
@@ -381,9 +427,23 @@ class OnDeviceModelRepository(
                 targetFile.absolutePath
             )
 
-            val validationError = validateDownloadedModel(targetFile)
-            if (validationError != null) {
-                throw IOException(validationError)
+            val validationResult = validateDownloadedModel(targetFile)
+            if (!validationResult.isSuccess) {
+                saveInstalledModel(
+                    modelId = modelId,
+                    localPath = targetFile.absolutePath,
+                    downloadState = OnDeviceDownloadState.FAILED,
+                    downloadedBytes = targetFile.length(),
+                    totalBytes = targetFile.length(),
+                    errorMessage = validationResult.message,
+                    failureKind = validationResult.failureKind,
+                    validatedAt = System.currentTimeMillis(),
+                    validatedRuntimeProfileId = runtime.runtimeProfileId
+                )
+                throw ModelValidationException(
+                    message = validationResult.message ?: "GGUF validation failed.",
+                    failureKind = validationResult.failureKind
+                )
             }
 
             val readyRecord = saveInstalledModel(
@@ -391,7 +451,10 @@ class OnDeviceModelRepository(
                 localPath = targetFile.absolutePath,
                 downloadState = OnDeviceDownloadState.READY,
                 downloadedBytes = targetFile.length(),
-                totalBytes = targetFile.length()
+                totalBytes = targetFile.length(),
+                failureKind = OnDeviceFailureKind.NONE,
+                validatedAt = System.currentTimeMillis(),
+                validatedRuntimeProfileId = runtime.runtimeProfileId
             )
             saveDownloadState(OnDeviceDownloadState.READY)
             onProgress(
@@ -421,7 +484,16 @@ class OnDeviceModelRepository(
                 downloadState = OnDeviceDownloadState.FAILED,
                 downloadedBytes = downloadedBytes,
                 totalBytes = totalBytes,
-                errorMessage = t.message ?: "On-device model download failed"
+                errorMessage = t.message ?: "On-device model download failed",
+                failureKind = if (t is ModelValidationException) {
+                    t.failureKind
+                } else if (t.message?.contains("HTTP", ignoreCase = true) == true) {
+                    OnDeviceFailureKind.DOWNLOAD
+                } else {
+                    OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR
+                },
+                validatedAt = System.currentTimeMillis(),
+                validatedRuntimeProfileId = runtime.runtimeProfileId
             )
             saveDownloadState(OnDeviceDownloadState.FAILED)
             throw t
@@ -467,25 +539,56 @@ class OnDeviceModelRepository(
         prefs.saveOnDeviceModelCatalog(updated)
     }
 
-    private suspend fun validateDownloadedModel(file: File): String? {
+    private suspend fun validateDownloadedModel(file: File): OnDeviceValidationResult {
         if (!file.exists() || file.length() == 0L) {
-            return "The GGUF model file is missing or empty."
+            return OnDeviceValidationResult.failure(
+                OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
+                "The GGUF model file is missing or empty."
+            )
         }
         if (!file.name.endsWith(".gguf", ignoreCase = true)) {
-            return "Only GGUF model files are supported."
+            return OnDeviceValidationResult.failure(
+                OnDeviceFailureKind.INVALID_GGUF,
+                "Only GGUF model files are supported."
+            )
         }
         return try {
             val valid = ggufMetadataReader.ensureSourceFileFormat(file)
             if (!valid) {
-                "The selected file is not a valid GGUF model."
+                OnDeviceValidationResult.failure(
+                    OnDeviceFailureKind.INVALID_GGUF,
+                    "The selected file is not a valid GGUF model."
+                )
             } else {
                 runtime.validateModel(file.absolutePath)
             }
         } catch (_: InvalidFileFormatException) {
-            "The selected file is not a valid GGUF model."
+            OnDeviceValidationResult.failure(
+                OnDeviceFailureKind.INVALID_GGUF,
+                "The selected file is not a valid GGUF model."
+            )
         } catch (t: Throwable) {
-            t.message ?: "GGUF validation failed."
+            OnDeviceValidationResult.failure(
+                OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR,
+                t.message ?: "GGUF validation failed."
+            )
         }
+    }
+
+    internal fun shouldDiscardExistingArtifact(
+        existingInstall: InstalledOnDeviceModel?,
+        targetFile: File,
+        downloadFile: File
+    ): Boolean {
+        if (downloadFile.exists()) return true
+        if (!targetFile.exists()) return false
+        if (targetFile.length() == 0L) return true
+        if (existingInstall == null) return true
+        if (existingInstall.localPath != targetFile.absolutePath) return true
+        if (existingInstall.downloadState != OnDeviceDownloadState.READY) return true
+        if (existingInstall.totalBytes > 0L && targetFile.length() != existingInstall.totalBytes) return true
+        if (existingInstall.downloadedBytes > 0L && targetFile.length() != existingInstall.downloadedBytes) return true
+        return false
     }
 
     private fun resolveTargetFile(entry: OnDeviceModelCatalogEntry): File {
@@ -536,7 +639,10 @@ class OnDeviceModelRepository(
             installedAt = current.getOrNull(idx)?.installedAt ?: System.currentTimeMillis(),
             downloadedBytes = downloadedBytes,
             totalBytes = totalBytes,
-            errorMessage = reason
+            errorMessage = reason,
+            failureKindKey = OnDeviceFailureKind.DOWNLOAD.name,
+            validatedAt = System.currentTimeMillis(),
+            validatedRuntimeProfileId = runtime.runtimeProfileId
         )
         if (idx >= 0) current[idx] = updated else current.add(updated)
         prefs.saveInstalledOnDeviceModels(current)
@@ -551,6 +657,11 @@ class OnDeviceModelRepository(
         private const val DEFAULT_DOWNLOAD_BUFFER_SIZE = 8 * 1024
         private const val PROGRESS_UPDATE_STEP = 512 * 1024L
     }
+
+    private class ModelValidationException(
+        message: String,
+        val failureKind: OnDeviceFailureKind
+    ) : IOException(message)
 
     private fun OnDeviceModelCatalogEntry.toLibraryItem(
         installed: List<InstalledOnDeviceModel>

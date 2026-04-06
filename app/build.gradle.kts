@@ -23,6 +23,9 @@ android {
         versionCode = 5
         versionName = "5.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     signingConfigs {
@@ -54,6 +57,14 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    packaging {
+        jniLibs {
+            // The bundled llama Android bridge loads ggml backends from nativeLibraryDir.
+            // Keep native libs extracted on device so that dynamic backend loading matches
+            // the upstream llama.android packaging model.
+            useLegacyPackaging = true
+        }
     }
 }
 

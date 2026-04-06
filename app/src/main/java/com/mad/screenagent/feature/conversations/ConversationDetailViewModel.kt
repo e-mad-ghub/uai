@@ -13,11 +13,13 @@ import com.mad.screenagent.shared.streaming.ThrottledStreamingMessageWriter
 import com.mad.screenagent.shared.streaming.ToolAwareAssistantRuntime
 import com.mad.screenagent.shared.streaming.WebGateway
 import com.mad.screenagent.shared.streaming.compressHistory
+import com.mad.screenagent.shared.streaming.compressOnDeviceHistory
 import com.mad.screenagent.shared.streaming.sanitizeGroundedAssistantResponse
 import com.mad.screenagent.data.db.ConversationEntity
 import com.mad.screenagent.data.db.MessageEntity
 import com.mad.screenagent.data.db.toChatMessage
 import com.mad.screenagent.data.model.AgentConfig
+import com.mad.screenagent.data.model.OnDeviceFailureKind
 import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.model.canHandleImageRequests
 import com.mad.screenagent.data.model.hasInternetAccess
@@ -367,7 +369,12 @@ class ConversationDetailViewModel(
 
                 // Build history; the latest user message already has imagesJson stored in DB.
                 val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
-                val history = compressHistory(dbHistory.map { msg -> msg.toChatMessage() })
+                val rawHistory = dbHistory.map { msg -> msg.toChatMessage() }
+                val history = if (agent.provider == com.mad.screenagent.data.model.AiProviderType.ON_DEVICE) {
+                    compressOnDeviceHistory(rawHistory)
+                } else {
+                    compressHistory(rawHistory)
+                }
 
                 // Resolve Money Saver sentinel to actual cheapest model if needed.
                 val agent = agentResolver(agent)
@@ -516,7 +523,7 @@ class ConversationDetailViewModel(
             return "The selected On-Device model is still downloading."
         }
         if (!installed.downloadState.isReadyForUse) {
-            return installed.errorMessage ?: "The selected On-Device model is not ready yet."
+            return installed.onDeviceBlockedReason()
         }
         if (!java.io.File(installed.localPath).exists() || java.io.File(installed.localPath).length() == 0L) {
             val reason = "The selected On-Device model file is missing at ${installed.localPath}."
@@ -524,6 +531,20 @@ class ConversationDetailViewModel(
             return reason
         }
         return null
+    }
+
+    private fun com.mad.screenagent.data.model.InstalledOnDeviceModel.onDeviceBlockedReason(): String {
+        val message = errorMessage?.trim().orEmpty()
+        if (message.isBlank()) return "The selected On-Device model is not ready yet."
+        return when {
+            failureKind == OnDeviceFailureKind.RUNTIME_INCOMPATIBLE ->
+                "The selected On-Device model is runtime incompatible on this device."
+            failureKind == OnDeviceFailureKind.INVALID_GGUF ->
+                "The selected On-Device model is not a valid GGUF file."
+            failureKind == OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE ->
+                "The selected On-Device model file is missing or empty."
+            else -> message
+        }
     }
 
     class Factory(

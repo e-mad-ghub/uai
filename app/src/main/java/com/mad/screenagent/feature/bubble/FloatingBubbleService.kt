@@ -59,6 +59,8 @@ import com.mad.screenagent.R
 import com.mad.screenagent.UaiApplication
 import com.mad.screenagent.data.model.QuickActionConfig
 import com.mad.screenagent.data.model.AiProviderType
+import com.mad.screenagent.data.model.InstalledOnDeviceModel
+import com.mad.screenagent.data.model.OnDeviceFailureKind
 import com.mad.screenagent.data.model.OnDeviceDownloadState
 import com.mad.screenagent.data.model.forSlot
 import com.mad.screenagent.shared.streaming.AssistantStreamingSession
@@ -67,6 +69,7 @@ import com.mad.screenagent.shared.streaming.ImageAttachment
 import com.mad.screenagent.shared.streaming.StreamChunk
 import com.mad.screenagent.shared.streaming.ThrottledStreamingMessageWriter
 import com.mad.screenagent.shared.streaming.compressHistory
+import com.mad.screenagent.shared.streaming.compressOnDeviceHistory
 import com.mad.screenagent.shared.streaming.sanitizeGroundedAssistantResponse
 import com.mad.screenagent.data.db.ConversationEntity
 import com.mad.screenagent.data.db.MessageEntity
@@ -2177,7 +2180,7 @@ class FloatingBubbleService : Service() {
 
                 // Build history, attaching images to the last user message.
                 val allHistory = chatMessages.filter { !it.isStreaming }
-                val history = compressHistory(allHistory.mapIndexed { idx, msg ->
+                val rawHistory = allHistory.mapIndexed { idx, msg ->
                     if (idx == allHistory.lastIndex && msg.role == "user") {
                         when {
                             imageList.isNotEmpty() -> msg.toChatMessage(
@@ -2188,7 +2191,12 @@ class FloatingBubbleService : Service() {
                     } else {
                         msg.toChatMessage()
                     }
-                })
+                }
+                val history = if (resolvedAgent.provider == AiProviderType.ON_DEVICE) {
+                    compressOnDeviceHistory(rawHistory)
+                } else {
+                    compressHistory(rawHistory)
+                }
                 val shouldPrepareWebTurn = resolvedAgent.hasInternetAccess &&
                     container.webGateway.shouldPrepareTurn(
                         conversationKey = activeConversationId,
@@ -2308,7 +2316,7 @@ class FloatingBubbleService : Service() {
             return "The selected On-Device model is still downloading."
         }
         if (!installed.downloadState.isReadyForUse) {
-            return installed.errorMessage ?: "The selected On-Device model is not ready yet."
+            return installed.onDeviceBlockedReason()
         }
         val modelFile = File(installed.localPath)
         if (!modelFile.exists() || modelFile.length() == 0L) {
@@ -2317,6 +2325,20 @@ class FloatingBubbleService : Service() {
             return reason
         }
         return null
+    }
+
+    private fun InstalledOnDeviceModel.onDeviceBlockedReason(): String {
+        val message = errorMessage?.trim().orEmpty()
+        if (message.isBlank()) return "The selected On-Device model is not ready yet."
+        return when {
+            failureKind == OnDeviceFailureKind.RUNTIME_INCOMPATIBLE ->
+                "The selected On-Device model is runtime incompatible on this device."
+            failureKind == OnDeviceFailureKind.INVALID_GGUF ->
+                "The selected On-Device model is not a valid GGUF file."
+            failureKind == OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE ->
+                "The selected On-Device model file is missing or empty."
+            else -> message
+        }
     }
 
     private fun getRealScreenHeight(): Int =

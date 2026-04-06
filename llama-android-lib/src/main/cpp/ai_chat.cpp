@@ -25,10 +25,10 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
  * LLama resources: context, model, batch and sampler
  */
 constexpr int   N_THREADS_MIN           = 2;
-constexpr int   N_THREADS_MAX           = 4;
-constexpr int   N_THREADS_HEADROOM      = 2;
+constexpr int   N_THREADS_MAX           = 6;
+constexpr int   N_THREADS_HEADROOM      = 1;
 
-constexpr int   DEFAULT_CONTEXT_SIZE    = 8192;
+constexpr int   DEFAULT_CONTEXT_SIZE    = 4096;
 constexpr int   OVERFLOW_HEADROOM       = 4;
 constexpr int   BATCH_SIZE              = 512;
 constexpr float DEFAULT_SAMPLER_TEMP    = 0.3f;
@@ -88,11 +88,12 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
     // Context parameters setup
     llama_context_params ctx_params = llama_context_default_params();
     const int trained_context_size = llama_model_n_ctx_train(model);
-    if (n_ctx > trained_context_size) {
-        LOGw("%s: Model was trained with only %d context size! Enforcing %d context size...",
-             __func__, trained_context_size, n_ctx);
+    const int effective_context_size = std::min(n_ctx, trained_context_size);
+    if (effective_context_size < n_ctx) {
+        LOGw("%s: Model was trained with only %d context size! Clamping runtime context to %d...",
+             __func__, trained_context_size, effective_context_size);
     }
-    ctx_params.n_ctx = n_ctx;
+    ctx_params.n_ctx = effective_context_size;
     ctx_params.n_batch = BATCH_SIZE;
     ctx_params.n_ubatch = BATCH_SIZE;
     ctx_params.n_threads = n_threads;

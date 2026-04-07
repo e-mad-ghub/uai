@@ -9,6 +9,8 @@
 #include "logging.h"
 #include "chat.h"
 #include "common.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 #include "llama.h"
 
 template<class T>
@@ -25,12 +27,14 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
  * LLama resources: context, model, batch and sampler
  */
 constexpr int   N_THREADS_MIN           = 2;
-constexpr int   N_THREADS_MAX           = 6;
+// Keep the native bursts shorter on Android so GC/ART can still suspend threads
+// during long prompt-evaluation windows on memory-constrained devices.
+constexpr int   N_THREADS_MAX           = 4;
 constexpr int   N_THREADS_HEADROOM      = 1;
 
 constexpr int   DEFAULT_CONTEXT_SIZE    = 4096;
 constexpr int   OVERFLOW_HEADROOM       = 4;
-constexpr int   BATCH_SIZE              = 512;
+constexpr int   BATCH_SIZE              = 256;
 constexpr float DEFAULT_SAMPLER_TEMP    = 0.3f;
 
 static llama_model                      * g_model;
@@ -38,6 +42,7 @@ static llama_context                    * g_context;
 static llama_batch                        g_batch;
 static common_chat_templates_ptr          g_chat_templates;
 static common_sampler                   * g_sampler;
+static mtmd_context                     * g_mctx;
 
 extern "C"
 JNIEXPORT void JNICALL
@@ -58,11 +63,16 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unu
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {
+Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path, jstring jvision_projector_path) {
     llama_model_params model_params = llama_model_default_params();
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
     LOGd("%s: Loading model from: \n%s\n", __func__, model_path);
+
+    if (g_mctx != nullptr) {
+        mtmd_free(g_mctx);
+        g_mctx = nullptr;
+    }
 
     auto *model = llama_model_load_from_file(model_path, model_params);
     env->ReleaseStringUTFChars(jmodel_path, model_path);
@@ -70,6 +80,27 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstr
         return 1;
     }
     g_model = model;
+
+    if (jvision_projector_path != nullptr) {
+        const auto *vision_projector_path = env->GetStringUTFChars(jvision_projector_path, 0);
+        LOGd("%s: Loading vision projector from: \n%s\n", __func__, vision_projector_path);
+
+        mtmd_context_params mparams = mtmd_context_params_default();
+        mparams.use_gpu = false;
+        mparams.print_timings = false;
+        mparams.n_threads = std::max(N_THREADS_MIN, std::min(N_THREADS_MAX,
+                                                     (int) sysconf(_SC_NPROCESSORS_ONLN) -
+                                                     N_THREADS_HEADROOM));
+        mparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        mparams.warmup = false;
+
+        g_mctx = mtmd_init_from_file(vision_projector_path, g_model, mparams);
+        env->ReleaseStringUTFChars(jvision_projector_path, vision_projector_path);
+        if (g_mctx == nullptr) {
+            LOGe("%s: Failed to initialize mtmd context", __func__);
+            return 2;
+        }
+    }
     return 0;
 }
 
@@ -450,6 +481,81 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
     return 0;
 }
 
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPromptWithImages(
+        JNIEnv *env,
+        jobject /*unused*/,
+        jstring juser_prompt,
+        jobjectArray jimage_paths,
+        jint n_predict
+) {
+    if (g_mctx == nullptr) {
+        LOGe("%s: multimodal context is missing", __func__);
+        return 1;
+    }
+
+    reset_short_term_states();
+
+    const auto *const user_prompt = env->GetStringUTFChars(juser_prompt, nullptr);
+    LOGd("%s: Multimodal user prompt received: \n%s", __func__, user_prompt);
+    std::string prompt_text(user_prompt);
+    env->ReleaseStringUTFChars(juser_prompt, user_prompt);
+
+    mtmd::bitmaps bitmaps;
+    const jsize n_images = env->GetArrayLength(jimage_paths);
+    bitmaps.entries.reserve(static_cast<size_t>(n_images));
+    for (jsize i = 0; i < n_images; ++i) {
+        auto jpath = (jstring) env->GetObjectArrayElement(jimage_paths, i);
+        const auto *path = env->GetStringUTFChars(jpath, nullptr);
+        mtmd::bitmap bitmap(mtmd_helper_bitmap_init_from_file(g_mctx, path));
+        env->ReleaseStringUTFChars(jpath, path);
+        env->DeleteLocalRef(jpath);
+        if (!bitmap.ptr) {
+            LOGe("%s: failed to load image path", __func__);
+            return 2;
+        }
+        bitmaps.entries.push_back(std::move(bitmap));
+    }
+
+    mtmd_input_text inp_txt = {
+        prompt_text.c_str(),
+        true,
+        true,
+    };
+    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    auto bitmaps_c_ptr = bitmaps.c_ptr();
+    const int32_t tokenized = mtmd_tokenize(
+        g_mctx,
+        chunks.ptr.get(),
+        &inp_txt,
+        bitmaps_c_ptr.data(),
+        bitmaps_c_ptr.size()
+    );
+    if (tokenized != 0) {
+        LOGe("%s: mtmd_tokenize failed with %d", __func__, tokenized);
+        return 3;
+    }
+
+    llama_pos new_n_past = 0;
+    if (mtmd_helper_eval_chunks(
+            g_mctx,
+            g_context,
+            chunks.ptr.get(),
+            current_position,
+            0,
+            BATCH_SIZE,
+            true,
+            &new_n_past) != 0) {
+        LOGe("%s: mtmd_helper_eval_chunks failed", __func__);
+        return 4;
+    }
+
+    current_position = new_n_past;
+    stop_generation_position = current_position + n_predict;
+    return 0;
+}
+
 static bool is_valid_utf8(const char *string) {
     if (!string) { return true; }
 
@@ -555,6 +661,10 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_unload(JNIEnv * /*unused*/, job
     common_sampler_free(g_sampler);
     g_chat_templates.reset();
     llama_batch_free(g_batch);
+    if (g_mctx != nullptr) {
+        mtmd_free(g_mctx);
+        g_mctx = nullptr;
+    }
     llama_free(g_context);
     llama_model_free(g_model);
 }

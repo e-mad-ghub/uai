@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import android.util.Log
 import com.mad.screenagent.shared.streaming.httpErrorMessage
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AiProviderType
@@ -86,6 +87,9 @@ class AgentEditViewModel(
     private val providerModelCatalogRepository: ProviderModelCatalogRepository,
     private val onDeviceModelRepository: OnDeviceModelRepository
 ) : ViewModel() {
+    private companion object {
+        const val TAG = "AgentEditVM"
+    }
 
     val isEditing: Boolean = agentId != null
     val isDuplicating: Boolean = agentId == null && duplicateFromAgentId != null
@@ -269,6 +273,7 @@ class AgentEditViewModel(
                     it.installRecord?.downloadState?.isReadyForUse == true
                 }
                 onDeviceModels = _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }
+                syncSelectedOnDeviceVisionSupport()
                 if (_agent.value.provider == AiProviderType.ON_DEVICE) {
                     _providerModels.value = _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }
                 }
@@ -295,9 +300,13 @@ class AgentEditViewModel(
             val selectedModelId = updated.onDevice.selectedModelId.trim().ifBlank {
                 updated.model.trim()
             }
+            val selectedModelSupportsVision = resolveOnDeviceModelSupportsVision(selectedModelId)
             updated.copy(
                 model = selectedModelId,
-                onDevice = updated.onDevice.copy(selectedModelId = selectedModelId)
+                onDevice = updated.onDevice.copy(
+                    selectedModelId = selectedModelId,
+                    selectedModelSupportsVision = selectedModelSupportsVision
+                )
             )
         } else {
             updated
@@ -415,6 +424,7 @@ class AgentEditViewModel(
 
     fun refreshOnDeviceCatalog() {
         if (_agent.value.provider != AiProviderType.ON_DEVICE) return
+        Log.i(TAG, "refreshOnDeviceCatalog tapped")
         _onDeviceCatalogUiState.value = _onDeviceCatalogUiState.value.copy(
             refreshStatus = OnDeviceCatalogRefreshStatus.REFRESHING,
             lastRefreshFailureMessage = null
@@ -472,7 +482,10 @@ class AgentEditViewModel(
                 update {
                     copy(
                         model = installed.modelId,
-                        onDevice = onDevice.copy(selectedModelId = installed.modelId)
+                        onDevice = onDevice.copy(
+                            selectedModelId = installed.modelId,
+                            selectedModelSupportsVision = false
+                        )
                     )
                 }
                 _connectionTestState.value = ConnectionTestState.Success(
@@ -503,10 +516,15 @@ class AgentEditViewModel(
         if (_agent.value.provider != AiProviderType.ON_DEVICE) return
         val readyModelIds = _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }.toSet()
         if (modelId !in readyModelIds) return
+        val supportsVision = resolveOnDeviceModelSupportsVision(modelId)
+        Log.i(TAG, "selectOnDeviceModel id=$modelId supportsVision=$supportsVision")
         update {
             copy(
                 model = modelId,
-                onDevice = onDevice.copy(selectedModelId = modelId)
+                onDevice = onDevice.copy(
+                    selectedModelId = modelId,
+                    selectedModelSupportsVision = supportsVision
+                )
             )
         }
     }
@@ -804,21 +822,57 @@ class AgentEditViewModel(
     private suspend fun refreshOnDeviceModels(force: Boolean = false) {
         _isLoadingModels.value = true
         try {
+            Log.i(TAG, "refreshOnDeviceModels force=$force")
             val result = onDeviceModelRepository.refreshCatalogIfStale(force = force)
             applyOnDeviceCatalogRefreshResult(result)
+            Log.i(
+                TAG,
+                "refreshOnDeviceModels result usedCached=${result.usedCachedCatalog} models=${result.catalog.models.size} failure=${result.failureMessage}"
+            )
             onDeviceModels = result.catalog.models
                 .filter { it.isPublicDefaultChoice() }
                 .map { it.id }
-        } catch (_: Exception) {
-            // fall back to cached catalog
+        } catch (e: Exception) {
+            // fall back to cached catalog, but keep the customer-facing reason specific
+            Log.w(TAG, "refreshOnDeviceModels failed", e)
             _onDeviceCatalogUiState.value = _onDeviceCatalogUiState.value.copy(
                 refreshStatus = OnDeviceCatalogRefreshStatus.FAILED_CACHED,
-                lastRefreshFailureMessage = OnDeviceUserMessages.cachedCatalogFallback()
+                lastRefreshFailureMessage = OnDeviceUserMessages.refreshCatalogFailure(e)
             )
         } finally {
             updateCurrentProviderModels(AiProviderType.ON_DEVICE)
             _isLoadingModels.value = false
         }
+    }
+
+    private fun resolveOnDeviceModelSupportsVision(modelId: String): Boolean {
+        val normalized = modelId.trim()
+        if (normalized.isBlank()) return false
+        return _onDeviceModelLibrary.value.firstOrNull { it.catalogEntry.id == normalized }
+            ?.catalogEntry
+            ?.supportsVision
+            ?: _onDeviceCatalog.value.models.firstOrNull { it.id == normalized }?.supportsVision
+            ?: false
+    }
+
+    private fun syncSelectedOnDeviceVisionSupport() {
+        val current = _agent.value
+        if (current.provider != AiProviderType.ON_DEVICE) return
+        val selectedModelId = current.onDevice.selectedModelId.trim().ifBlank { current.model.trim() }
+        if (selectedModelId.isBlank()) return
+        val supportsVision = resolveOnDeviceModelSupportsVision(selectedModelId)
+        if (current.onDevice.selectedModelSupportsVision == supportsVision &&
+            current.model == selectedModelId
+        ) {
+            return
+        }
+        _agent.value = current.copy(
+            model = selectedModelId,
+            onDevice = current.onDevice.copy(
+                selectedModelId = selectedModelId,
+                selectedModelSupportsVision = supportsVision
+            )
+        )
     }
 
     private fun applyOnDeviceCatalogRefreshResult(result: OnDeviceCatalogRefreshResult) {

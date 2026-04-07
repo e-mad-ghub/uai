@@ -364,7 +364,7 @@ class ConversationDetailViewModel(
                 // If the agent doesn't support the attachment type, say so in the chat
                 if (images.isNotEmpty() && !agent.canHandleImageRequests()) {
                     accumulated =
-                        "I don't support image analysis with \"${agent.model}\". Please switch to a vision-capable model in agent settings."
+                        com.mad.screenagent.shared.streaming.OnDeviceUserMessages.imageAttachmentsRequireVisionModel()
                     return@launch
                 }
 

@@ -85,7 +85,7 @@ internal class InferenceEngineImpl private constructor(
     private external fun init(nativeLibDir: String)
 
     @FastNative
-    private external fun load(modelPath: String): Int
+    private external fun load(modelPath: String, visionProjectorPath: String?): Int
 
     @FastNative
     private external fun prepare(): Int
@@ -101,6 +101,13 @@ internal class InferenceEngineImpl private constructor(
 
     @FastNative
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
+
+    @FastNative
+    private external fun processUserPromptWithImages(
+        userPrompt: String,
+        imagePaths: Array<String>,
+        predictLength: Int
+    ): Int
 
     @FastNative
     private external fun generateNextToken(): String?
@@ -119,10 +126,21 @@ internal class InferenceEngineImpl private constructor(
     @Volatile
     private var _cancelGeneration = false
 
-    private fun loadFailure(result: Int, pathToModel: String): Exception =
+    private fun loadFailure(
+        result: Int,
+        pathToModel: String,
+        visionProjectorPath: String? = null
+    ): Exception =
         when (result) {
             1 -> UnsupportedArchitectureException(
                 "The selected GGUF model could not be opened by the on-device llama runtime: $pathToModel"
+            )
+            2 -> UnsupportedArchitectureException(
+                if (visionProjectorPath != null) {
+                    "The selected vision model could not be opened by the on-device llama runtime: $pathToModel"
+                } else {
+                    "The selected GGUF model could not be opened by the on-device llama runtime: $pathToModel"
+                }
             )
             else -> ModelLoadException(
                 "The on-device llama runtime failed to load the GGUF model (code $result): $pathToModel"
@@ -162,7 +180,7 @@ internal class InferenceEngineImpl private constructor(
     /**
      * Load the LLM
      */
-    override suspend fun loadModel(pathToModel: String) =
+    override suspend fun loadModel(pathToModel: String, visionProjectorPath: String?) =
         withContext(llamaDispatcher) {
             check(_state.value is InferenceEngine.State.Initialized) {
                 "Cannot load model in ${_state.value.javaClass.simpleName}!"
@@ -180,8 +198,8 @@ internal class InferenceEngineImpl private constructor(
                 Log.i(TAG, "Loading model... \n$pathToModel")
                 _readyForSystemPrompt = false
                 _state.value = InferenceEngine.State.LoadingModel
-                load(pathToModel).let {
-                    if (it != 0) throw loadFailure(it, pathToModel)
+                load(pathToModel, visionProjectorPath).let {
+                    if (it != 0) throw loadFailure(it, pathToModel, visionProjectorPath)
                 }
                 prepare().let {
                     if (it != 0) {
@@ -308,6 +326,86 @@ internal class InferenceEngineImpl private constructor(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error during generation!", e)
+            _state.value = InferenceEngine.State.Error(e)
+            throw e
+        }
+    }.flowOn(llamaDispatcher)
+
+    override fun sendUserPromptWithImages(
+        message: String,
+        imagePaths: List<String>,
+        predictLength: Int
+    ): Flow<String> = flow {
+        require(message.isNotEmpty()) { "User prompt discarded due to being empty!" }
+        check(_state.value is InferenceEngine.State.ModelReady) {
+            "User prompt discarded due to: ${_state.value.javaClass.simpleName}"
+        }
+        require(imagePaths.isNotEmpty()) { "Image prompt discarded due to missing images!" }
+
+        try {
+            val requestStartedAtNanos = System.nanoTime()
+            Log.i(TAG, "Sending multimodal user prompt...")
+            _readyForSystemPrompt = false
+            _state.value = InferenceEngine.State.ProcessingUserPrompt
+
+            processUserPromptWithImages(message, imagePaths.toTypedArray(), predictLength).let { result ->
+                if (result != 0) {
+                    throw promptFailure("user", result)
+                }
+            }
+
+            val generationStartedAtNanos = System.nanoTime()
+            val promptProcessingMs = nanosToMillis(generationStartedAtNanos - requestStartedAtNanos)
+            Log.i(TAG, "Multimodal user prompt processed. Generating assistant prompt...")
+            Log.i(
+                TAG,
+                "PERF prompt_processing_ms=$promptProcessingMs predict_length=$predictLength chars=${message.length}"
+            )
+            _state.value = InferenceEngine.State.Generating
+            var firstTokenAtNanos = 0L
+            var emittedTokenCount = 0
+            var emittedCharCount = 0
+            while (!_cancelGeneration) {
+                generateNextToken()?.let { utf8token ->
+                    if (utf8token.isNotEmpty()) {
+                        if (firstTokenAtNanos == 0L) {
+                            firstTokenAtNanos = System.nanoTime()
+                            Log.i(
+                                TAG,
+                                "PERF ttft_ms=${nanosToMillis(firstTokenAtNanos - requestStartedAtNanos)}"
+                            )
+                        }
+                        emittedTokenCount += 1
+                        emittedCharCount += utf8token.length
+                        emit(utf8token)
+                    }
+                } ?: break
+            }
+            val finishedAtNanos = System.nanoTime()
+            if (_cancelGeneration) {
+                Log.i(TAG, "Assistant generation aborted per requested.")
+            } else {
+                val totalMs = nanosToMillis(finishedAtNanos - requestStartedAtNanos)
+                val generationMs = nanosToMillis(finishedAtNanos - generationStartedAtNanos)
+                val decodeWindowMs =
+                    if (firstTokenAtNanos == 0L) generationMs
+                    else nanosToMillis(finishedAtNanos - firstTokenAtNanos)
+                val tokensPerSecond =
+                    if (decodeWindowMs <= 0L) 0.0
+                    else emittedTokenCount * 1000.0 / max(1L, decodeWindowMs)
+                Log.i(
+                    TAG,
+                    "PERF total_ms=$totalMs generation_ms=$generationMs output_tokens=$emittedTokenCount output_chars=$emittedCharCount tok_per_sec=${"%.2f".format(tokensPerSecond)}"
+                )
+                Log.i(TAG, "Assistant generation complete. Awaiting user prompt...")
+            }
+            _state.value = InferenceEngine.State.ModelReady
+        } catch (e: CancellationException) {
+            Log.i(TAG, "Assistant generation's flow collection cancelled.")
+            _state.value = InferenceEngine.State.ModelReady
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during multimodal generation!", e)
             _state.value = InferenceEngine.State.Error(e)
             throw e
         }

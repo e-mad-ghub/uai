@@ -4,6 +4,7 @@ private const val GEMMA_3_1B_IT_GGUF_REPO = "ggml-org/gemma-3-1b-it-GGUF"
 private const val GEMMA_3_1B_IT_GGUF_FILE = "gemma-3-1b-it-Q4_K_M.gguf"
 private const val GEMMA_3_4B_IT_GGUF_REPO = "ggml-org/gemma-3-4b-it-GGUF"
 private const val GEMMA_3_4B_IT_GGUF_FILE = "gemma-3-4b-it-Q4_K_M.gguf"
+private const val GEMMA_3_4B_IT_MMPROJ_FILE = "mmproj-model-f16.gguf"
 private const val SMOLLM2_360M_INSTRUCT_GGUF_REPO = "mradermacher/SmolLM2-360M-Instruct-GGUF"
 private const val SMOLLM2_360M_INSTRUCT_GGUF_FILE = "SmolLM2-360M-Instruct.Q5_K_M.gguf"
 private const val QWEN2_5_0_5B_INSTRUCT_GGUF_REPO = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
@@ -92,6 +93,8 @@ data class OnDeviceModelCatalogEntry(
     val description: String = "",
     val downloadUrl: String = "",
     val fileName: String = "",
+    val visionProjectorDownloadUrl: String = "",
+    val visionProjectorFileName: String = "",
     val capabilityKey: String? = null,
     val supportsDocuments: Boolean = true,
     val estimatedSizeMb: Int = 0,
@@ -121,6 +124,11 @@ data class OnDeviceModelCatalogEntry(
     val isImported: Boolean
         get() = sourceType == OnDeviceModelSourceType.IMPORTED
 
+    val hasVisionProjector: Boolean
+        get() = supportsVision &&
+            visionProjectorDownloadUrl.isNotBlank() &&
+            visionProjectorFileName.isNotBlank()
+
     val supportsVision: Boolean
         get() = capability == OnDeviceModelCapability.LOCAL_VISION
 }
@@ -133,6 +141,7 @@ data class OnDeviceModelCatalog(
 data class InstalledOnDeviceModel(
     val modelId: String,
     val localPath: String,
+    val visionProjectorPath: String? = null,
     val downloadState: OnDeviceDownloadState = OnDeviceDownloadState.NOT_DOWNLOADED,
     val installedAt: Long = 0L,
     val downloadedBytes: Long = 0L,
@@ -269,7 +278,9 @@ fun allOnDeviceCatalogEntries(): List<OnDeviceModelCatalogEntry> = listOf(
         description = "Larger public GGUF model with better local text quality on stronger phones.",
         downloadUrl = "https://huggingface.co/$GEMMA_3_4B_IT_GGUF_REPO/resolve/main/$GEMMA_3_4B_IT_GGUF_FILE",
         fileName = GEMMA_3_4B_IT_GGUF_FILE,
-        capabilityKey = OnDeviceModelCapability.LOCAL_TEXT.name,
+        visionProjectorDownloadUrl = "https://huggingface.co/$GEMMA_3_4B_IT_GGUF_REPO/resolve/main/$GEMMA_3_4B_IT_MMPROJ_FILE",
+        visionProjectorFileName = GEMMA_3_4B_IT_MMPROJ_FILE,
+        capabilityKey = OnDeviceModelCapability.LOCAL_VISION.name,
         estimatedSizeMb = 3115,
         recommendedRank = 5,
         accessStateKey = OnDeviceModelAccessState.PUBLIC.name,
@@ -291,34 +302,118 @@ fun normalizeOnDeviceCatalog(catalog: OnDeviceModelCatalog): OnDeviceModelCatalo
         val seen = mutableSetOf<String>()
 
         catalog.models.forEach { entry ->
-            if (entry.id in LEGACY_ON_DEVICE_IDS && !entry.isImported) return@forEach
+            val entryId = entry.id.orEmpty().trim()
+            if (entryId.isBlank()) return@forEach
+            if (entryId in LEGACY_ON_DEVICE_IDS && !entry.isImported) return@forEach
 
-            val canonical = canonicalById[entry.id]
-            val merged = when {
-                entry.isImported -> entry.copy(
-                    sourceTypeKey = OnDeviceModelSourceType.IMPORTED.name,
-                    capabilityKey = entry.capabilityKey ?: OnDeviceModelCapability.LOCAL_TEXT.name,
-                    accessStateKey = entry.accessStateKey ?: OnDeviceModelAccessState.EXTERNAL.name,
-                    runtimeProfileId = entry.runtimeProfileId ?: CURATED_GGUF_RUNTIME_PROFILE
-                )
-                canonical != null -> entry.copy(
-                    displayName = entry.displayName.ifBlank { canonical.displayName },
-                    description = entry.description.ifBlank { canonical.description },
-                    downloadUrl = entry.downloadUrl.ifBlank { canonical.downloadUrl },
-                    fileName = entry.fileName.ifBlank { canonical.fileName },
-                    capabilityKey = entry.capabilityKey ?: canonical.capabilityKey,
-                    supportsDocuments = entry.supportsDocuments || canonical.supportsDocuments,
-                    estimatedSizeMb = if (entry.estimatedSizeMb > 0) entry.estimatedSizeMb else canonical.estimatedSizeMb,
-                    recommendedRank = if (entry.recommendedRank != Int.MAX_VALUE) entry.recommendedRank else canonical.recommendedRank,
-                    accessStateKey = entry.accessStateKey ?: canonical.accessStateKey,
-                    sourceTypeKey = OnDeviceModelSourceType.CATALOG.name,
-                    runtimeProfileId = entry.runtimeProfileId ?: canonical.runtimeProfileId,
-                    curatedVerified = entry.curatedVerified || canonical.curatedVerified
-                )
-                else -> entry
-            }
-            if (seen.add(merged.id)) add(merged)
+            val canonical = canonicalById[entryId]
+            val merged = sanitizeOnDeviceCatalogEntry(
+                entry = entry,
+                canonical = canonical,
+                overrideId = entryId,
+                forceImported = entry.isImported
+            )
+            val mergedId = merged.id.orEmpty().trim()
+            if (mergedId.isBlank()) return@forEach
+            if (seen.add(mergedId)) add(merged)
         }
     }
     return catalog.copy(models = normalized)
+}
+
+private fun sanitizeOnDeviceCatalogEntry(
+    entry: OnDeviceModelCatalogEntry,
+    canonical: OnDeviceModelCatalogEntry?,
+    overrideId: String,
+    forceImported: Boolean
+): OnDeviceModelCatalogEntry {
+    val canonicalEntry = canonical
+    val sourceType = when {
+        forceImported -> OnDeviceModelSourceType.IMPORTED.name
+        canonicalEntry != null -> OnDeviceModelSourceType.CATALOG.name
+        else -> entry.sourceTypeKey.orEmpty().ifBlank { OnDeviceModelSourceType.CATALOG.name }
+    }
+    val accessState = when {
+        forceImported -> entry.accessStateKey.orEmpty().ifBlank { OnDeviceModelAccessState.EXTERNAL.name }
+        canonicalEntry != null -> entry.accessStateKey.orEmpty().ifBlank {
+            canonicalEntry.accessStateKey.orEmpty().ifBlank { OnDeviceModelAccessState.PUBLIC.name }
+        }
+        else -> entry.accessStateKey.orEmpty().ifBlank { OnDeviceModelAccessState.PUBLIC.name }
+    }
+    val capability = when {
+        forceImported -> entry.capabilityKey.orEmpty().ifBlank { OnDeviceModelCapability.LOCAL_TEXT.name }
+        canonicalEntry != null -> entry.capabilityKey.orEmpty().ifBlank {
+            canonicalEntry.capabilityKey.orEmpty().ifBlank { OnDeviceModelCapability.LOCAL_TEXT.name }
+        }
+        else -> entry.capabilityKey.orEmpty().ifBlank { OnDeviceModelCapability.LOCAL_TEXT.name }
+    }
+    val runtimeProfileId = when {
+        forceImported -> entry.runtimeProfileId.orEmpty().ifBlank { CURATED_GGUF_RUNTIME_PROFILE }
+        canonicalEntry != null -> entry.runtimeProfileId.orEmpty().ifBlank {
+            canonicalEntry.runtimeProfileId.orEmpty().ifBlank { CURATED_GGUF_RUNTIME_PROFILE }
+        }
+        else -> entry.runtimeProfileId.orEmpty().ifBlank { CURATED_GGUF_RUNTIME_PROFILE }
+    }
+    val mergedVisionProjectorDownloadUrl = when {
+        forceImported -> entry.visionProjectorDownloadUrl.orEmpty()
+        canonicalEntry != null && canonicalEntry.curatedVerified ->
+            canonicalEntry.visionProjectorDownloadUrl.orEmpty().ifBlank {
+                entry.visionProjectorDownloadUrl.orEmpty()
+            }
+        canonicalEntry != null -> entry.visionProjectorDownloadUrl.orEmpty().ifBlank {
+            canonicalEntry.visionProjectorDownloadUrl.orEmpty()
+        }
+        else -> entry.visionProjectorDownloadUrl.orEmpty()
+    }
+    val mergedVisionProjectorFileName = when {
+        forceImported -> entry.visionProjectorFileName.orEmpty()
+        canonicalEntry != null && canonicalEntry.curatedVerified ->
+            canonicalEntry.visionProjectorFileName.orEmpty().ifBlank {
+                entry.visionProjectorFileName.orEmpty()
+            }
+        canonicalEntry != null -> entry.visionProjectorFileName.orEmpty().ifBlank {
+            canonicalEntry.visionProjectorFileName.orEmpty()
+        }
+        else -> entry.visionProjectorFileName.orEmpty()
+    }
+    val mergedCapability = when {
+        forceImported -> entry.capabilityKey.orEmpty().ifBlank { OnDeviceModelCapability.LOCAL_TEXT.name }
+        canonicalEntry != null && canonicalEntry.curatedVerified ->
+            canonicalEntry.capabilityKey.orEmpty().ifBlank {
+                entry.capabilityKey.orEmpty().ifBlank { OnDeviceModelCapability.LOCAL_TEXT.name }
+            }
+        canonicalEntry != null -> canonicalEntry.capabilityKey.orEmpty().ifBlank {
+            entry.capabilityKey.orEmpty().ifBlank { OnDeviceModelCapability.LOCAL_TEXT.name }
+        }
+        else -> entry.capabilityKey.orEmpty().ifBlank { OnDeviceModelCapability.LOCAL_TEXT.name }
+    }
+    return OnDeviceModelCatalogEntry(
+        id = overrideId,
+        displayName = entry.displayName.orEmpty().ifBlank {
+            canonicalEntry?.displayName.orEmpty().ifBlank { overrideId }
+        },
+        description = entry.description.orEmpty().ifBlank {
+            canonicalEntry?.description.orEmpty()
+        },
+        downloadUrl = entry.downloadUrl.orEmpty().ifBlank {
+            canonicalEntry?.downloadUrl.orEmpty()
+        },
+        fileName = entry.fileName.orEmpty().ifBlank {
+            canonicalEntry?.fileName.orEmpty()
+        },
+        visionProjectorDownloadUrl = mergedVisionProjectorDownloadUrl,
+        visionProjectorFileName = mergedVisionProjectorFileName,
+        capabilityKey = mergedCapability,
+        supportsDocuments = entry.supportsDocuments || canonicalEntry?.supportsDocuments == true,
+        estimatedSizeMb = if (entry.estimatedSizeMb > 0) entry.estimatedSizeMb else canonicalEntry?.estimatedSizeMb ?: 0,
+        recommendedRank = if (entry.recommendedRank != Int.MAX_VALUE) {
+            entry.recommendedRank
+        } else {
+            canonicalEntry?.recommendedRank ?: Int.MAX_VALUE
+        },
+        accessStateKey = accessState,
+        sourceTypeKey = sourceType,
+        runtimeProfileId = runtimeProfileId,
+        curatedVerified = entry.curatedVerified || canonicalEntry?.curatedVerified == true
+    )
 }

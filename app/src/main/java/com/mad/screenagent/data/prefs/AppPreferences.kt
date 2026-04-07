@@ -61,10 +61,14 @@ class AppPreferences(context: Context) {
         val LAST_ACTIVE_BUBBLE_CONVERSATION_ID = stringPreferencesKey("last_active_bubble_conversation_id")
     }
 
+    private fun normalizeAgentList(agents: List<AgentConfig>): List<AgentConfig> =
+        agents.distinctBy { it.id }
+
     val agentListFlow: Flow<List<AgentConfig>> = store.data.map { prefs ->
         val json = prefs[Keys.AGENT_LIST_JSON] ?: return@map emptyList()
         val type = object : TypeToken<List<AgentConfig>>() {}.type
-        gson.fromJson(json, type) ?: emptyList()
+        val agents = gson.fromJson<List<AgentConfig>>(json, type) ?: emptyList()
+        normalizeAgentList(agents)
     }
 
     val activeAgentIdFlow: Flow<String?> = store.data.map { it[Keys.ACTIVE_AGENT_ID] }
@@ -160,7 +164,7 @@ class AppPreferences(context: Context) {
     }
 
     suspend fun saveAgentList(agents: List<AgentConfig>) {
-        store.edit { it[Keys.AGENT_LIST_JSON] = gson.toJson(agents) }
+        store.edit { it[Keys.AGENT_LIST_JSON] = gson.toJson(normalizeAgentList(agents)) }
     }
 
     suspend fun setActiveAgentId(id: String?) {

@@ -2,6 +2,7 @@ package com.mad.screenagent.data.repository
 
 import android.app.Notification
 import android.content.Context
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
@@ -19,6 +20,12 @@ class OnDeviceModelDownloadWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
+        val wakeLock = (applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager)
+            ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "${applicationContext.packageName}:OnDeviceDownload")
+            ?.apply {
+                setReferenceCounted(false)
+                acquire(WAKE_LOCK_TIMEOUT_MS)
+            }
         val modelId = inputData.getString(KEY_MODEL_ID)
             ?: return Result.failure()
         val container = (applicationContext as? UaiApplication)?.container ?: return Result.failure()
@@ -59,6 +66,8 @@ class OnDeviceModelDownloadWorker(
             throw cancellation
         } catch (t: Throwable) {
             Result.failure()
+        } finally {
+            runCatching { wakeLock?.release() }
         }
     }
 
@@ -125,5 +134,6 @@ class OnDeviceModelDownloadWorker(
         const val KEY_DOWNLOADED_BYTES = "on_device_downloaded_bytes"
         const val KEY_TOTAL_BYTES = "on_device_total_bytes"
         private const val NOTIFICATION_ID = 41027
+        private const val WAKE_LOCK_TIMEOUT_MS = 60L * 60L * 1000L
     }
 }

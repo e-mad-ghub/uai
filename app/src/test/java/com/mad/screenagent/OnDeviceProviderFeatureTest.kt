@@ -13,8 +13,11 @@ import com.mad.screenagent.feature.agents.providerRequiresApiKey
 import com.mad.screenagent.feature.agents.providerUiInfo
 import com.mad.screenagent.feature.agents.recommendedModelChoices
 import com.mad.screenagent.shared.streaming.AiProviderFactory
+import com.mad.screenagent.shared.streaming.ChatMessage
+import com.mad.screenagent.shared.streaming.ImageAttachment
 import com.mad.screenagent.shared.streaming.OnDeviceProvider
 import com.mad.screenagent.shared.streaming.OnDeviceRuntime
+import com.mad.screenagent.shared.streaming.OnDeviceUserMessages
 import com.mad.screenagent.shared.streaming.OnDeviceValidationResult
 import com.mad.screenagent.shared.streaming.StreamChunk
 import java.io.File
@@ -89,7 +92,7 @@ class OnDeviceProviderFeatureTest {
         ).first()
 
         assertTrue(chunk is StreamChunk.Error)
-        assertTrue((chunk as StreamChunk.Error).cause.message!!.contains("not installed"))
+        assertTrue((chunk as StreamChunk.Error).cause.message!!.contains(OnDeviceUserMessages.downloadModelFirst()))
     }
 
     @Test
@@ -116,7 +119,7 @@ class OnDeviceProviderFeatureTest {
         ).first()
 
         assertTrue(chunk is StreamChunk.Error)
-        assertTrue((chunk as StreamChunk.Error).cause.message!!.contains("downloading"))
+        assertTrue((chunk as StreamChunk.Error).cause.message!!.contains(OnDeviceUserMessages.modelStillDownloading()))
     }
 
     @Test
@@ -143,7 +146,7 @@ class OnDeviceProviderFeatureTest {
         ).first()
 
         assertTrue(chunk is StreamChunk.Error)
-        assertTrue((chunk as StreamChunk.Error).cause.message!!.contains("downloading"))
+        assertTrue((chunk as StreamChunk.Error).cause.message!!.contains(OnDeviceUserMessages.modelStillDownloading()))
     }
 
     @Test
@@ -212,6 +215,46 @@ class OnDeviceProviderFeatureTest {
         assertEquals(1, runtime.validateCallCount)
     }
 
+    @Test
+    fun onDeviceProviderRejectsImagesForTextOnlyModels() = runBlocking {
+        val modelFile = tempModelFile()
+        val runtime = FakeOnDeviceRuntime()
+        val provider = OnDeviceProvider(
+            FakeOnDeviceModelSource(
+                installed = InstalledOnDeviceModel(
+                    modelId = "gemma-3-1b-it-gguf",
+                    localPath = modelFile.absolutePath,
+                    downloadState = OnDeviceDownloadState.READY,
+                    installedAt = 123L,
+                    validatedRuntimeProfileId = "llama.android-af76639-arm64-v8a-kleidiai-openmp"
+                )
+            ),
+            runtime = runtime
+        )
+
+        val chunk = provider.streamResponse(
+            messages = listOf(
+                ChatMessage(
+                    role = "user",
+                    content = "What is in this image?",
+                    images = listOf(ImageAttachment(base64 = "dGVzdA=="))
+                )
+            ),
+            config = AgentConfig(
+                provider = AiProviderType.ON_DEVICE,
+                model = "gemma-3-1b-it-gguf",
+                onDevice = OnDeviceProviderConfig(
+                    selectedModelId = "gemma-3-1b-it-gguf",
+                    selectedModelSupportsVision = false
+                )
+            )
+        ).first()
+
+        assertTrue(chunk is StreamChunk.Error)
+        assertTrue((chunk as StreamChunk.Error).cause.message!!.contains("can't analyze images"))
+        assertEquals(0, runtime.validateCallCount)
+    }
+
     private class FakeOnDeviceModelSource(
         private val installed: InstalledOnDeviceModel? = null
     ) : OnDeviceModelSource {
@@ -225,7 +268,10 @@ class OnDeviceProviderFeatureTest {
         override val runtimeProfileId: String = "llama.android-af76639-arm64-v8a-kleidiai-openmp"
         var validateCallCount: Int = 0
 
-        override suspend fun validateModel(modelPath: String): OnDeviceValidationResult {
+        override suspend fun validateModel(
+            modelPath: String,
+            visionProjectorPath: String?
+        ): OnDeviceValidationResult {
             validateCallCount += 1
             return validationResult
         }
@@ -233,7 +279,8 @@ class OnDeviceProviderFeatureTest {
         override fun streamResponse(
             messages: List<com.mad.screenagent.shared.streaming.ChatMessage>,
             config: AgentConfig,
-            modelPath: String
+            modelPath: String,
+            visionProjectorPath: String?
         ) = flow {
             emit(StreamChunk.Token("ok"))
             emit(StreamChunk.Done)

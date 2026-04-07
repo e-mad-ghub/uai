@@ -18,7 +18,7 @@ interface InferenceEngine {
      *
      * @throws UnsupportedArchitectureException if model architecture not supported
      */
-    suspend fun loadModel(pathToModel: String)
+    suspend fun loadModel(pathToModel: String, visionProjectorPath: String? = null)
 
     /**
      * Sends a system prompt to the loaded model
@@ -29,6 +29,15 @@ interface InferenceEngine {
      * Sends a user prompt to the loaded model and returns a Flow of generated tokens.
      */
     fun sendUserPrompt(message: String, predictLength: Int = DEFAULT_PREDICT_LENGTH): Flow<String>
+
+    /**
+     * Sends a user prompt with attached image files to the loaded multimodal model.
+     */
+    fun sendUserPromptWithImages(
+        message: String,
+        imagePaths: List<String>,
+        predictLength: Int = DEFAULT_PREDICT_LENGTH
+    ): Flow<String>
 
     /**
      * Runs a benchmark with the specified parameters.

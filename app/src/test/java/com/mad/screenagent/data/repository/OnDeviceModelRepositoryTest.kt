@@ -244,12 +244,16 @@ class OnDeviceModelRepositoryTest {
     ) : OnDeviceRuntime {
         override val runtimeProfileId: String = "llama.android-af76639-arm64-v8a-kleidiai-openmp"
 
-        override suspend fun validateModel(modelPath: String): OnDeviceValidationResult = validationResult
+        override suspend fun validateModel(
+            modelPath: String,
+            visionProjectorPath: String?
+        ): OnDeviceValidationResult = validationResult
 
         override fun streamResponse(
             messages: List<ChatMessage>,
             config: AgentConfig,
-            modelPath: String
+            modelPath: String,
+            visionProjectorPath: String?
         ) = flow<StreamChunk> { error("Not used in repository tests") }
     }
 }

@@ -38,7 +38,10 @@ data class AgentConfig(
     val supportsVision: Boolean get() = when {
         model == MONEY_SAVER_MODEL -> true // resolved model will be determined at runtime
         else -> when (provider) {
-        AiProviderType.ON_DEVICE -> false
+        AiProviderType.ON_DEVICE -> onDevice.selectedModelId.isNotBlank() && (
+            onDevice.selectedModelSupportsVision ||
+                looksLikeVisionCapableOnDeviceModel(onDevice.selectedModelId)
+        )
         AiProviderType.OPENAI -> {
             val m = model.lowercase()
             m.contains("gpt-5") ||

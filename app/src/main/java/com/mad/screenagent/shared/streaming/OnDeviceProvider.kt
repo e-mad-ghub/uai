@@ -3,6 +3,7 @@ package com.mad.screenagent.shared.streaming
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.OnDeviceFailureKind
 import com.mad.screenagent.data.model.OnDeviceDownloadState
+import com.mad.screenagent.data.model.looksLikeVisionCapableOnDeviceModel
 import com.mad.screenagent.data.repository.OnDeviceModelSource
 import java.io.File
 import kotlinx.coroutines.flow.Flow
@@ -48,7 +49,26 @@ class OnDeviceProvider(
                 )
                 return@flow
             }
-            if (!File(installed.localPath).exists() || File(installed.localPath).length() == 0L) {
+            val modelFile = File(installed.localPath)
+            if (!modelFile.exists() || modelFile.length() == 0L) {
+                val reason = OnDeviceUserMessages.missingModelFile()
+                modelRepository.markModelUnavailable(modelId, reason, OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE)
+                emit(StreamChunk.Error(IllegalStateException(reason)))
+                return@flow
+            }
+            val visionProjectorPath = installed.visionProjectorPath?.takeIf { it.isNotBlank() }
+            val runtimeSupportsVision = config.onDevice.selectedModelSupportsVision ||
+                visionProjectorPath != null ||
+                looksLikeVisionCapableOnDeviceModel(modelId)
+            if (messages.any { it.images.isNotEmpty() } && !runtimeSupportsVision) {
+                emit(
+                    StreamChunk.Error(
+                        IllegalStateException(OnDeviceUserMessages.imageAttachmentsRequireVisionModel())
+                    )
+                )
+                return@flow
+            }
+            if (runtimeSupportsVision && visionProjectorPath == null) {
                 val reason = OnDeviceUserMessages.missingModelFile()
                 modelRepository.markModelUnavailable(modelId, reason, OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE)
                 emit(StreamChunk.Error(IllegalStateException(reason)))
@@ -57,7 +77,10 @@ class OnDeviceProvider(
             if (installed.validatedRuntimeProfileId != null &&
                 installed.validatedRuntimeProfileId != runtime.runtimeProfileId
             ) {
-                val runtimeValidation = runtime.validateModel(installed.localPath)
+                val runtimeValidation = runtime.validateModel(
+                    modelPath = installed.localPath,
+                    visionProjectorPath = visionProjectorPath
+                )
                 if (!runtimeValidation.isSuccess) {
                     val reason = runtimeValidation.message ?: OnDeviceUserMessages.validationMessage(
                         runtimeValidation.failureKind
@@ -78,7 +101,8 @@ class OnDeviceProvider(
                     model = modelId,
                     onDevice = config.onDevice.copy(selectedModelId = modelId)
                 ),
-                modelPath = installed.localPath
+                modelPath = installed.localPath,
+                visionProjectorPath = visionProjectorPath
             ).collect { emit(it) }
         }.flowOn(Dispatchers.IO)
 }

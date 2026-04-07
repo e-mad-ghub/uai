@@ -3,6 +3,7 @@ package com.mad.screenagent
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AiProviderType
 import com.mad.screenagent.data.model.MONEY_SAVER_MODEL
+import com.mad.screenagent.data.model.OnDeviceProviderConfig
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -69,6 +70,36 @@ class AgentConfigVisionTest {
     fun openAi_gpt4_baseWithoutTurbo_isNotVisionCapable() {
         // gpt-4 base (not turbo / not 4o / not 4.1) has no vision in this mapping
         assertFalse(agent(AiProviderType.OPENAI, "gpt-4").supportsVision)
+    }
+
+    // ── On-Device ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun onDevice_textModel_isNotVisionCapable() {
+        assertFalse(
+            AgentConfig(
+                provider = AiProviderType.ON_DEVICE,
+                model = "gemma-3-1b-it-gguf",
+                onDevice = OnDeviceProviderConfig(
+                    selectedModelId = "gemma-3-1b-it-gguf",
+                    selectedModelSupportsVision = false
+                )
+            ).supportsVision
+        )
+    }
+
+    @Test
+    fun onDevice_visionModel_isVisionCapable() {
+        assertTrue(
+            AgentConfig(
+                provider = AiProviderType.ON_DEVICE,
+                model = "gemma-3-4b-it-gguf",
+                onDevice = OnDeviceProviderConfig(
+                    selectedModelId = "gemma-3-4b-it-gguf",
+                    selectedModelSupportsVision = true
+                )
+            ).supportsVision
+        )
     }
 
     // ── Anthropic ─────────────────────────────────────────────────────────────────

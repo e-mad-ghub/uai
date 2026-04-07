@@ -1,11 +1,16 @@
 package com.mad.screenagent.shared.streaming
 
 import com.mad.screenagent.data.model.OnDeviceFailureKind
+import java.io.EOFException
 import java.io.FileNotFoundException
 import java.net.ConnectException
+import java.net.ProtocolException
+import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.net.UnknownServiceException
 import javax.net.ssl.SSLException
+import javax.net.ssl.SSLHandshakeException
 
 object OnDeviceUserMessages {
     fun chooseModel() = "Choose an On-Device model before continuing."
@@ -17,6 +22,9 @@ object OnDeviceUserMessages {
     fun modelNotReady() = "This model is not ready yet."
 
     fun missingModelFile() = "The downloaded model file is missing. Download it again."
+
+    fun imageAttachmentsRequireVisionModel() =
+        "The selected On-Device model can't analyze images. Choose a vision-capable local model."
 
     fun runtimeUnavailable() = "The on-device model couldn't respond right now."
 
@@ -74,9 +82,20 @@ private fun Throwable?.isNoNetworkIssue(): Boolean {
     return root is UnknownHostException ||
         root is SocketTimeoutException ||
         root is ConnectException ||
+        root is SocketException ||
+        root is EOFException ||
+        root is ProtocolException ||
+        root is SSLHandshakeException ||
+        root is UnknownServiceException ||
         root is SSLException ||
         message.contains("unable to resolve host", ignoreCase = true) ||
         message.contains("failed to connect", ignoreCase = true) ||
+        message.contains("connection refused", ignoreCase = true) ||
+        message.contains("connection reset", ignoreCase = true) ||
+        message.contains("broken pipe", ignoreCase = true) ||
+        message.contains("unexpected end of stream", ignoreCase = true) ||
+        message.contains("ssl", ignoreCase = true) ||
+        message.contains("handshake", ignoreCase = true) ||
         message.contains("timeout", ignoreCase = true) ||
         message.contains("network is unreachable", ignoreCase = true)
 }

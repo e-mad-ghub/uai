@@ -3,12 +3,14 @@ package com.mad.screenagent.data.repository
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.arm.aichat.gguf.GgufMetadataReader
 import com.arm.aichat.gguf.InvalidFileFormatException
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import com.mad.screenagent.data.model.InstalledOnDeviceModel
 import com.mad.screenagent.data.model.OnDeviceFailureKind
 import com.mad.screenagent.data.model.OnDeviceDownloadState
@@ -25,6 +27,7 @@ import com.mad.screenagent.shared.streaming.OnDeviceUserMessages
 import com.mad.screenagent.shared.streaming.OnDeviceValidationResult
 import java.io.File
 import java.io.IOException
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.CancellationException
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -52,10 +55,13 @@ data class OnDeviceCatalogRefreshResult(
     val failureMessage: String? = null
 )
 
-private const val ON_DEVICE_CATALOG_MANIFEST_URL =
+private const val ON_DEVICE_CATALOG_MANIFEST_API_URL =
+    "https://api.github.com/repos/e-mad-ghub/projects-assets/contents/ScreenAgent/model_catalog_manifest.json?ref=master"
+private const val ON_DEVICE_CATALOG_MANIFEST_RAW_URL =
     "https://raw.githubusercontent.com/e-mad-ghub/projects-assets/master/ScreenAgent/model_catalog_manifest.json"
 private const val ON_DEVICE_CATALOG_STALE_MS = 24L * 60L * 60L * 1000L
 private const val ON_DEVICE_BUNDLED_CATALOG_ASSET = "on_device_catalog_manifest.json"
+private const val TAG = "OnDeviceCatalog"
 
 class OnDeviceModelRepository(
     private val prefs: AppPreferences,
@@ -118,6 +124,7 @@ class OnDeviceModelRepository(
         val current = ensureDefaultCatalog()
         val now = System.currentTimeMillis()
         if (!force && current.fetchedAt > 0L && now - current.fetchedAt < ON_DEVICE_CATALOG_STALE_MS) {
+            Log.i(TAG, "refresh skipped; using cached catalog fetchedAt=${current.fetchedAt}")
             return OnDeviceCatalogRefreshResult(
                 catalog = current,
                 usedCachedCatalog = false
@@ -125,9 +132,11 @@ class OnDeviceModelRepository(
         }
 
         val importedEntries = current.models.filter { it.isImported }
+        Log.i(TAG, "refresh starting; force=$force imported=${importedEntries.size} current=${current.models.size}")
         val remoteResult = try {
             Pair(fetchRemoteCatalog(now), null)
         } catch (e: Exception) {
+            Log.w(TAG, "refresh failed; using cached catalog", e)
             Pair(current, OnDeviceUserMessages.refreshCatalogFailure(e))
         }
         val merged = normalizeOnDeviceCatalog(
@@ -141,6 +150,10 @@ class OnDeviceModelRepository(
         } else if (merged.fetchedAt != current.fetchedAt) {
             prefs.saveOnDeviceModelCatalog(merged)
         }
+        Log.i(
+            TAG,
+            "refresh finished; usedCached=${remoteResult.second != null} models=${merged.models.size} fetchedAt=${merged.fetchedAt}"
+        )
         return OnDeviceCatalogRefreshResult(
             catalog = merged,
             usedCachedCatalog = remoteResult.second != null,
@@ -149,7 +162,43 @@ class OnDeviceModelRepository(
     }
 
     private suspend fun fetchRemoteCatalog(fetchedAt: Long): OnDeviceModelCatalog = withContext(Dispatchers.IO) {
-        val requestUrl = ON_DEVICE_CATALOG_MANIFEST_URL
+        fetchRemoteCatalogFromGitHubApi(fetchedAt)
+            ?: fetchRemoteCatalogFromRaw(fetchedAt)
+    }
+
+    private fun fetchRemoteCatalogFromGitHubApi(fetchedAt: Long): OnDeviceModelCatalog? {
+        Log.i(TAG, "fetching GitHub contents API manifest")
+        val request = Request.Builder()
+            .url(ON_DEVICE_CATALOG_MANIFEST_API_URL)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("Cache-Control", "no-cache")
+            .header("Pragma", "no-cache")
+            .build()
+        return client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return null
+            val body = response.body?.string().orEmpty()
+            if (body.isBlank()) return null
+            val decoded = runCatching {
+                val obj = JsonParser.parseString(body).asJsonObject
+                val encoding = obj.getAsJsonPrimitive("encoding")?.asString?.trim()?.lowercase()
+                if (encoding != "base64") return null
+                val compactContent = obj.getAsJsonPrimitive("content")?.asString.orEmpty()
+                    .replace("\n", "")
+                    .replace("\r", "")
+                    .trim()
+                if (compactContent.isBlank()) return null
+                String(Base64.getDecoder().decode(compactContent), Charsets.UTF_8)
+            }.getOrNull()
+            if (decoded.isNullOrBlank()) return null
+            Log.i(TAG, "GitHub contents API manifest decoded successfully")
+            parseRemoteCatalog(decoded, fetchedAt)
+        }
+    }
+
+    private fun fetchRemoteCatalogFromRaw(fetchedAt: Long): OnDeviceModelCatalog {
+        Log.i(TAG, "fetching raw manifest fallback")
+        val requestUrl = ON_DEVICE_CATALOG_MANIFEST_RAW_URL
             .toHttpUrl()
             .newBuilder()
             .addQueryParameter("t", fetchedAt.toString())
@@ -167,23 +216,40 @@ class OnDeviceModelRepository(
             if (body.isBlank()) {
                 throw IOException("Received an empty on-device catalog manifest.")
             }
-            val parsed = gson.fromJson(body, OnDeviceModelCatalog::class.java)
-                ?: throw IOException("Unable to parse the on-device catalog manifest.")
-            val sanitized = parsed.models
-                .filter { !it.isImported }
-                .filter { it.downloadUrl.isNotBlank() && it.fileName.isNotBlank() }
-                .map { entry ->
-                    entry.copy(
-                        sourceTypeKey = OnDeviceModelSourceType.CATALOG.name,
-                        accessStateKey = entry.accessStateKey ?: OnDeviceModelAccessState.PUBLIC.name,
-                        runtimeProfileId = entry.runtimeProfileId ?: runtime.runtimeProfileId
-                    )
-                }
-            OnDeviceModelCatalog(
-                fetchedAt = fetchedAt,
-                models = sanitized
-            )
+            Log.i(TAG, "raw manifest fetched successfully")
+            return parseRemoteCatalog(body, fetchedAt)
         }
+    }
+
+    private fun parseRemoteCatalog(body: String, fetchedAt: Long): OnDeviceModelCatalog {
+        val parsed = gson.fromJson(body, OnDeviceModelCatalog::class.java)
+            ?: throw IOException("Unable to parse the on-device catalog manifest.")
+        val sanitized = parsed.models
+            .filter { !it.isImported }
+            .filter { it.downloadUrl.isNotBlank() && it.fileName.isNotBlank() }
+            .map { entry ->
+                OnDeviceModelCatalogEntry(
+                    id = entry.id.orEmpty(),
+                    displayName = entry.displayName.orEmpty().ifBlank { entry.id.orEmpty() },
+                    description = entry.description.orEmpty(),
+                    downloadUrl = entry.downloadUrl.orEmpty(),
+                    fileName = entry.fileName.orEmpty(),
+                    visionProjectorDownloadUrl = entry.visionProjectorDownloadUrl.orEmpty(),
+                    visionProjectorFileName = entry.visionProjectorFileName.orEmpty(),
+                    capabilityKey = entry.capabilityKey?.takeIf { it.isNotBlank() },
+                    supportsDocuments = entry.supportsDocuments,
+                    estimatedSizeMb = entry.estimatedSizeMb,
+                    recommendedRank = entry.recommendedRank,
+                    accessStateKey = entry.accessStateKey ?: OnDeviceModelAccessState.PUBLIC.name,
+                    sourceTypeKey = OnDeviceModelSourceType.CATALOG.name,
+                    runtimeProfileId = entry.runtimeProfileId ?: runtime.runtimeProfileId,
+                    curatedVerified = entry.curatedVerified
+                )
+            }
+        return OnDeviceModelCatalog(
+            fetchedAt = fetchedAt,
+            models = sanitized
+        )
     }
 
     private suspend fun loadBundledCatalogBootstrap(): OnDeviceModelCatalog = withContext(Dispatchers.IO) {
@@ -234,6 +300,7 @@ class OnDeviceModelRepository(
     suspend fun saveInstalledModel(
         modelId: String,
         localPath: String,
+        visionProjectorPath: String? = null,
         downloadState: OnDeviceDownloadState = OnDeviceDownloadState.READY,
         downloadedBytes: Long = 0L,
         totalBytes: Long = 0L,
@@ -247,6 +314,7 @@ class OnDeviceModelRepository(
         val updated = InstalledOnDeviceModel(
             modelId = modelId,
             localPath = localPath,
+            visionProjectorPath = visionProjectorPath,
             downloadState = downloadState,
             installedAt = existing?.installedAt ?: System.currentTimeMillis(),
             downloadedBytes = downloadedBytes,
@@ -331,12 +399,14 @@ class OnDeviceModelRepository(
     private suspend fun updateInstalledModelProgress(
         modelId: String,
         localPath: String,
+        visionProjectorPath: String? = null,
         downloadState: OnDeviceDownloadState,
         downloadedBytes: Long,
         totalBytes: Long
     ): InstalledOnDeviceModel = saveInstalledModel(
         modelId = modelId,
         localPath = localPath,
+        visionProjectorPath = visionProjectorPath,
         downloadState = downloadState,
         downloadedBytes = downloadedBytes,
         totalBytes = totalBytes
@@ -387,14 +457,19 @@ class OnDeviceModelRepository(
 
         val targetFile = resolveTargetFile(catalogEntry)
         val downloadFile = File(targetFile.parentFile, "${targetFile.name}.download")
+        val visionTargetFile = resolveVisionProjectorFile(catalogEntry)
+        val visionDownloadFile = visionTargetFile?.let { File(it.parentFile, "${it.name}.download") }
         targetFile.parentFile?.mkdirs()
 
-        if (shouldDiscardExistingArtifact(existingInstall, targetFile, downloadFile)) {
+        if (shouldDiscardExistingArtifact(existingInstall, targetFile, downloadFile, visionTargetFile, visionDownloadFile)) {
             downloadFile.delete()
+            visionDownloadFile?.delete()
             targetFile.delete()
+            visionTargetFile?.delete()
             saveInstalledModel(
                 modelId = modelId,
                 localPath = targetFile.absolutePath,
+                visionProjectorPath = visionTargetFile?.absolutePath,
                 downloadState = OnDeviceDownloadState.NOT_DOWNLOADED,
                 downloadedBytes = 0L,
                 totalBytes = 0L,
@@ -407,6 +482,7 @@ class OnDeviceModelRepository(
         saveInstalledModel(
             modelId = modelId,
             localPath = targetFile.absolutePath,
+            visionProjectorPath = visionTargetFile?.absolutePath,
             downloadState = OnDeviceDownloadState.DOWNLOADING
         )
         onProgress(
@@ -419,13 +495,17 @@ class OnDeviceModelRepository(
         var downloadedBytes = 0L
         var totalBytes = 0L
         try {
-            if (existingInstall?.downloadState == OnDeviceDownloadState.READY && targetFile.exists() && targetFile.length() > 0L) {
+            val readyWithCompanion = existingInstall?.downloadState == OnDeviceDownloadState.READY &&
+                targetFile.exists() && targetFile.length() > 0L &&
+                (!catalogEntry.supportsVision || (visionTargetFile != null && visionTargetFile.exists() && visionTargetFile.length() > 0L))
+            if (readyWithCompanion) {
                 totalBytes = targetFile.length()
                 downloadedBytes = totalBytes
                 saveDownloadState(OnDeviceDownloadState.VALIDATING)
                 saveInstalledModel(
                     modelId = modelId,
                     localPath = targetFile.absolutePath,
+                    visionProjectorPath = visionTargetFile?.absolutePath,
                     downloadState = OnDeviceDownloadState.VALIDATING,
                     downloadedBytes = downloadedBytes,
                     totalBytes = totalBytes
@@ -436,7 +516,7 @@ class OnDeviceModelRepository(
                     totalBytes,
                     targetFile.absolutePath
                 )
-                val validationResult = validateDownloadedModel(targetFile)
+                val validationResult = validateDownloadedModel(targetFile, visionTargetFile)
                 if (!validationResult.isSuccess) {
                     throw ModelValidationException(
                         message = validationResult.message ?: OnDeviceUserMessages.runtimeUnavailable(),
@@ -446,6 +526,7 @@ class OnDeviceModelRepository(
                 val readyRecord = saveInstalledModel(
                     modelId = modelId,
                     localPath = targetFile.absolutePath,
+                    visionProjectorPath = visionTargetFile?.absolutePath,
                     downloadState = OnDeviceDownloadState.READY,
                     downloadedBytes = downloadedBytes,
                     totalBytes = totalBytes,
@@ -461,6 +542,29 @@ class OnDeviceModelRepository(
                     targetFile.absolutePath
                 )
                 return@withContext readyRecord
+            }
+
+            suspend fun downloadUrlToFile(url: String, file: File) {
+                val request = Request.Builder().url(url).build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        if (response.code == 401 || response.code == 403) {
+                            downgradeCatalogEntryAccess(modelId, OnDeviceModelAccessState.GATED)
+                        }
+                        throw IOException("Download failed: HTTP ${response.code}")
+                    }
+                    val body = response.body ?: throw IOException("Download failed: empty response")
+                    val buffer = ByteArray(DEFAULT_DOWNLOAD_BUFFER_SIZE)
+                    file.outputStream().use { output ->
+                        body.byteStream().use { input ->
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read <= 0) break
+                                output.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                }
             }
 
             val request = Request.Builder().url(downloadUrl).build()
@@ -490,6 +594,7 @@ class OnDeviceModelRepository(
                                 updateInstalledModelProgress(
                                     modelId = modelId,
                                     localPath = targetFile.absolutePath,
+                                    visionProjectorPath = visionTargetFile?.absolutePath,
                                     downloadState = OnDeviceDownloadState.DOWNLOADING,
                                     downloadedBytes = downloadedBytes,
                                     totalBytes = totalBytes
@@ -514,10 +619,27 @@ class OnDeviceModelRepository(
                 }
             }
 
+            if (catalogEntry.supportsVision) {
+                val companionUrl = catalogEntry.visionProjectorDownloadUrl.takeIf { it.isNotBlank() }
+                    ?: throw IOException("This model is missing its vision support file.")
+                val companionTarget = visionTargetFile
+                    ?: throw IOException("This model is missing its vision support file.")
+                val companionDownload = visionDownloadFile
+                    ?: throw IOException("This model is missing its vision support file.")
+
+                downloadUrlToFile(companionUrl, companionDownload)
+                if (companionTarget.exists()) companionTarget.delete()
+                if (!companionDownload.renameTo(companionTarget)) {
+                    companionDownload.copyTo(companionTarget, overwrite = true)
+                    companionDownload.delete()
+                }
+            }
+
             saveDownloadState(OnDeviceDownloadState.VALIDATING)
             saveInstalledModel(
                 modelId = modelId,
                 localPath = targetFile.absolutePath,
+                visionProjectorPath = visionTargetFile?.absolutePath,
                 downloadState = OnDeviceDownloadState.VALIDATING,
                 downloadedBytes = targetFile.length(),
                 totalBytes = targetFile.length()
@@ -529,11 +651,12 @@ class OnDeviceModelRepository(
                 targetFile.absolutePath
             )
 
-            val validationResult = validateDownloadedModel(targetFile)
+            val validationResult = validateDownloadedModel(targetFile, visionTargetFile)
             if (!validationResult.isSuccess) {
                 saveInstalledModel(
                     modelId = modelId,
                     localPath = targetFile.absolutePath,
+                    visionProjectorPath = visionTargetFile?.absolutePath,
                     downloadState = OnDeviceDownloadState.FAILED,
                     downloadedBytes = targetFile.length(),
                     totalBytes = targetFile.length(),
@@ -551,6 +674,7 @@ class OnDeviceModelRepository(
             val readyRecord = saveInstalledModel(
                 modelId = modelId,
                 localPath = targetFile.absolutePath,
+                visionProjectorPath = visionTargetFile?.absolutePath,
                 downloadState = OnDeviceDownloadState.READY,
                 downloadedBytes = targetFile.length(),
                 totalBytes = targetFile.length(),
@@ -568,7 +692,9 @@ class OnDeviceModelRepository(
             readyRecord
         } catch (cancellation: CancellationException) {
             downloadFile.delete()
+            visionDownloadFile?.delete()
             targetFile.delete()
+            visionTargetFile?.delete()
             markDownloadCancelled(
                 modelId = modelId,
                 reason = cancellation.message ?: "Download cancelled",
@@ -579,10 +705,13 @@ class OnDeviceModelRepository(
             throw cancellation
         } catch (t: Throwable) {
             downloadFile.delete()
+            visionDownloadFile?.delete()
             targetFile.delete()
+            visionTargetFile?.delete()
             saveInstalledModel(
                 modelId = modelId,
                 localPath = targetFile.absolutePath,
+                visionProjectorPath = visionTargetFile?.absolutePath,
                 downloadState = OnDeviceDownloadState.FAILED,
                 downloadedBytes = downloadedBytes,
                 totalBytes = totalBytes,
@@ -610,6 +739,7 @@ class OnDeviceModelRepository(
         val current = installedModelsFlow.first().toMutableList()
         val record = current.firstOrNull { it.modelId == modelId }
         record?.let { File(it.localPath).delete() }
+        record?.visionProjectorPath?.takeIf { it.isNotBlank() }?.let { File(it).delete() }
         current.removeAll { it.modelId == modelId }
         prefs.saveInstalledOnDeviceModels(current)
         val catalog = catalogFlow.first()
@@ -645,7 +775,10 @@ class OnDeviceModelRepository(
         prefs.saveOnDeviceModelCatalog(updated)
     }
 
-    private suspend fun validateDownloadedModel(file: File): OnDeviceValidationResult {
+    private suspend fun validateDownloadedModel(
+        file: File,
+        visionProjectorFile: File? = null
+    ): OnDeviceValidationResult {
         if (!file.exists() || file.length() == 0L) {
             return OnDeviceValidationResult.failure(
                 OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
@@ -658,6 +791,12 @@ class OnDeviceModelRepository(
                 "This file isn't a supported model. Import a GGUF model file."
             )
         }
+        if (visionProjectorFile != null && (!visionProjectorFile.exists() || visionProjectorFile.length() == 0L)) {
+            return OnDeviceValidationResult.failure(
+                OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
+                "The local vision support file is missing. Download it again."
+            )
+        }
         return try {
             val valid = ggufMetadataReader.ensureSourceFileFormat(file)
             if (!valid) {
@@ -666,7 +805,10 @@ class OnDeviceModelRepository(
                     OnDeviceUserMessages.validationMessage(OnDeviceFailureKind.INVALID_GGUF)
                 )
             } else {
-                runtime.validateModel(file.absolutePath)
+                runtime.validateModel(
+                    modelPath = file.absolutePath,
+                    visionProjectorPath = visionProjectorFile?.absolutePath
+                )
             }
         } catch (_: InvalidFileFormatException) {
             OnDeviceValidationResult.failure(
@@ -684,13 +826,19 @@ class OnDeviceModelRepository(
     internal fun shouldDiscardExistingArtifact(
         existingInstall: InstalledOnDeviceModel?,
         targetFile: File,
-        downloadFile: File
+        downloadFile: File,
+        visionTargetFile: File? = null,
+        visionDownloadFile: File? = null
     ): Boolean {
         if (downloadFile.exists()) return true
+        if (visionDownloadFile?.exists() == true) return true
         if (!targetFile.exists()) return false
         if (targetFile.length() == 0L) return true
+        if (visionTargetFile != null && !visionTargetFile.exists()) return true
+        if (visionTargetFile != null && visionTargetFile.length() == 0L) return true
         if (existingInstall == null) return true
         if (existingInstall.localPath != targetFile.absolutePath) return true
+        if ((existingInstall.visionProjectorPath ?: "") != (visionTargetFile?.absolutePath ?: "")) return true
         if (existingInstall.downloadState != OnDeviceDownloadState.READY) return true
         if (existingInstall.totalBytes > 0L && targetFile.length() != existingInstall.totalBytes) return true
         if (existingInstall.downloadedBytes > 0L && targetFile.length() != existingInstall.downloadedBytes) return true
@@ -701,6 +849,12 @@ class OnDeviceModelRepository(
         val baseDir = File(context.filesDir, "on-device/${entry.id}")
         val fileName = entry.fileName.ifBlank { "${entry.id}.gguf" }
         return File(baseDir, fileName)
+    }
+
+    private fun resolveVisionProjectorFile(entry: OnDeviceModelCatalogEntry): File? {
+        if (!entry.hasVisionProjector) return null
+        val baseDir = File(context.filesDir, "on-device/${entry.id}")
+        return File(baseDir, entry.visionProjectorFileName)
     }
 
     private suspend fun upsertCatalogEntry(entry: OnDeviceModelCatalogEntry) {
@@ -741,6 +895,7 @@ class OnDeviceModelRepository(
         val updated = InstalledOnDeviceModel(
             modelId = modelId,
             localPath = localPath,
+            visionProjectorPath = current.getOrNull(idx)?.visionProjectorPath,
             downloadState = OnDeviceDownloadState.CANCELLED,
             installedAt = current.getOrNull(idx)?.installedAt ?: System.currentTimeMillis(),
             downloadedBytes = downloadedBytes,

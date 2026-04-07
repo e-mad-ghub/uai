@@ -2169,8 +2169,8 @@ class FloatingBubbleService : Service() {
 
                 // If agent doesn't support vision, insert a capability notice instead of calling API
                 if (imageList.isNotEmpty() && !agent.canHandleImageRequests()) {
-                    val notice = "I don't support image analysis with \"${agent.model}\". " +
-                            "Please switch to a vision-capable model in agent settings."
+                    val notice =
+                        com.mad.screenagent.shared.streaming.OnDeviceUserMessages.imageAttachmentsRequireVisionModel()
                     accumulated = notice  // must be non-blank so finally doesn't delete the message
                     val idx = chatMessages.indexOfFirst { it.id == messageId }
                     if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = notice, isStreaming = false)

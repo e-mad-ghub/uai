@@ -24,10 +24,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.TextSnippet
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.material3.Switch
@@ -45,6 +48,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.res.stringResource
@@ -300,12 +304,7 @@ fun AgentEditScreen(
                         downloadState = onDeviceDownloadState,
                         catalogUiState = onDeviceCatalogUiState,
                         onModelSelect = { modelId ->
-                            viewModel.update {
-                                copy(
-                                    model = modelId,
-                                    onDevice = onDevice.copy(selectedModelId = modelId)
-                                )
-                            }
+                            viewModel.selectOnDeviceModel(modelId)
                         },
                         onDownload = viewModel::downloadOnDeviceModel,
                         onImport = { ggufImportLauncher.launch(arrayOf("*/*")) },
@@ -1544,6 +1543,7 @@ private fun OnDeviceModelSection(
                             Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .heightIn(min = 84.dp)
                                     .alpha(if (isGreyed) 0.55f else 1f),
                                 shape = MaterialTheme.shapes.medium,
                                 color = MaterialTheme.colorScheme.surfaceVariant
@@ -1551,7 +1551,7 @@ private fun OnDeviceModelSection(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.Top
                                 ) {
@@ -1563,7 +1563,37 @@ private fun OnDeviceModelSection(
                                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text(entry.userFacingDisplayName(), style = MaterialTheme.typography.bodyMedium)
+                                            Text(
+                                                entry.userFacingDisplayName(),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            capabilityIcon(
+                                                icon = Icons.Filled.TextSnippet,
+                                                contentDescription = "Text",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            capabilityIcon(
+                                                icon = Icons.Filled.Description,
+                                                contentDescription = "Documents",
+                                                tint = MaterialTheme.colorScheme.secondary
+                                            )
+                                            if (entry.supportsVision) {
+                                                Spacer(Modifier.width(6.dp))
+                                                capabilityIcon(
+                                                    icon = Icons.Filled.Image,
+                                                    contentDescription = "Vision",
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
                                         }
                                         Text(
                                             text = listOfNotNull(
@@ -1572,7 +1602,7 @@ private fun OnDeviceModelSection(
                                                 progressText,
                                                 record.failureReasonSummary()
                                             ).joinToString(" · "),
-                                            style = MaterialTheme.typography.bodySmall,
+                                            style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
@@ -1799,6 +1829,20 @@ private fun OnDeviceModelCatalogEntry.estimatedSizeText(): String? {
     if (estimatedSizeMb <= 0) return null
     val approxBytes = estimatedSizeMb.toLong() * 1024L * 1024L
     return "~${approxBytes.humanReadableBytes()}"
+}
+
+@Composable
+private fun capabilityIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    tint: androidx.compose.ui.graphics.Color
+) {
+    Icon(
+        imageVector = icon,
+        contentDescription = contentDescription,
+        modifier = Modifier.size(12.dp),
+        tint = tint
+    )
 }
 
 @Composable

@@ -16,6 +16,7 @@ object AiProviderFactory {
         onDeviceModelRepository: OnDeviceModelSource? = null,
         onDeviceRuntime: OnDeviceRuntime? = null
     ): AiProvider = when (config.provider) {
+        AiProviderType.ON_DEVICE_GEMMA3,
         AiProviderType.ON_DEVICE -> OnDeviceProvider(
             modelRepository = onDeviceModelRepository ?: error("On-Device model repository is required"),
             runtime = onDeviceRuntime ?: error("On-Device runtime is required")

@@ -1,7 +1,9 @@
 #include <android/log.h>
 #include <jni.h>
+#include <cstdlib>
 #include <iomanip>
 #include <cmath>
+#include <sstream>
 #include <string>
 #include <unistd.h>
 #include <sampling.h>
@@ -44,28 +46,39 @@ static common_chat_templates_ptr          g_chat_templates;
 static common_sampler                   * g_sampler;
 static mtmd_context                     * g_mctx;
 
+static std::string get_backend();
+static llama_model * load_model_with_backend_preference(const char * model_path, bool prefer_gpu, bool * used_gpu);
+static mtmd_context * init_mtmd_context_with_gpu_fallback(
+        const char * vision_projector_path,
+        llama_model * model,
+        bool * used_gpu);
+
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {
     // Set llama log handler to Android
     llama_log_set(aichat_android_log_callback, nullptr);
 
-    // Loading all CPU backend variants
     const auto *path_to_backend = env->GetStringUTFChars(nativeLibDir, 0);
-    LOGi("Loading backends from %s", path_to_backend);
+    LOGi("Loading ggml backends from %s", path_to_backend);
+
+    // Vulkan is currently unstable on this Android device/runtime path.
+    // Keep dynamic CPU backend loading enabled, but suppress Vulkan before any
+    // backend libraries are registered.
+    setenv("GGML_DISABLE_VULKAN", "1", 1);
+    LOGw("Vulkan backend hard-disabled for the live runtime; loading CPU backends only");
     ggml_backend_load_all_from_path(path_to_backend);
     env->ReleaseStringUTFChars(nativeLibDir, path_to_backend);
 
     // Initialize backends
     llama_backend_init();
     LOGi("Backend initiated; Log handler set.");
+    LOGi("Loaded backends: %s", get_backend().c_str());
 }
 
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path, jstring jvision_projector_path) {
-    llama_model_params model_params = llama_model_default_params();
-
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
     LOGd("%s: Loading model from: \n%s\n", __func__, model_path);
 
@@ -74,32 +87,37 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstr
         g_mctx = nullptr;
     }
 
-    auto *model = llama_model_load_from_file(model_path, model_params);
+    const bool prefer_gpu_for_model = (jvision_projector_path == nullptr);
+    bool model_used_gpu = false;
+    auto *model = load_model_with_backend_preference(model_path, prefer_gpu_for_model, &model_used_gpu);
     env->ReleaseStringUTFChars(jmodel_path, model_path);
     if (!model) {
         return 1;
     }
     g_model = model;
+    LOGi("%s: Model load backend preference resolved to %s",
+         __func__,
+         model_used_gpu ? "GPU" : "CPU fallback");
 
     if (jvision_projector_path != nullptr) {
         const auto *vision_projector_path = env->GetStringUTFChars(jvision_projector_path, 0);
         LOGd("%s: Loading vision projector from: \n%s\n", __func__, vision_projector_path);
 
-        mtmd_context_params mparams = mtmd_context_params_default();
-        mparams.use_gpu = false;
-        mparams.print_timings = false;
-        mparams.n_threads = std::max(N_THREADS_MIN, std::min(N_THREADS_MAX,
-                                                     (int) sysconf(_SC_NPROCESSORS_ONLN) -
-                                                     N_THREADS_HEADROOM));
-        mparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
-        mparams.warmup = false;
-
-        g_mctx = mtmd_init_from_file(vision_projector_path, g_model, mparams);
+        bool projector_used_gpu = false;
+        g_mctx = init_mtmd_context_with_gpu_fallback(
+                vision_projector_path,
+                g_model,
+                &projector_used_gpu);
         env->ReleaseStringUTFChars(jvision_projector_path, vision_projector_path);
         if (g_mctx == nullptr) {
             LOGe("%s: Failed to initialize mtmd context", __func__);
+            llama_model_free(g_model);
+            g_model = nullptr;
             return 2;
         }
+        LOGi("%s: Vision projector backend preference resolved to %s",
+             __func__,
+             projector_used_gpu ? "GPU" : "CPU fallback");
     }
     return 0;
 }
@@ -142,6 +160,62 @@ static common_sampler *new_sampler(float temp) {
     return common_sampler_init(g_model, sparams);
 }
 
+static llama_model *load_model_with_backend_preference(
+        const char *model_path,
+        bool prefer_gpu,
+        bool *used_gpu) {
+    llama_model_params model_params = llama_model_default_params();
+
+    if (prefer_gpu) {
+        LOGi("%s: Loading model with GPU-preferred backend selection", __func__);
+        auto *model = llama_model_load_from_file(model_path, model_params);
+        if (model) {
+            if (used_gpu != nullptr) {
+                *used_gpu = true;
+            }
+            return model;
+        }
+
+        LOGw("%s: GPU-preferred model load failed; retrying with CPU fallback", __func__);
+    } else {
+        LOGi("%s: Loading model with CPU-only backend selection", __func__);
+    }
+
+    model_params.n_gpu_layers = 0;
+    auto *model = llama_model_load_from_file(model_path, model_params);
+    if (model && used_gpu != nullptr) {
+        *used_gpu = false;
+    }
+    return model;
+}
+
+static mtmd_context *init_mtmd_context_with_gpu_fallback(
+        const char *vision_projector_path,
+        llama_model *model,
+        bool *used_gpu) {
+    auto build_mtmd_params = [](bool use_gpu) {
+        mtmd_context_params mparams = mtmd_context_params_default();
+        mparams.use_gpu = use_gpu;
+        mparams.print_timings = false;
+        mparams.n_threads = std::max(N_THREADS_MIN, std::min(N_THREADS_MAX,
+                                                     (int) sysconf(_SC_NPROCESSORS_ONLN) -
+                                                     N_THREADS_HEADROOM));
+        mparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        mparams.warmup = false;
+        return mparams;
+    };
+
+    // The mtmd projector path is significantly less stable than the text-only
+    // llama model path on Android Vulkan. Keep it on CPU for now so image-capable
+    // models remain usable without risking a native crash.
+    LOGi("%s: Loading vision projector with CPU-only backend selection", __func__);
+    auto *mctx = mtmd_init_from_file(vision_projector_path, model, build_mtmd_params(false));
+    if (mctx && used_gpu != nullptr) {
+        *used_gpu = false;
+    }
+    return mctx;
+}
+
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobject /*unused*/) {
@@ -169,7 +243,10 @@ static std::string get_backend() {
 extern "C"
 JNIEXPORT jstring JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_systemInfo(JNIEnv *env, jobject /*unused*/) {
-    return env->NewStringUTF(llama_print_system_info());
+    std::stringstream info;
+    info << llama_print_system_info();
+    info << "\nLoaded backends: " << get_backend();
+    return env->NewStringUTF(info.str().c_str());
 }
 
 extern "C"
@@ -517,6 +594,98 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPromptWithImages(
         }
         bitmaps.entries.push_back(std::move(bitmap));
     }
+
+    mtmd_input_text inp_txt = {
+        prompt_text.c_str(),
+        true,
+        true,
+    };
+    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    auto bitmaps_c_ptr = bitmaps.c_ptr();
+    const int32_t tokenized = mtmd_tokenize(
+        g_mctx,
+        chunks.ptr.get(),
+        &inp_txt,
+        bitmaps_c_ptr.data(),
+        bitmaps_c_ptr.size()
+    );
+    if (tokenized != 0) {
+        LOGe("%s: mtmd_tokenize failed with %d", __func__, tokenized);
+        return 3;
+    }
+
+    llama_pos new_n_past = 0;
+    if (mtmd_helper_eval_chunks(
+            g_mctx,
+            g_context,
+            chunks.ptr.get(),
+            current_position,
+            0,
+            BATCH_SIZE,
+            true,
+            &new_n_past) != 0) {
+        LOGe("%s: mtmd_helper_eval_chunks failed", __func__);
+        return 4;
+    }
+
+    current_position = new_n_past;
+    stop_generation_position = current_position + n_predict;
+    return 0;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPromptWithVisionBitmap(
+        JNIEnv *env,
+        jobject /*unused*/,
+        jstring juser_prompt,
+        jint image_width,
+        jint image_height,
+        jbyteArray jrgb_bytes,
+        jint n_predict
+) {
+    if (g_mctx == nullptr) {
+        LOGe("%s: multimodal context is missing", __func__);
+        return 1;
+    }
+
+    if (image_width < 2 || image_height < 2) {
+        LOGe("%s: invalid bitmap dimensions %dx%d", __func__, image_width, image_height);
+        return 2;
+    }
+
+    const jsize rgb_length = env->GetArrayLength(jrgb_bytes);
+    const jsize expected_length = image_width * image_height * 3;
+    if (rgb_length != expected_length) {
+        LOGe("%s: invalid RGB buffer length %d, expected %d", __func__, rgb_length, expected_length);
+        return 2;
+    }
+
+    reset_short_term_states();
+
+    const auto *const user_prompt = env->GetStringUTFChars(juser_prompt, nullptr);
+    LOGd("%s: Multimodal bitmap prompt received: \n%s", __func__, user_prompt);
+    std::string prompt_text(user_prompt);
+    env->ReleaseStringUTFChars(juser_prompt, user_prompt);
+
+    std::vector<uint8_t> rgb_values(static_cast<size_t>(rgb_length));
+    env->GetByteArrayRegion(
+        jrgb_bytes,
+        0,
+        rgb_length,
+        reinterpret_cast<jbyte *>(rgb_values.data()));
+
+    mtmd::bitmaps bitmaps;
+    bitmaps.entries.reserve(1);
+    mtmd::bitmap bitmap(
+        static_cast<uint32_t>(image_width),
+        static_cast<uint32_t>(image_height),
+        rgb_values.data());
+    if (!bitmap.ptr) {
+        LOGe("%s: failed to initialize bitmap", __func__);
+        return 2;
+    }
+    bitmaps.entries.push_back(std::move(bitmap));
 
     mtmd_input_text inp_txt = {
         prompt_text.c_str(),

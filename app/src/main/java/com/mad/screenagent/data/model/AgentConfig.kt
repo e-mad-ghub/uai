@@ -3,6 +3,7 @@ package com.mad.screenagent.data.model
 import java.util.UUID
 
 enum class AiProviderType(val displayName: String) {
+    ON_DEVICE_GEMMA3("On-Device (Gemma 3)"),
     ON_DEVICE("On-Device"),
     ANTHROPIC("Anthropic"),
     OPENAI("OpenAI"),
@@ -10,10 +11,16 @@ enum class AiProviderType(val displayName: String) {
     CUSTOM("Custom")
 }
 
+fun AiProviderType.isOnDeviceProvider(): Boolean =
+    this == AiProviderType.ON_DEVICE || this == AiProviderType.ON_DEVICE_GEMMA3
+
+fun AiProviderType.isGemma3OnDeviceProvider(): Boolean =
+    this == AiProviderType.ON_DEVICE_GEMMA3
+
 data class AgentConfig(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "New Agent",
-    val provider: AiProviderType = AiProviderType.ON_DEVICE,
+    val provider: AiProviderType = AiProviderType.ON_DEVICE_GEMMA3,
     val apiKey: String = "",
     val model: String = "",
     val onDevice: OnDeviceProviderConfig = OnDeviceProviderConfig(),
@@ -38,10 +45,9 @@ data class AgentConfig(
     val supportsVision: Boolean get() = when {
         model == MONEY_SAVER_MODEL -> true // resolved model will be determined at runtime
         else -> when (provider) {
-        AiProviderType.ON_DEVICE -> onDevice.selectedModelId.isNotBlank() && (
-            onDevice.selectedModelSupportsVision ||
-                looksLikeVisionCapableOnDeviceModel(onDevice.selectedModelId)
-        )
+        AiProviderType.ON_DEVICE,
+        AiProviderType.ON_DEVICE_GEMMA3 -> onDevice.selectedModelId.isNotBlank() &&
+            onDevice.selectedModelSupportsVision
         AiProviderType.OPENAI -> {
             val m = model.lowercase()
             m.contains("gpt-5") ||
@@ -84,6 +90,10 @@ data class AgentConfig(
                 "claude-sonnet-4-6",
                 "claude-haiku-4-5-20251001",
                 "claude-opus-4-6"
+            ),
+            AiProviderType.ON_DEVICE_GEMMA3 to listOf(
+                "gemma-3-4b-it-gguf",
+                "gemma-3-1b-it-gguf"
             ),
             AiProviderType.ON_DEVICE to listOf(
                 "gemma-3-1b-it-gguf",

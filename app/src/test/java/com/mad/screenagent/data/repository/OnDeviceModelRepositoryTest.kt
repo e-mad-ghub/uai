@@ -57,10 +57,11 @@ class OnDeviceModelRepositoryTest {
         val publicEntries = defaultOnDeviceCatalogEntries()
         val nonPublicEntries = nonPublicOnDeviceCatalogEntries()
 
-        assertEquals(2, publicEntries.size)
+        assertEquals(6, publicEntries.size)
         assertTrue(nonPublicEntries.isEmpty())
         assertTrue(publicEntries.all { it.accessState == OnDeviceModelAccessState.PUBLIC })
-        assertTrue(publicEntries.all { it.capability == OnDeviceModelCapability.LOCAL_TEXT })
+        assertTrue(publicEntries.any { it.capability == OnDeviceModelCapability.LOCAL_VISION })
+        assertTrue(publicEntries.any { it.capability == OnDeviceModelCapability.LOCAL_TEXT })
         assertTrue(publicEntries.all { it.fileName.endsWith(".gguf") })
         assertTrue(nonPublicEntries.all { it.accessState != OnDeviceModelAccessState.PUBLIC })
         assertTrue(publicEntries.map { it.id }.intersect(nonPublicEntries.map { it.id }.toSet()).isEmpty())
@@ -172,7 +173,7 @@ class OnDeviceModelRepositoryTest {
                 context = context,
                 client = OkHttpClient(),
                 runtime = FakeOnDeviceRuntime(
-                    validationResult = OnDeviceValidationResult.failure(
+                    textValidationResult = OnDeviceValidationResult.failure(
                         OnDeviceFailureKind.RUNTIME_INCOMPATIBLE,
                         "The selected GGUF model could not be opened by the on-device llama runtime."
                     )
@@ -186,6 +187,70 @@ class OnDeviceModelRepositoryTest {
             assertEquals(OnDeviceDownloadState.FAILED, installed?.downloadState)
             assertEquals(OnDeviceFailureKind.RUNTIME_INCOMPATIBLE, installed?.failureKind)
             assertEquals("llama.android-af76639-arm64-v8a-kleidiai-openmp", installed?.validatedRuntimeProfileId)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun visionValidationFailureStillLeavesModelReadyForText() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    okio.Buffer().write(
+                        byteArrayOf(
+                            0x47, 0x47, 0x55, 0x46,
+                            0x03, 0x00, 0x00, 0x00,
+                            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                        )
+                    )
+                )
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody("projector-bytes")
+        )
+        server.start()
+        try {
+            val entry = OnDeviceModelCatalogEntry(
+                id = "gemma-vision",
+                displayName = "Gemma Vision",
+                description = "Test LOCAL_VISION entry",
+                downloadUrl = server.url("/model.gguf").toString(),
+                fileName = "model.gguf",
+                visionProjectorDownloadUrl = server.url("/mmproj.gguf").toString(),
+                visionProjectorFileName = "mmproj.gguf",
+                accessStateKey = OnDeviceModelAccessState.PUBLIC.name,
+                capabilityKey = OnDeviceModelCapability.LOCAL_VISION.name,
+                sourceTypeKey = com.mad.screenagent.data.model.OnDeviceModelSourceType.CATALOG.name
+            )
+            val prefs = AppPreferences(context)
+            prefs.saveOnDeviceModelCatalog(OnDeviceModelCatalog(models = listOf(entry)))
+            val repository = OnDeviceModelRepository(
+                prefs = prefs,
+                context = context,
+                client = OkHttpClient(),
+                runtime = FakeOnDeviceRuntime(
+                    textValidationResult = OnDeviceValidationResult.success(),
+                    visionValidationResult = OnDeviceValidationResult.failure(
+                        OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR,
+                        "Image support isn't ready on this device."
+                    )
+                )
+            )
+
+            repository.downloadModel(entry.id)
+
+            val installed = repository.getInstalledModel(entry.id)
+            assertEquals(OnDeviceDownloadState.READY, installed?.downloadState)
+            assertEquals(OnDeviceFailureKind.NONE, installed?.failureKind)
+            assertEquals(false, installed?.visionReady)
+            assertEquals(OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR, installed?.visionFailureKind)
+            assertEquals("Image support isn't ready on this device.", installed?.visionErrorMessage)
         } finally {
             server.shutdown()
         }
@@ -240,14 +305,18 @@ class OnDeviceModelRepositoryTest {
     }
 
     private class FakeOnDeviceRuntime(
-        private val validationResult: OnDeviceValidationResult = OnDeviceValidationResult.success()
+        private val textValidationResult: OnDeviceValidationResult = OnDeviceValidationResult.success(),
+        private val visionValidationResult: OnDeviceValidationResult = textValidationResult
     ) : OnDeviceRuntime {
         override val runtimeProfileId: String = "llama.android-af76639-arm64-v8a-kleidiai-openmp"
 
-        override suspend fun validateModel(
+        override suspend fun validateModel(modelPath: String): OnDeviceValidationResult =
+            textValidationResult
+
+        override suspend fun validateVisionModel(
             modelPath: String,
-            visionProjectorPath: String?
-        ): OnDeviceValidationResult = validationResult
+            visionProjectorPath: String
+        ): OnDeviceValidationResult = visionValidationResult
 
         override fun streamResponse(
             messages: List<ChatMessage>,

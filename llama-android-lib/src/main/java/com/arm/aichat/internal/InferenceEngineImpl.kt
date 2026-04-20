@@ -110,6 +110,15 @@ internal class InferenceEngineImpl private constructor(
     ): Int
 
     @FastNative
+    private external fun processUserPromptWithVisionBitmap(
+        userPrompt: String,
+        width: Int,
+        height: Int,
+        rgbBytes: ByteArray,
+        predictLength: Int
+    ): Int
+
+    @FastNative
     private external fun generateNextToken(): String?
 
     @FastNative
@@ -360,6 +369,91 @@ internal class InferenceEngineImpl private constructor(
             Log.i(
                 TAG,
                 "PERF prompt_processing_ms=$promptProcessingMs predict_length=$predictLength chars=${message.length}"
+            )
+            _state.value = InferenceEngine.State.Generating
+            var firstTokenAtNanos = 0L
+            var emittedTokenCount = 0
+            var emittedCharCount = 0
+            while (!_cancelGeneration) {
+                generateNextToken()?.let { utf8token ->
+                    if (utf8token.isNotEmpty()) {
+                        if (firstTokenAtNanos == 0L) {
+                            firstTokenAtNanos = System.nanoTime()
+                            Log.i(
+                                TAG,
+                                "PERF ttft_ms=${nanosToMillis(firstTokenAtNanos - requestStartedAtNanos)}"
+                            )
+                        }
+                        emittedTokenCount += 1
+                        emittedCharCount += utf8token.length
+                        emit(utf8token)
+                    }
+                } ?: break
+            }
+            val finishedAtNanos = System.nanoTime()
+            if (_cancelGeneration) {
+                Log.i(TAG, "Assistant generation aborted per requested.")
+            } else {
+                val totalMs = nanosToMillis(finishedAtNanos - requestStartedAtNanos)
+                val generationMs = nanosToMillis(finishedAtNanos - generationStartedAtNanos)
+                val decodeWindowMs =
+                    if (firstTokenAtNanos == 0L) generationMs
+                    else nanosToMillis(finishedAtNanos - firstTokenAtNanos)
+                val tokensPerSecond =
+                    if (decodeWindowMs <= 0L) 0.0
+                    else emittedTokenCount * 1000.0 / max(1L, decodeWindowMs)
+                Log.i(
+                    TAG,
+                    "PERF total_ms=$totalMs generation_ms=$generationMs output_tokens=$emittedTokenCount output_chars=$emittedCharCount tok_per_sec=${"%.2f".format(tokensPerSecond)}"
+                )
+                Log.i(TAG, "Assistant generation complete. Awaiting user prompt...")
+            }
+            _state.value = InferenceEngine.State.ModelReady
+        } catch (e: CancellationException) {
+            Log.i(TAG, "Assistant generation's flow collection cancelled.")
+            _state.value = InferenceEngine.State.ModelReady
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during multimodal generation!", e)
+            _state.value = InferenceEngine.State.Error(e)
+            throw e
+        }
+    }.flowOn(llamaDispatcher)
+
+    override fun sendUserPromptWithVisionBitmap(
+        message: String,
+        width: Int,
+        height: Int,
+        rgbBytes: ByteArray,
+        predictLength: Int
+    ): Flow<String> = flow {
+        require(message.isNotEmpty()) { "User prompt discarded due to being empty!" }
+        check(_state.value is InferenceEngine.State.ModelReady) {
+            "User prompt discarded due to: ${_state.value.javaClass.simpleName}"
+        }
+        require(width >= 2 && height >= 2) { "Vision bitmap discarded due to invalid dimensions: ${width}x$height" }
+        require(rgbBytes.size == width * height * 3) {
+            "Vision bitmap discarded due to invalid RGB buffer length: ${rgbBytes.size}"
+        }
+
+        try {
+            val requestStartedAtNanos = System.nanoTime()
+            Log.i(TAG, "Sending multimodal user prompt with pre-normalized bitmap ${width}x$height...")
+            _readyForSystemPrompt = false
+            _state.value = InferenceEngine.State.ProcessingUserPrompt
+
+            processUserPromptWithVisionBitmap(message, width, height, rgbBytes, predictLength).let { result ->
+                if (result != 0) {
+                    throw promptFailure("user", result)
+                }
+            }
+
+            val generationStartedAtNanos = System.nanoTime()
+            val promptProcessingMs = nanosToMillis(generationStartedAtNanos - requestStartedAtNanos)
+            Log.i(TAG, "Multimodal user prompt processed. Generating assistant prompt...")
+            Log.i(
+                TAG,
+                "PERF prompt_processing_ms=$promptProcessingMs predict_length=$predictLength chars=${message.length} bitmap=${width}x$height"
             )
             _state.value = InferenceEngine.State.Generating
             var firstTokenAtNanos = 0L

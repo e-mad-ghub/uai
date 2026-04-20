@@ -15,6 +15,42 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" CACHE STRING "" FORCE)
 # AI Chat library
 # --------------------------------------------------------------------------
 
+# Enable the Vulkan backend when the Android NDK shader compiler is available.
+# The CPU backends remain enabled as the automatic fallback path.
+if(DEFINED ANDROID_NDK AND GGML_VULKAN)
+    if(NOT DEFINED Vulkan_GLSLC_EXECUTABLE OR Vulkan_GLSLC_EXECUTABLE STREQUAL "")
+        set(_vulkan_glslc_candidates "")
+        if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+            list(APPEND _vulkan_glslc_candidates
+                    "${ANDROID_NDK}/shader-tools/linux-x86_64/glslc")
+        elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+            if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
+                list(APPEND _vulkan_glslc_candidates
+                        "${ANDROID_NDK}/shader-tools/darwin-arm64/glslc")
+            endif()
+            list(APPEND _vulkan_glslc_candidates
+                    "${ANDROID_NDK}/shader-tools/darwin-x86_64/glslc")
+        elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+            list(APPEND _vulkan_glslc_candidates
+                    "${ANDROID_NDK}/shader-tools/windows-x86_64/glslc.exe")
+        endif()
+
+        foreach(_candidate IN LISTS _vulkan_glslc_candidates)
+            if(EXISTS "${_candidate}")
+                set(Vulkan_GLSLC_EXECUTABLE "${_candidate}" CACHE FILEPATH
+                        "Android NDK glslc used for Vulkan shader generation" FORCE)
+                message(STATUS "Using Vulkan glslc at ${Vulkan_GLSLC_EXECUTABLE}")
+                break()
+            endif()
+        endforeach()
+    endif()
+
+    if(NOT DEFINED Vulkan_GLSLC_EXECUTABLE OR Vulkan_GLSLC_EXECUTABLE STREQUAL "")
+        message(WARNING "GGML_VULKAN requested but Android NDK glslc was not found; disabling Vulkan backend and continuing with CPU fallback.")
+        set(GGML_VULKAN OFF CACHE BOOL "ggml: use Vulkan" FORCE)
+    endif()
+endif()
+
 if(DEFINED ANDROID_ABI)
     message(STATUS "Detected Android ABI: ${ANDROID_ABI}")
     if(ANDROID_ABI STREQUAL "arm64-v8a")
@@ -32,6 +68,8 @@ if(DEFINED ANDROID_ABI)
 endif()
 
 set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/llama.cpp)
+include_directories(BEFORE
+        ${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/vulkan-hpp/include)
 add_subdirectory(${LLAMA_SRC} build-llama)
 add_subdirectory(${LLAMA_SRC}/tools/mtmd build-mtmd)
 

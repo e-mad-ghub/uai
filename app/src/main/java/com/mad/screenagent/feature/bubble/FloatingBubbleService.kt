@@ -62,6 +62,7 @@ import com.mad.screenagent.data.model.AiProviderType
 import com.mad.screenagent.data.model.InstalledOnDeviceModel
 import com.mad.screenagent.data.model.OnDeviceFailureKind
 import com.mad.screenagent.data.model.OnDeviceDownloadState
+import com.mad.screenagent.data.model.isOnDeviceProvider
 import com.mad.screenagent.data.model.forSlot
 import com.mad.screenagent.shared.streaming.AssistantStreamingSession
 import com.mad.screenagent.shared.streaming.FileAttachmentContext
@@ -75,7 +76,6 @@ import com.mad.screenagent.shared.streaming.sanitizeGroundedAssistantResponse
 import com.mad.screenagent.data.db.ConversationEntity
 import com.mad.screenagent.data.db.MessageEntity
 import com.mad.screenagent.data.db.toChatMessage
-import com.mad.screenagent.data.model.canHandleImageRequests
 import com.mad.screenagent.data.model.hasInternetAccess
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AppColorTheme
@@ -2118,8 +2118,13 @@ class FloatingBubbleService : Service() {
                 convId = currentConversationId ?: return@launch
                 val activeConversationId = convId
                 val resolvedAgent = container.resolveAgentConfig(agent)
-                val onDeviceBlockMessage = if (resolvedAgent.provider == AiProviderType.ON_DEVICE) {
-                    validateOnDeviceReadiness(container, resolvedAgent)
+                val onDeviceBlockMessage = if (resolvedAgent.provider.isOnDeviceProvider()) {
+                    validateOnDeviceReadiness(
+                        container = container,
+                        agent = resolvedAgent,
+                        imageCount = imageList.size,
+                        attachedFile = attachedFile
+                    )
                 } else null
                 if (onDeviceBlockMessage != null) {
                     miniChatErrorMessage = onDeviceBlockMessage
@@ -2167,18 +2172,6 @@ class FloatingBubbleService : Service() {
                 session!!.start(serviceScope)
                 currentSession = session
 
-                // If agent doesn't support vision, insert a capability notice instead of calling API
-                if (imageList.isNotEmpty() && !agent.canHandleImageRequests()) {
-                    val notice =
-                        com.mad.screenagent.shared.streaming.OnDeviceUserMessages.imageAttachmentsRequireVisionModel()
-                    accumulated = notice  // must be non-blank so finally doesn't delete the message
-                    val idx = chatMessages.indexOfFirst { it.id == messageId }
-                    if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = notice, isStreaming = false)
-                    container.conversationRepository.updateMessageContent(messageId, notice, false)
-                    container.conversationRepository.touchConversation(activeConversationId)
-                    return@launch
-                }
-
                 // Build history, attaching images to the last user message.
                 val allHistory = chatMessages.filter { !it.isStreaming }
                 val rawHistory = allHistory.mapIndexed { idx, msg ->
@@ -2193,7 +2186,7 @@ class FloatingBubbleService : Service() {
                         msg.toChatMessage()
                     }
                 }
-                val history = if (resolvedAgent.provider == AiProviderType.ON_DEVICE) {
+                val history = if (resolvedAgent.provider.isOnDeviceProvider()) {
                     compressOnDeviceHistory(rawHistory)
                 } else {
                     compressHistory(rawHistory)
@@ -2303,7 +2296,9 @@ class FloatingBubbleService : Service() {
 
     private suspend fun validateOnDeviceReadiness(
         container: com.mad.screenagent.AppContainer,
-        agent: AgentConfig
+        agent: AgentConfig,
+        imageCount: Int,
+        attachedFile: com.mad.screenagent.shared.streaming.FileAttachmentContext?
     ): String? {
         val modelId = agent.onDevice.selectedModelId.ifBlank { agent.model }.trim()
         if (modelId.isBlank()) {
@@ -2324,6 +2319,27 @@ class FloatingBubbleService : Service() {
             val reason = OnDeviceUserMessages.missingModelFile()
             container.onDeviceModelRepository.markModelUnavailable(modelId, reason)
             return reason
+        }
+        if (imageCount > 0) {
+            if (imageCount > 1) {
+                return OnDeviceUserMessages.singleImageOnly()
+            }
+            if (attachedFile != null) {
+                return OnDeviceUserMessages.mixedImageAndDocumentUnsupported()
+            }
+            val projectorPath = installed.visionProjectorPath?.takeIf { it.isNotBlank() }
+            if (!installed.visionReady && projectorPath == null) {
+                return OnDeviceUserMessages.imageAttachmentsRequireVisionModel()
+            }
+            if (projectorPath == null || !File(projectorPath).exists() || File(projectorPath).length() == 0L) {
+                container.onDeviceModelRepository.updateVisionValidation(
+                    modelId = modelId,
+                    visionReady = false,
+                    failureKind = OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
+                    message = OnDeviceUserMessages.missingVisionSupportFile()
+                )
+                return OnDeviceUserMessages.missingVisionSupportFile()
+            }
         }
         return null
     }

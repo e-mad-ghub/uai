@@ -19,6 +19,9 @@ import com.mad.screenagent.data.model.OnDeviceModelLibraryItem
 import com.mad.screenagent.data.model.buildOpenAiCompatibleChatCompletionsUrl
 import com.mad.screenagent.data.model.buildOpenAiCompatibleModelsUrl
 import com.mad.screenagent.data.model.isOpenRouterFreeModel
+import com.mad.screenagent.data.model.isGemma3OnDeviceModelId
+import com.mad.screenagent.data.model.isGemma3OnDeviceProvider
+import com.mad.screenagent.data.model.isOnDeviceProvider
 import com.mad.screenagent.data.model.normalizeOpenAiCompatibleBaseUrl
 import com.mad.screenagent.data.model.openRouterFreeFallbackModels
 import com.mad.screenagent.data.model.preferredOpenRouterVisionFreeModel
@@ -274,8 +277,8 @@ class AgentEditViewModel(
                 }
                 onDeviceModels = _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }
                 syncSelectedOnDeviceVisionSupport()
-                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
-                    _providerModels.value = _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }
+                if (_agent.value.provider.isOnDeviceProvider()) {
+                    updateCurrentProviderModels(_agent.value.provider)
                 }
             }
         }
@@ -296,7 +299,7 @@ class AgentEditViewModel(
     fun update(block: AgentConfig.() -> AgentConfig) {
         val previous = _agent.value
         val updated = previous.block()
-        _agent.value = if (updated.provider == AiProviderType.ON_DEVICE) {
+        _agent.value = if (updated.provider.isOnDeviceProvider()) {
             val selectedModelId = updated.onDevice.selectedModelId.trim().ifBlank {
                 updated.model.trim()
             }
@@ -353,7 +356,7 @@ class AgentEditViewModel(
 
     fun testConnection() {
         val agent = _agent.value.normalizedForSave()
-        if (agent.provider == AiProviderType.ON_DEVICE) {
+        if (agent.provider.isOnDeviceProvider()) {
             viewModelScope.launch {
                 val modelId = agent.onDevice.selectedModelId.trim().ifBlank { agent.model.trim() }
                 val installed = onDeviceModelRepository.getInstalledModel(modelId)
@@ -423,7 +426,7 @@ class AgentEditViewModel(
     }
 
     fun refreshOnDeviceCatalog() {
-        if (_agent.value.provider != AiProviderType.ON_DEVICE) return
+        if (!_agent.value.provider.isOnDeviceProvider()) return
         Log.i(TAG, "refreshOnDeviceCatalog tapped")
         _onDeviceCatalogUiState.value = _onDeviceCatalogUiState.value.copy(
             refreshStatus = OnDeviceCatalogRefreshStatus.REFRESHING,
@@ -441,13 +444,13 @@ class AgentEditViewModel(
         viewModelScope.launch {
             try {
                 onDeviceModelRepository.enqueueDownload(modelId)
-                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
+                if (_agent.value.provider.isOnDeviceProvider()) {
                     _connectionTestState.value = ConnectionTestState.Success(
                         "Downloading the local model in the background."
                     )
                 }
             } catch (e: Exception) {
-                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
+                if (_agent.value.provider.isOnDeviceProvider()) {
                     _connectionTestState.value = ConnectionTestState.Failure(
                         OnDeviceUserMessages.downloadFailure(e)
                     )
@@ -461,11 +464,11 @@ class AgentEditViewModel(
         viewModelScope.launch {
             try {
                 onDeviceModelRepository.cancelDownload(modelId)
-                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
+                if (_agent.value.provider.isOnDeviceProvider()) {
                     _connectionTestState.value = ConnectionTestState.Idle
                 }
             } catch (e: Exception) {
-                if (_agent.value.provider == AiProviderType.ON_DEVICE) {
+                if (_agent.value.provider.isOnDeviceProvider()) {
                     _connectionTestState.value = ConnectionTestState.Failure(
                         OnDeviceUserMessages.cancelDownloadFailure()
                     )
@@ -504,7 +507,7 @@ class AgentEditViewModel(
         viewModelScope.launch {
             onDeviceModelRepository.deleteInstalledModel(modelId)
             onDeviceModelRepository.saveDownloadState(OnDeviceDownloadState.NOT_DOWNLOADED)
-            if (_agent.value.provider == AiProviderType.ON_DEVICE &&
+            if (_agent.value.provider.isOnDeviceProvider() &&
                 _agent.value.onDevice.selectedModelId == modelId
             ) {
                 _connectionTestState.value = ConnectionTestState.Idle
@@ -513,7 +516,7 @@ class AgentEditViewModel(
     }
 
     fun selectOnDeviceModel(modelId: String) {
-        if (_agent.value.provider != AiProviderType.ON_DEVICE) return
+        if (!_agent.value.provider.isOnDeviceProvider()) return
         val readyModelIds = _readyOnDeviceModelLibrary.value.map { it.catalogEntry.id }.toSet()
         if (modelId !in readyModelIds) return
         val supportsVision = resolveOnDeviceModelSupportsVision(modelId)
@@ -608,7 +611,7 @@ class AgentEditViewModel(
     }
 
     private suspend fun runProbe(agent: AgentConfig): ProbeFailure? = withContext(Dispatchers.IO) {
-        if (agent.provider == AiProviderType.ON_DEVICE) {
+        if (agent.provider.isOnDeviceProvider()) {
             return@withContext ProbeFailure(
                 code = 400,
                 message = "On-Device models are validated locally, not over HTTP."
@@ -695,7 +698,8 @@ class AgentEditViewModel(
                     }
                 } ?: "gpt-4o-mini"
             }
-            AiProviderType.ON_DEVICE -> agent.onDevice.selectedModelId.ifBlank { agent.model }
+            AiProviderType.ON_DEVICE,
+            AiProviderType.ON_DEVICE_GEMMA3 -> agent.onDevice.selectedModelId.ifBlank { agent.model }
             else -> agent.model
         }
     }
@@ -710,7 +714,8 @@ class AgentEditViewModel(
 
     private suspend fun refreshCurrentProviderModels(force: Boolean = false) {
         when (val provider = _agent.value.provider) {
-            AiProviderType.ON_DEVICE -> refreshOnDeviceModels(force = force)
+            AiProviderType.ON_DEVICE,
+            AiProviderType.ON_DEVICE_GEMMA3 -> refreshOnDeviceModels(force = force)
             AiProviderType.OPENROUTER -> refreshOpenRouterModels(force = force)
             AiProviderType.OPENAI, AiProviderType.ANTHROPIC -> refreshProviderModels(
                 provider = provider,
@@ -742,7 +747,8 @@ class AgentEditViewModel(
             when (provider) {
                 AiProviderType.OPENAI -> if (catalog.models.isNotEmpty()) openAiModels = catalog.models.map { it.id }
                 AiProviderType.ANTHROPIC -> if (catalog.models.isNotEmpty()) anthropicModels = catalog.models.map { it.id }
-                AiProviderType.ON_DEVICE -> if (catalog.models.isNotEmpty()) onDeviceModels = catalog.models.map { it.id }
+                AiProviderType.ON_DEVICE,
+                AiProviderType.ON_DEVICE_GEMMA3 -> if (catalog.models.isNotEmpty()) onDeviceModels = catalog.models.map { it.id }
                 else -> {}
             }
         } catch (_: Exception) {
@@ -811,6 +817,7 @@ class AgentEditViewModel(
 
     private fun updateCurrentProviderModels(provider: AiProviderType) {
         _providerModels.value = when (provider) {
+            AiProviderType.ON_DEVICE_GEMMA3 -> onDeviceModels.filter(::isGemma3OnDeviceModelId)
             AiProviderType.ON_DEVICE -> onDeviceModels
             AiProviderType.OPENROUTER -> _openRouterModels.value
             AiProviderType.OPENAI -> openAiModels
@@ -840,7 +847,7 @@ class AgentEditViewModel(
                 lastRefreshFailureMessage = OnDeviceUserMessages.refreshCatalogFailure(e)
             )
         } finally {
-            updateCurrentProviderModels(AiProviderType.ON_DEVICE)
+            updateCurrentProviderModels(_agent.value.provider)
             _isLoadingModels.value = false
         }
     }
@@ -848,16 +855,19 @@ class AgentEditViewModel(
     private fun resolveOnDeviceModelSupportsVision(modelId: String): Boolean {
         val normalized = modelId.trim()
         if (normalized.isBlank()) return false
-        return _onDeviceModelLibrary.value.firstOrNull { it.catalogEntry.id == normalized }
-            ?.catalogEntry
-            ?.supportsVision
-            ?: _onDeviceCatalog.value.models.firstOrNull { it.id == normalized }?.supportsVision
+        val installed = _onDeviceModelLibrary.value.firstOrNull { it.catalogEntry.id == normalized }
+            ?.installRecord
+            ?: return false
+        val hasProjectorCandidate = installed.visionProjectorPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let { java.io.File(it).exists() && java.io.File(it).length() > 0L }
             ?: false
+        return installed.visionReady || hasProjectorCandidate
     }
 
     private fun syncSelectedOnDeviceVisionSupport() {
         val current = _agent.value
-        if (current.provider != AiProviderType.ON_DEVICE) return
+        if (!current.provider.isOnDeviceProvider()) return
         val selectedModelId = current.onDevice.selectedModelId.trim().ifBlank { current.model.trim() }
         if (selectedModelId.isBlank()) return
         val supportsVision = resolveOnDeviceModelSupportsVision(selectedModelId)
@@ -952,7 +962,7 @@ private fun validateDraft(
     return validateName(draft, agents)
         ?: validateCustomBaseUrl(draft)
         ?: validateApiKey(draft)
-        ?: if (draft.provider == AiProviderType.ON_DEVICE) {
+        ?: if (draft.provider.isOnDeviceProvider()) {
             if (onDeviceModelId.isBlank()) {
                 "Choose an on-device model before saving."
             } else if (onDeviceModelId !in readyOnDeviceModelIds) {
@@ -1035,14 +1045,14 @@ internal fun shouldReuseCustomModelCatalog(
 }
 
 internal fun providerRequiresApiKey(provider: AiProviderType): Boolean =
-    provider != AiProviderType.ON_DEVICE
+    !provider.isOnDeviceProvider()
 
 internal fun AgentConfig.forProviderSwitch(
     provider: AiProviderType,
     defaultModel: String
 ): AgentConfig = copy(
     provider = provider,
-    model = if (provider == AiProviderType.ON_DEVICE) "" else defaultModel,
+    model = if (provider.isOnDeviceProvider()) "" else defaultModel,
     apiKey = "",
     customPreset = if (provider == AiProviderType.CUSTOM) {
         CustomProviderPreset.MANUAL
@@ -1054,7 +1064,7 @@ internal fun AgentConfig.forProviderSwitch(
     } else {
         ""
     },
-    onDevice = if (provider == AiProviderType.ON_DEVICE) {
+    onDevice = if (provider.isOnDeviceProvider()) {
         onDevice.copy(selectedModelId = "")
     } else {
         onDevice
@@ -1071,7 +1081,7 @@ private fun AgentConfig.normalizedForSave(): AgentConfig {
         name = name.trim(),
         apiKey = apiKey.trim(),
         model = model.trim(),
-        onDevice = if (provider == AiProviderType.ON_DEVICE) {
+        onDevice = if (provider.isOnDeviceProvider()) {
             onDevice.copy(selectedModelId = onDevice.selectedModelId.trim().ifBlank { model.trim() })
         } else {
             onDevice

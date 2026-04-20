@@ -22,17 +22,17 @@ import org.junit.Test
 class OpenRouterModelsTest {
 
     @Test
-    fun newAgentDefaultsToOnDevice() {
+    fun newAgentDefaultsToGemmaOnDevice() {
         val agent = AgentConfig()
 
-        assertEquals(AiProviderType.ON_DEVICE, agent.provider)
+        assertEquals(AiProviderType.ON_DEVICE_GEMMA3, agent.provider)
         assertEquals("", agent.model)
         assertEquals("", agent.onDevice.selectedModelId)
     }
 
     @Test
-    fun providerOrderStartsWithOnDevice() {
-        assertEquals(AiProviderType.ON_DEVICE, assistantProviderOrder().first())
+    fun providerOrderStartsWithGemmaOnDevice() {
+        assertEquals(AiProviderType.ON_DEVICE_GEMMA3, assistantProviderOrder().first())
     }
 
     @Test

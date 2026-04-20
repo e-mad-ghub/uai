@@ -1,10 +1,10 @@
 package com.mad.screenagent.data.model
 
-private const val GEMMA_3_1B_IT_GGUF_REPO = "ggml-org/gemma-3-1b-it-GGUF"
-private const val GEMMA_3_1B_IT_GGUF_FILE = "gemma-3-1b-it-Q4_K_M.gguf"
-private const val GEMMA_3_4B_IT_GGUF_REPO = "ggml-org/gemma-3-4b-it-GGUF"
-private const val GEMMA_3_4B_IT_GGUF_FILE = "gemma-3-4b-it-Q4_K_M.gguf"
-private const val GEMMA_3_4B_IT_MMPROJ_FILE = "mmproj-model-f16.gguf"
+private const val GEMMA_3_1B_IT_GGUF_REPO = "bartowski/google_gemma-3-1b-it-GGUF"
+private const val GEMMA_3_1B_IT_GGUF_FILE = "google_gemma-3-1b-it-Q4_K_M.gguf"
+private const val GEMMA_3_4B_IT_GGUF_REPO = "bartowski/google_gemma-3-4b-it-GGUF"
+private const val GEMMA_3_4B_IT_GGUF_FILE = "google_gemma-3-4b-it-Q4_K_M.gguf"
+private const val GEMMA_3_4B_IT_MMPROJ_FILE = "mmproj-google_gemma-3-4b-it-f16.gguf"
 private const val SMOLLM2_360M_INSTRUCT_GGUF_REPO = "mradermacher/SmolLM2-360M-Instruct-GGUF"
 private const val SMOLLM2_360M_INSTRUCT_GGUF_FILE = "SmolLM2-360M-Instruct.Q5_K_M.gguf"
 private const val QWEN2_5_0_5B_INSTRUCT_GGUF_REPO = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
@@ -19,6 +19,14 @@ private val LEGACY_ON_DEVICE_IDS = setOf(
     "qwen2.5-1.5b-instruct",
     "phi-4-mini-instruct"
 )
+
+private val PINNED_GEMMA_CURATED_IDS = setOf(
+    "gemma-3-1b-it-gguf",
+    "gemma-3-4b-it-gguf"
+)
+
+fun isGemma3OnDeviceModelId(modelId: String): Boolean =
+    modelId.trim().lowercase().startsWith("gemma-3-")
 
 enum class OnDeviceDownloadState {
     NOT_DOWNLOADED,
@@ -131,6 +139,9 @@ data class OnDeviceModelCatalogEntry(
 
     val supportsVision: Boolean
         get() = capability == OnDeviceModelCapability.LOCAL_VISION
+
+    val isGemma3Model: Boolean
+        get() = isGemma3OnDeviceModelId(id)
 }
 
 data class OnDeviceModelCatalog(
@@ -149,10 +160,18 @@ data class InstalledOnDeviceModel(
     val errorMessage: String? = null,
     val failureKindKey: String? = null,
     val validatedAt: Long = 0L,
-    val validatedRuntimeProfileId: String? = null
+    val validatedRuntimeProfileId: String? = null,
+    val visionReady: Boolean = false,
+    val visionValidatedAt: Long = 0L,
+    val visionFailureKindKey: String? = null,
+    val visionErrorMessage: String? = null,
+    val validatedVisionRuntimeProfileId: String? = null
 ) {
     val failureKind: OnDeviceFailureKind
         get() = OnDeviceFailureKind.fromKey(failureKindKey)
+
+    val visionFailureKind: OnDeviceFailureKind
+        get() = OnDeviceFailureKind.fromKey(visionFailureKindKey)
 }
 
 data class OnDeviceModelLibraryItem(
@@ -333,6 +352,9 @@ private fun sanitizeOnDeviceCatalogEntry(
         canonicalEntry != null -> OnDeviceModelSourceType.CATALOG.name
         else -> entry.sourceTypeKey.orEmpty().ifBlank { OnDeviceModelSourceType.CATALOG.name }
     }
+    val preferPinnedCanonicalSource = !forceImported &&
+        canonicalEntry?.id in PINNED_GEMMA_CURATED_IDS &&
+        canonicalEntry?.curatedVerified == true
     val accessState = when {
         forceImported -> entry.accessStateKey.orEmpty().ifBlank { OnDeviceModelAccessState.EXTERNAL.name }
         canonicalEntry != null -> entry.accessStateKey.orEmpty().ifBlank {
@@ -395,11 +417,19 @@ private fun sanitizeOnDeviceCatalogEntry(
         description = entry.description.orEmpty().ifBlank {
             canonicalEntry?.description.orEmpty()
         },
-        downloadUrl = entry.downloadUrl.orEmpty().ifBlank {
-            canonicalEntry?.downloadUrl.orEmpty()
+        downloadUrl = if (preferPinnedCanonicalSource) {
+            canonicalEntry?.downloadUrl.orEmpty().ifBlank { entry.downloadUrl.orEmpty() }
+        } else {
+            entry.downloadUrl.orEmpty().ifBlank {
+                canonicalEntry?.downloadUrl.orEmpty()
+            }
         },
-        fileName = entry.fileName.orEmpty().ifBlank {
-            canonicalEntry?.fileName.orEmpty()
+        fileName = if (preferPinnedCanonicalSource) {
+            canonicalEntry?.fileName.orEmpty().ifBlank { entry.fileName.orEmpty() }
+        } else {
+            entry.fileName.orEmpty().ifBlank {
+                canonicalEntry?.fileName.orEmpty()
+            }
         },
         visionProjectorDownloadUrl = mergedVisionProjectorDownloadUrl,
         visionProjectorFileName = mergedVisionProjectorFileName,

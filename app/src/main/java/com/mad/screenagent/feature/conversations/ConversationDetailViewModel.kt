@@ -22,7 +22,7 @@ import com.mad.screenagent.data.db.toChatMessage
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.OnDeviceFailureKind
 import com.mad.screenagent.data.model.OnDeviceDownloadState
-import com.mad.screenagent.data.model.canHandleImageRequests
+import com.mad.screenagent.data.model.isOnDeviceProvider
 import com.mad.screenagent.data.model.hasInternetAccess
 import com.mad.screenagent.data.repository.AgentRepository
 import com.mad.screenagent.data.repository.ConversationRepository
@@ -113,6 +113,8 @@ class ConversationDetailViewModel(
             }
             else -> resolvedDefaultAgent ?: agents.firstOrNull()
         }
+    }.mapLatest { candidate ->
+        candidate?.let { agentResolver(it) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _isLoading = MutableStateFlow(false)
@@ -279,8 +281,12 @@ class ConversationDetailViewModel(
         _isLoading.value = true
         _inputText.value = ""
         streamingJob = viewModelScope.launch {
-            val onDeviceBlockMessage = if (agent.provider == com.mad.screenagent.data.model.AiProviderType.ON_DEVICE) {
-                validateOnDeviceReadiness(agent)
+            val onDeviceBlockMessage = if (agent.provider.isOnDeviceProvider()) {
+                validateOnDeviceReadiness(
+                    agent = agent,
+                    images = images,
+                    attachedFile = attachedFile
+                )
             } else null
             if (onDeviceBlockMessage != null) {
                 _errorEvent.trySend(onDeviceBlockMessage)
@@ -361,17 +367,10 @@ class ConversationDetailViewModel(
             }
 
             try {
-                // If the agent doesn't support the attachment type, say so in the chat
-                if (images.isNotEmpty() && !agent.canHandleImageRequests()) {
-                    accumulated =
-                        com.mad.screenagent.shared.streaming.OnDeviceUserMessages.imageAttachmentsRequireVisionModel()
-                    return@launch
-                }
-
                 // Build history; the latest user message already has imagesJson stored in DB.
                 val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
                 val rawHistory = dbHistory.map { msg -> msg.toChatMessage() }
-                val history = if (agent.provider == com.mad.screenagent.data.model.AiProviderType.ON_DEVICE) {
+                val history = if (agent.provider.isOnDeviceProvider()) {
                     compressOnDeviceHistory(rawHistory)
                 } else {
                     compressHistory(rawHistory)
@@ -511,7 +510,11 @@ class ConversationDetailViewModel(
         }
     }
 
-    private suspend fun validateOnDeviceReadiness(agent: AgentConfig): String? {
+    private suspend fun validateOnDeviceReadiness(
+        agent: AgentConfig,
+        images: List<ImageAttachment>,
+        attachedFile: FileAttachmentContext?
+    ): String? {
         val modelId = agent.onDevice.selectedModelId.trim().ifBlank { agent.model.trim() }
         if (modelId.isBlank()) {
             return OnDeviceUserMessages.chooseModel()
@@ -530,6 +533,27 @@ class ConversationDetailViewModel(
             val reason = OnDeviceUserMessages.missingModelFile()
             onDeviceModelRepository.markModelUnavailable(modelId, reason)
             return reason
+        }
+        if (images.isNotEmpty()) {
+            if (images.size > 1) {
+                return OnDeviceUserMessages.singleImageOnly()
+            }
+            if (attachedFile != null) {
+                return OnDeviceUserMessages.mixedImageAndDocumentUnsupported()
+            }
+            val projectorPath = installed.visionProjectorPath?.takeIf { it.isNotBlank() }
+            if (!installed.visionReady && projectorPath == null) {
+                return OnDeviceUserMessages.imageAttachmentsRequireVisionModel()
+            }
+            if (projectorPath == null || !java.io.File(projectorPath).exists() || java.io.File(projectorPath).length() == 0L) {
+                onDeviceModelRepository.updateVisionValidation(
+                    modelId = modelId,
+                    visionReady = false,
+                    failureKind = OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
+                    message = OnDeviceUserMessages.missingVisionSupportFile()
+                )
+                return OnDeviceUserMessages.missingVisionSupportFile()
+            }
         }
         return null
     }

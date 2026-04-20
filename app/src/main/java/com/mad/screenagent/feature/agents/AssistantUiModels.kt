@@ -180,6 +180,15 @@ fun providerUiInfo(provider: AiProviderType): ProviderUiInfo = when (provider) {
         apiKeyCalloutTitle = "Custom provider setup",
         apiKeyCalloutBody = "Choose a preset or enter a manual base URL for Groq, Grok, NVIDIA, or another compatible provider."
     )
+    AiProviderType.ON_DEVICE_GEMMA3 -> ProviderUiInfo(
+        provider = provider,
+        label = "On-Device (Gemma 3)",
+        description = "Run pinned Gemma 3 GGUF models directly on the device with no API key.",
+        apiKeyHint = "No API key needed. Download a curated Gemma 3 model and use it locally.",
+        apiKeyPlaceholder = "Not required",
+        apiKeyCalloutTitle = "Gemma 3 models",
+        apiKeyCalloutBody = "This provider is dedicated to the pinned Gemma 3 local models, including Gemma 3 4B for image analysis."
+    )
     AiProviderType.ON_DEVICE -> ProviderUiInfo(
         provider = provider,
         label = "On-Device",
@@ -192,6 +201,7 @@ fun providerUiInfo(provider: AiProviderType): ProviderUiInfo = when (provider) {
 }
 
 fun assistantProviderOrder(): List<AiProviderType> = listOf(
+    AiProviderType.ON_DEVICE_GEMMA3,
     AiProviderType.ON_DEVICE,
     AiProviderType.OPENROUTER,
     AiProviderType.ANTHROPIC,
@@ -207,6 +217,21 @@ fun recommendedModelChoices(
     currentModel: String? = null
 ): List<RecommendedModelChoice> {
     val baseChoices = when (provider) {
+        AiProviderType.ON_DEVICE_GEMMA3 -> listOf(
+            RecommendedModelChoice(
+                id = "gemma-3-4b-it-gguf",
+                label = "Gemma 3 4B IT",
+                description = "Pinned Gemma 3 vision model for stronger devices.",
+                supportsVision = true,
+                supportsDocuments = true
+            ),
+            RecommendedModelChoice(
+                id = "gemma-3-1b-it-gguf",
+                label = "Gemma 3 1B IT",
+                description = "Pinned Gemma 3 text model for lighter local chat.",
+                supportsDocuments = true
+            )
+        )
         AiProviderType.ON_DEVICE -> listOf(
             RecommendedModelChoice(
                 id = "gemma-3-1b-it-gguf",

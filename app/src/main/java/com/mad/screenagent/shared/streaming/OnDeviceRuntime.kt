@@ -1,6 +1,10 @@
 package com.mad.screenagent.shared.streaming
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.util.Base64
 import android.util.Log
 import com.arm.aichat.AiChat
@@ -21,7 +25,12 @@ import java.util.UUID
 interface OnDeviceRuntime {
     val runtimeProfileId: String
 
-    suspend fun validateModel(modelPath: String, visionProjectorPath: String? = null): OnDeviceValidationResult
+    suspend fun validateModel(modelPath: String): OnDeviceValidationResult
+
+    suspend fun validateVisionModel(
+        modelPath: String,
+        visionProjectorPath: String
+    ): OnDeviceValidationResult
 
     fun streamResponse(
         messages: List<ChatMessage>,
@@ -67,9 +76,19 @@ class LlamaCppOnDeviceRuntime(
     private var loadedVisionProjectorPath: String? = null
     private var loadedSystemPrompt: String? = null
 
+    private fun loadVisionSmokeTestAttachment(): ImageAttachment {
+        val base64 = appContext.assets.open(ON_DEVICE_VISION_SMOKE_TEST_ASSET)
+            .bufferedReader()
+            .use { it.readText() }
+            .trim()
+        return ImageAttachment(
+            base64 = base64,
+            mimeType = "image/png"
+        )
+    }
+
     override suspend fun validateModel(
-        modelPath: String,
-        visionProjectorPath: String?
+        modelPath: String
     ): OnDeviceValidationResult {
         val modelFile = File(modelPath)
         if (!modelFile.exists() || modelFile.length() == 0L) {
@@ -78,22 +97,13 @@ class LlamaCppOnDeviceRuntime(
                 OnDeviceUserMessages.missingModelFile()
             )
         }
-        if (visionProjectorPath != null) {
-            val projectorFile = File(visionProjectorPath)
-            if (!projectorFile.exists() || projectorFile.length() == 0L) {
-                return OnDeviceValidationResult.failure(
-                    OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
-                    OnDeviceUserMessages.missingModelFile()
-                )
-            }
-        }
 
         return loadMutex.withLock {
             try {
                 if (engine.state.value.isModelLoaded || engine.state.value is InferenceEngine.State.Error) {
                     runCatching { engine.cleanUp() }
                 }
-                engine.loadModel(modelPath, visionProjectorPath)
+                engine.loadModel(modelPath, null)
                 runCatching { engine.cleanUp() }
                 loadedModelPath = null
                 loadedVisionProjectorPath = null
@@ -116,13 +126,80 @@ class LlamaCppOnDeviceRuntime(
         }
     }
 
+    override suspend fun validateVisionModel(
+        modelPath: String,
+        visionProjectorPath: String
+    ): OnDeviceValidationResult {
+        val modelFile = File(modelPath)
+        if (!modelFile.exists() || modelFile.length() == 0L) {
+            return OnDeviceValidationResult.failure(
+                OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
+                OnDeviceUserMessages.missingModelFile()
+            )
+        }
+        val projectorFile = File(visionProjectorPath)
+        if (!projectorFile.exists() || projectorFile.length() == 0L) {
+            return OnDeviceValidationResult.failure(
+                OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
+                OnDeviceUserMessages.missingVisionSupportFile()
+            )
+        }
+
+        return loadMutex.withLock {
+            try {
+                if (engine.state.value.isModelLoaded || engine.state.value is InferenceEngine.State.Error) {
+                    runCatching { engine.cleanUp() }
+                }
+                engine.loadModel(modelPath, visionProjectorPath)
+                val promptBundle = buildOnDeviceVisionPrompt(
+                    messages = listOf(
+                        ChatMessage(
+                            role = "user",
+                            content = "Describe this image briefly.",
+                            images = listOf(loadVisionSmokeTestAttachment())
+                        )
+                    ),
+                    systemPrompt = "",
+                    tempRootDir = File(appContext.cacheDir, "on-device-vision-smoke")
+                )
+                val imageBitmap = promptBundle.visionBitmap
+                    ?: error("Vision smoke test prompt is missing its bitmap payload.")
+                engine.sendUserPromptWithVisionBitmap(
+                    message = promptBundle.prompt,
+                    width = imageBitmap.width,
+                    height = imageBitmap.height,
+                    rgbBytes = imageBitmap.rgbBytes,
+                    predictLength = 8
+                ).collect { }
+                runCatching { engine.cleanUp() }
+                loadedModelPath = null
+                loadedVisionProjectorPath = null
+                loadedSystemPrompt = null
+                OnDeviceValidationResult.success()
+            } catch (t: Throwable) {
+                runCatching { engine.cleanUp() }
+                loadedModelPath = null
+                loadedVisionProjectorPath = null
+                loadedSystemPrompt = null
+                val cause = t.unwrapOnDeviceThrowable()
+                OnDeviceValidationResult.failure(
+                    failureKind = cause.toFailureKind(),
+                    message = OnDeviceUserMessages.visionValidationMessage(
+                        cause.toFailureKind(),
+                        cause.message
+                    )
+                )
+            } finally {
+            }
+        }
+    }
+
     override fun streamResponse(
         messages: List<ChatMessage>,
         config: AgentConfig,
         modelPath: String,
         visionProjectorPath: String?
     ): Flow<StreamChunk> = flow {
-        val tempImageFiles = mutableListOf<File>()
         try {
             val startedAt = System.nanoTime()
             val modelFile = File(modelPath)
@@ -135,8 +212,26 @@ class LlamaCppOnDeviceRuntime(
                 return@flow
             }
 
-            ensureLoaded(modelPath = modelPath, visionProjectorPath = visionProjectorPath, config = config)
             val visionImages = messages.flatMap { it.images }
+            val hasDocumentContext = messages.any {
+                it.fileAttachment != null || !it.documentBase64.isNullOrBlank()
+            }
+            if (visionImages.size > 1) {
+                emit(
+                    StreamChunk.Error(
+                        IllegalStateException(OnDeviceUserMessages.singleImageOnly())
+                    )
+                )
+                return@flow
+            }
+            if (visionImages.isNotEmpty() && hasDocumentContext) {
+                emit(
+                    StreamChunk.Error(
+                        IllegalStateException(OnDeviceUserMessages.mixedImageAndDocumentUnsupported())
+                    )
+                )
+                return@flow
+            }
             if (visionImages.isNotEmpty() && visionProjectorPath == null) {
                 emit(
                     StreamChunk.Error(
@@ -145,12 +240,13 @@ class LlamaCppOnDeviceRuntime(
                 )
                 return@flow
             }
+            ensureLoaded(modelPath = modelPath, visionProjectorPath = visionProjectorPath, config = config)
             val promptBundle = if (visionProjectorPath != null && visionImages.isNotEmpty()) {
                 buildOnDeviceVisionPrompt(
                     messages = messages,
                     systemPrompt = "",
                     tempRootDir = File(appContext.cacheDir, "on-device-vision")
-                ).also { tempImageFiles.addAll(it.imagePaths) }
+                )
             } else {
                 buildOnDevicePrompt(messages = messages, systemPrompt = "")
             }
@@ -161,10 +257,13 @@ class LlamaCppOnDeviceRuntime(
             )
             var firstTokenAt = 0L
             var tokenCount = 0
-            val tokenFlow = if (promptBundle.imagePaths.isNotEmpty()) {
-                engine.sendUserPromptWithImages(
+            val tokenFlow = if (promptBundle.visionBitmap != null) {
+                val imageBitmap = promptBundle.visionBitmap
+                engine.sendUserPromptWithVisionBitmap(
                     message = promptBundle.prompt,
-                    imagePaths = promptBundle.imagePaths.map { it.absolutePath },
+                    width = imageBitmap.width,
+                    height = imageBitmap.height,
+                    rgbBytes = imageBitmap.rgbBytes,
                     predictLength = effectivePredictLength
                 )
             } else {
@@ -190,11 +289,6 @@ class LlamaCppOnDeviceRuntime(
             emit(StreamChunk.Done)
         } catch (t: Throwable) {
             emit(StreamChunk.Error(t.unwrapOnDeviceThrowable()))
-        } finally {
-            tempImageFiles.forEach { file ->
-                runCatching { file.delete() }
-                runCatching { file.parentFile?.deleteRecursively() }
-            }
         }
     }.flowOn(Dispatchers.IO)
 
@@ -230,12 +324,21 @@ class LlamaCppOnDeviceRuntime(
 
 private data class OnDevicePromptBundle(
     val prompt: String,
-    val imagePaths: List<File>
+    val visionBitmap: OnDeviceVisionBitmap? = null
 )
 
+private data class OnDeviceVisionBitmap(
+    val width: Int,
+    val height: Int,
+    val rgbBytes: ByteArray
+)
+
+private const val ON_DEVICE_VISION_SMOKE_TEST_ASSET = "on_device_vision_smoke_test.base64"
 private const val ON_DEVICE_ATTACHMENT_TEXT_LIMIT = 4_000
 private const val ON_DEVICE_ATTACHMENT_TRUNCATION_NOTE =
     "\n\n[Attachment text truncated for on-device processing.]"
+private const val ON_DEVICE_VISION_MAX_EDGE = 1024
+private const val ON_DEVICE_RUNTIME_TAG = "OnDevicePerf"
 
 private fun buildOnDevicePrompt(messages: List<ChatMessage>, systemPrompt: String): OnDevicePromptBundle =
     buildOnDevicePrompt(messages, systemPrompt, includeImageMarkers = false, tempRootDir = null)
@@ -253,7 +356,7 @@ private fun buildOnDevicePrompt(
     includeImageMarkers: Boolean,
     tempRootDir: File?
 ): OnDevicePromptBundle {
-    val tempImageFiles = mutableListOf<File>()
+    var visionBitmap: OnDeviceVisionBitmap? = null
     val promptText = buildString {
         if (systemPrompt.isNotBlank()) {
             appendLine("System: ${systemPrompt.trim()}")
@@ -301,32 +404,104 @@ private fun buildOnDevicePrompt(
     }
 
     if (includeImageMarkers) {
-        val baseDir = tempRootDir ?: File("/data/local/tmp")
         messages.forEach { message ->
             message.images.forEach { image ->
                 val bytes = runCatching {
                     Base64.decode(image.base64, Base64.DEFAULT)
                 }.getOrNull()
                 if (bytes != null) {
-                    val ext = image.mimeType.lowercase().let { mime ->
-                        when {
-                            mime.contains("png") -> ".png"
-                            mime.contains("webp") -> ".webp"
-                            mime.contains("gif") -> ".gif"
-                            else -> ".jpg"
-                        }
-                    }
-                    val tempDir = File(baseDir, UUID.randomUUID().toString())
-                    tempDir.mkdirs()
-                    val file = File(tempDir, "image_${tempImageFiles.size}$ext")
-                    file.writeBytes(bytes)
-                    tempImageFiles.add(file)
+                    visionBitmap = createNormalizedOnDeviceVisionBitmap(
+                        bytes = bytes,
+                        mimeType = image.mimeType,
+                        tempDir = tempRootDir ?: File("/data/local/tmp"),
+                        index = 0
+                    )
                 }
             }
         }
     }
 
-    return OnDevicePromptBundle(prompt = promptText, imagePaths = tempImageFiles)
+    return OnDevicePromptBundle(prompt = promptText, visionBitmap = visionBitmap)
+}
+
+private fun createNormalizedOnDeviceVisionBitmap(
+    bytes: ByteArray,
+    mimeType: String,
+    tempDir: File,
+    index: Int
+): OnDeviceVisionBitmap {
+    val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    if (decoded == null) {
+        val ext = mimeType.lowercase().let { mime ->
+            when {
+                mime.contains("png") -> ".png"
+                mime.contains("webp") -> ".webp"
+                mime.contains("gif") -> ".gif"
+                else -> ".jpg"
+            }
+        }
+        val fallbackFile = File(tempDir, "${UUID.randomUUID()}_image_$index$ext").apply {
+            parentFile?.mkdirs()
+            writeBytes(bytes)
+        }
+        val fallbackDecoded = BitmapFactory.decodeFile(fallbackFile.absolutePath)
+            ?: error("Unable to decode normalized on-device vision bitmap.")
+        return fallbackDecoded.toNormalizedOnDeviceVisionBitmap().also {
+            fallbackDecoded.recycle()
+            runCatching { fallbackFile.delete() }
+        }
+    }
+    return decoded.toNormalizedOnDeviceVisionBitmap().also {
+        decoded.recycle()
+    }
+}
+
+private fun Bitmap.scaleForOnDeviceVision(): Bitmap {
+    val longestEdge = maxOf(width, height)
+    if (width >= 2 && height >= 2 && longestEdge <= ON_DEVICE_VISION_MAX_EDGE) return this
+    val scale = ON_DEVICE_VISION_MAX_EDGE.toFloat() / longestEdge.toFloat()
+    val clampedScale = if (longestEdge <= ON_DEVICE_VISION_MAX_EDGE) 1f else scale
+    val targetWidth = maxOf(2, (width * clampedScale).toInt())
+    val targetHeight = maxOf(2, (height * clampedScale).toInt())
+    return Bitmap.createScaledBitmap(this, targetWidth, targetHeight, true)
+}
+
+private fun Bitmap.toNormalizedOnDeviceVisionBitmap(): OnDeviceVisionBitmap {
+    val scaled = scaleForOnDeviceVision()
+    val flattened = Bitmap.createBitmap(
+        maxOf(2, scaled.width),
+        maxOf(2, scaled.height),
+        Bitmap.Config.ARGB_8888
+    )
+    Canvas(flattened).apply {
+        drawColor(Color.WHITE)
+        drawBitmap(scaled, 0f, 0f, null)
+    }
+
+    val width = flattened.width
+    val height = flattened.height
+    val pixels = IntArray(width * height)
+    flattened.getPixels(pixels, 0, width, 0, 0, width, height)
+    val rgb = ByteArray(width * height * 3)
+    pixels.forEachIndexed { index, pixel ->
+        val offset = index * 3
+        rgb[offset] = Color.red(pixel).toByte()
+        rgb[offset + 1] = Color.green(pixel).toByte()
+        rgb[offset + 2] = Color.blue(pixel).toByte()
+    }
+
+    Log.i(ON_DEVICE_RUNTIME_TAG, "Normalized on-device vision bitmap ${width}x$height (${rgb.size} bytes)")
+
+    flattened.recycle()
+    if (scaled !== this) {
+        scaled.recycle()
+    }
+
+    return OnDeviceVisionBitmap(
+        width = width,
+        height = height,
+        rgbBytes = rgb
+    )
 }
 
 private fun mtmdMarker(): String = "<__media__>"
@@ -340,6 +515,7 @@ private fun resolveOnDevicePredictLength(messages: List<ChatMessage>, config: Ag
     val configured = config.onDevice.maxOutputTokens.coerceAtLeast(1)
     return if (hasAttachments) configured.coerceAtMost(128) else configured
 }
+
 
 private fun String.limitOnDeviceAttachmentText(): String {
     if (length <= ON_DEVICE_ATTACHMENT_TEXT_LIMIT) return this

@@ -62,7 +62,9 @@ import com.mad.screenagent.data.model.InstalledOnDeviceModel
 import com.mad.screenagent.data.model.OnDeviceModelCatalogEntry
 import com.mad.screenagent.data.model.OnDeviceModelLibraryItem
 import com.mad.screenagent.data.model.canHandleImageRequests
+import com.mad.screenagent.data.model.isGemma3OnDeviceModelId
 import com.mad.screenagent.data.model.isOpenRouterFreeModel
+import com.mad.screenagent.data.model.isOnDeviceProvider
 import com.mad.screenagent.data.model.normalizeOpenAiCompatibleBaseUrl
 import com.mad.screenagent.shared.streaming.NativeWebSearchConfig
 import com.mad.screenagent.shared.streaming.OnDeviceUserMessages
@@ -113,12 +115,41 @@ fun AgentEditScreen(
     val selectedModelChoice = recommendedModels.firstOrNull { it.id == agent.model }
         ?: recommendedModels.firstOrNull()
     val isCustomProvider = agent.provider == AiProviderType.CUSTOM
-    val isOnDeviceProvider = agent.provider == AiProviderType.ON_DEVICE
+    val isOnDeviceProvider = agent.provider.isOnDeviceProvider()
+    val isGemmaOnDeviceProvider = agent.provider == AiProviderType.ON_DEVICE_GEMMA3
+    val visiblePublicOnDeviceModelLibrary = remember(publicOnDeviceModelLibrary, isGemmaOnDeviceProvider) {
+        if (isGemmaOnDeviceProvider) {
+            publicOnDeviceModelLibrary.filter { isGemma3OnDeviceModelId(it.catalogEntry.id) }
+        } else {
+            publicOnDeviceModelLibrary
+        }
+    }
+    val visibleReadyOnDeviceModelLibrary = remember(readyOnDeviceModelLibrary, isGemmaOnDeviceProvider) {
+        if (isGemmaOnDeviceProvider) {
+            readyOnDeviceModelLibrary.filter { isGemma3OnDeviceModelId(it.catalogEntry.id) }
+        } else {
+            readyOnDeviceModelLibrary
+        }
+    }
+    val visibleImportedOnDeviceModelLibrary = remember(importedOnDeviceModelLibrary, isGemmaOnDeviceProvider) {
+        if (isGemmaOnDeviceProvider) {
+            emptyList()
+        } else {
+            importedOnDeviceModelLibrary
+        }
+    }
+    val visibleNonPublicOnDeviceModelLibrary = remember(nonPublicOnDeviceModelLibrary, isGemmaOnDeviceProvider) {
+        if (isGemmaOnDeviceProvider) {
+            emptyList()
+        } else {
+            nonPublicOnDeviceModelLibrary
+        }
+    }
     val selectedOnDeviceModelId = agent.onDevice.selectedModelId.ifBlank { agent.model }
-    val selectedPublicOnDeviceItem = publicOnDeviceModelLibrary.firstOrNull {
+    val selectedPublicOnDeviceItem = visiblePublicOnDeviceModelLibrary.firstOrNull {
         it.catalogEntry.id == selectedOnDeviceModelId
     }
-    val selectedReadyOnDeviceItem = readyOnDeviceModelLibrary.firstOrNull {
+    val selectedReadyOnDeviceItem = visibleReadyOnDeviceModelLibrary.firstOrNull {
         it.catalogEntry.id == selectedOnDeviceModelId
     }
     val canSave = saveValidationMessage == null
@@ -266,6 +297,7 @@ fun AgentEditScreen(
                             selected = agent.provider == type,
                             onClick = {
                                 val defaultModel = when (type) {
+                                    AiProviderType.ON_DEVICE_GEMMA3,
                                     AiProviderType.ON_DEVICE -> ""
                                     else -> defaultRecommendedModelId(
                                         provider = type,
@@ -281,7 +313,11 @@ fun AgentEditScreen(
                     }
                 }
                 val providerChangeHint = if (isOnDeviceProvider) {
-                    "Pick your preferred model directly from the \"Models Shelf\" to run it on the device with no API key."
+                    if (isGemmaOnDeviceProvider) {
+                        "Pick a pinned Gemma 3 model from the shelf to run it locally with no API key."
+                    } else {
+                        "Pick your preferred model directly from the \"Models Shelf\" to run it on the device with no API key."
+                    }
                 } else {
                     stringResource(R.string.assistants_provider_change_hint)
                 }
@@ -296,10 +332,11 @@ fun AgentEditScreen(
 
                 if (isOnDeviceProvider) {
                     OnDeviceModelSection(
-                        publicLibrary = publicOnDeviceModelLibrary,
-                        readyLibrary = readyOnDeviceModelLibrary,
-                        importedLibrary = importedOnDeviceModelLibrary,
-                        nonPublicLibrary = nonPublicOnDeviceModelLibrary,
+                        provider = agent.provider,
+                        publicLibrary = visiblePublicOnDeviceModelLibrary,
+                        readyLibrary = visibleReadyOnDeviceModelLibrary,
+                        importedLibrary = visibleImportedOnDeviceModelLibrary,
+                        nonPublicLibrary = visibleNonPublicOnDeviceModelLibrary,
                         selectedModelId = agent.onDevice.selectedModelId.ifBlank { agent.model },
                         downloadState = onDeviceDownloadState,
                         catalogUiState = onDeviceCatalogUiState,
@@ -308,6 +345,7 @@ fun AgentEditScreen(
                         },
                         onDownload = viewModel::downloadOnDeviceModel,
                         onImport = { ggufImportLauncher.launch(arrayOf("*/*")) },
+                        showImportAction = !isGemmaOnDeviceProvider,
                         onRefresh = viewModel::refreshOnDeviceCatalog,
                         onSortChange = viewModel::setOnDeviceShelfSort,
                         onCancel = viewModel::cancelOnDeviceDownload,
@@ -762,7 +800,7 @@ private fun ProviderCatalogStatusNote(
             "Loading latest ${provider.displayName} catalog…",
             "ScreenAgent is updating the available model list for this provider."
         )
-        provider == AiProviderType.ON_DEVICE -> Pair(
+        provider.isOnDeviceProvider() -> Pair(
             "Local catalog ready",
             "ScreenAgent will show installed on-device models here once downloads are wired."
         )
@@ -1388,6 +1426,7 @@ private fun NativeWebSearchToggle(
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 private fun OnDeviceModelSection(
+    provider: AiProviderType,
     publicLibrary: List<OnDeviceModelLibraryItem>,
     readyLibrary: List<OnDeviceModelLibraryItem>,
     importedLibrary: List<OnDeviceModelLibraryItem>,
@@ -1398,6 +1437,7 @@ private fun OnDeviceModelSection(
     onModelSelect: (String) -> Unit,
     onDownload: (String) -> Unit,
     onImport: () -> Unit,
+    showImportAction: Boolean,
     onRefresh: () -> Unit,
     onSortChange: (OnDeviceShelfSort) -> Unit,
     onCancel: (String) -> Unit,
@@ -1422,9 +1462,16 @@ private fun OnDeviceModelSection(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("Models Shelf", style = MaterialTheme.typography.titleSmall)
             Text(
-                text = "Download curated GGUF models or import your own GGUF files here. Ready models appear in the selector below.",
+                if (provider == AiProviderType.ON_DEVICE_GEMMA3) "Gemma 3 Shelf" else "Models Shelf",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Text(
+                text = if (provider == AiProviderType.ON_DEVICE_GEMMA3) {
+                    "Download the pinned Gemma 3 GGUF models here. Ready models appear in the selector below."
+                } else {
+                    "Download curated GGUF models or import your own GGUF files here. Ready models appear in the selector below."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1499,8 +1546,10 @@ private fun OnDeviceModelSection(
                         Text("Refresh Models")
                     }
                 }
-                OutlinedButton(onClick = onImport) {
-                    Text("Import GGUF")
+                if (showImportAction) {
+                    OutlinedButton(onClick = onImport) {
+                        Text("Import GGUF")
+                    }
                 }
             }
 
@@ -1518,7 +1567,11 @@ private fun OnDeviceModelSection(
                 ) {
                     if (shelfItems.isEmpty()) {
                         Text(
-                            text = "No GGUF models are available yet.",
+                            text = if (provider == AiProviderType.ON_DEVICE_GEMMA3) {
+                                "No Gemma 3 models are available yet."
+                            } else {
+                                "No GGUF models are available yet."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1642,7 +1695,9 @@ private fun OnDeviceModelSection(
                             if (selectedReadyItem == null) {
                                 "Choose a ready model from the shelf. This selection is required before saving."
                             } else {
-                                selectedReadyItem.catalogEntry.description.ifBlank { "Ready to use" }
+                                selectedReadyItem.installRecord?.selectorReadinessSummary(
+                                    selectedReadyItem.catalogEntry.description
+                                ) ?: selectedReadyItem.catalogEntry.description.ifBlank { "Ready to use" }
                             }
                         )
                     },
@@ -1792,7 +1847,10 @@ private fun InstalledOnDeviceModel?.statusHeadline(
         OnDeviceDownloadState.DOWNLOADING -> "Downloading"
         OnDeviceDownloadState.VALIDATING -> "Validating"
         OnDeviceDownloadState.READY,
-        OnDeviceDownloadState.DOWNLOADED -> "Ready"
+        OnDeviceDownloadState.DOWNLOADED -> when {
+            record?.visionReady == true -> "Ready for text + images"
+            else -> "Ready for text"
+        }
         OnDeviceDownloadState.CANCELLED -> "Cancelled"
         OnDeviceDownloadState.FAILED -> when {
             record != null -> OnDeviceUserMessages.shortStatus(record.failureKind)
@@ -1805,9 +1863,27 @@ private fun InstalledOnDeviceModel?.statusHeadline(
 
 private fun InstalledOnDeviceModel?.failureReasonSummary(): String? {
     val record = this
-    val message = record?.errorMessage?.trim().orEmpty()
-    if (message.isBlank()) return null
-    return OnDeviceUserMessages.validationMessage(record?.failureKind ?: OnDeviceFailureKind.NONE, message)
+    val textMessage = record?.errorMessage?.trim().orEmpty()
+    if (textMessage.isNotBlank()) {
+        return OnDeviceUserMessages.validationMessage(
+            record?.failureKind ?: OnDeviceFailureKind.NONE,
+            textMessage
+        )
+    }
+    val visionMessage = record?.visionErrorMessage?.trim().orEmpty()
+    if (visionMessage.isNotBlank()) {
+        return OnDeviceUserMessages.visionValidationMessage(
+            record?.visionFailureKind ?: OnDeviceFailureKind.NONE,
+            visionMessage
+        )
+    }
+    return null
+}
+
+private fun InstalledOnDeviceModel.selectorReadinessSummary(fallbackDescription: String): String = when {
+    visionReady -> "Ready for text and images."
+    visionErrorMessage?.isNotBlank() == true -> "Ready for text. Image support isn't ready yet."
+    else -> fallbackDescription.ifBlank { "Ready for text" }
 }
 
 private fun Long.humanReadableBytes(): String {

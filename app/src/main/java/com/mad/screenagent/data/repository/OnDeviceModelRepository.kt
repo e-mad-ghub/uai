@@ -47,7 +47,20 @@ interface OnDeviceModelSource {
         reason: String,
         failureKind: OnDeviceFailureKind = OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE
     ) {}
+    suspend fun updateVisionValidation(
+        modelId: String,
+        visionReady: Boolean,
+        failureKind: OnDeviceFailureKind = OnDeviceFailureKind.NONE,
+        message: String? = null,
+        validatedAt: Long = System.currentTimeMillis(),
+        validatedRuntimeProfileId: String? = null
+    ) {}
 }
+
+private data class OnDeviceInstallValidation(
+    val text: OnDeviceValidationResult,
+    val vision: OnDeviceValidationResult? = null
+)
 
 data class OnDeviceCatalogRefreshResult(
     val catalog: OnDeviceModelCatalog,
@@ -274,8 +287,11 @@ class OnDeviceModelRepository(
     suspend fun getInstalledModels(): List<InstalledOnDeviceModel> =
         installedModelsFlow.first()
 
-    override suspend fun getInstalledModel(modelId: String): InstalledOnDeviceModel? =
-        installedModelsFlow.first().firstOrNull { it.modelId == modelId }
+    override suspend fun getInstalledModel(modelId: String): InstalledOnDeviceModel? {
+        val installed = installedModelsFlow.first().firstOrNull { it.modelId == modelId } ?: return null
+        val catalogEntry = catalogFlow.first().models.firstOrNull { it.id == modelId }
+        return installed.takeUnless { catalogEntry != null && isPinnedArtifactMismatch(catalogEntry, it) }
+    }
 
     override suspend fun markModelUnavailable(
         modelId: String,
@@ -297,6 +313,28 @@ class OnDeviceModelRepository(
         saveDownloadState(OnDeviceDownloadState.UNAVAILABLE)
     }
 
+    override suspend fun updateVisionValidation(
+        modelId: String,
+        visionReady: Boolean,
+        failureKind: OnDeviceFailureKind,
+        message: String?,
+        validatedAt: Long,
+        validatedRuntimeProfileId: String?
+    ) {
+        val current = installedModelsFlow.first().toMutableList()
+        val idx = current.indexOfFirst { it.modelId == modelId }
+        if (idx < 0) return
+        val existing = current[idx]
+        current[idx] = existing.copy(
+            visionReady = visionReady,
+            visionValidatedAt = validatedAt,
+            visionFailureKindKey = failureKind.name,
+            visionErrorMessage = message,
+            validatedVisionRuntimeProfileId = validatedRuntimeProfileId
+        )
+        prefs.saveInstalledOnDeviceModels(current)
+    }
+
     suspend fun saveInstalledModel(
         modelId: String,
         localPath: String,
@@ -307,7 +345,13 @@ class OnDeviceModelRepository(
         errorMessage: String? = null,
         failureKind: OnDeviceFailureKind = OnDeviceFailureKind.NONE,
         validatedAt: Long = 0L,
-        validatedRuntimeProfileId: String? = null
+        validatedRuntimeProfileId: String? = null,
+        replaceVisionState: Boolean = false,
+        visionReady: Boolean? = null,
+        visionValidatedAt: Long? = null,
+        visionFailureKind: OnDeviceFailureKind? = null,
+        visionErrorMessage: String? = null,
+        validatedVisionRuntimeProfileId: String? = null
     ): InstalledOnDeviceModel {
         val current = installedModelsFlow.first().toMutableList()
         val existing = current.firstOrNull { it.modelId == modelId }
@@ -322,7 +366,32 @@ class OnDeviceModelRepository(
             errorMessage = errorMessage,
             failureKindKey = failureKind.name,
             validatedAt = validatedAt,
-            validatedRuntimeProfileId = validatedRuntimeProfileId
+            validatedRuntimeProfileId = validatedRuntimeProfileId,
+            visionReady = if (replaceVisionState) {
+                visionReady ?: false
+            } else {
+                visionReady ?: existing?.visionReady ?: false
+            },
+            visionValidatedAt = if (replaceVisionState) {
+                visionValidatedAt ?: 0L
+            } else {
+                visionValidatedAt ?: existing?.visionValidatedAt ?: 0L
+            },
+            visionFailureKindKey = if (replaceVisionState) {
+                (visionFailureKind ?: OnDeviceFailureKind.NONE).name
+            } else {
+                (visionFailureKind ?: existing?.visionFailureKind ?: OnDeviceFailureKind.NONE).name
+            },
+            visionErrorMessage = if (replaceVisionState) {
+                visionErrorMessage
+            } else {
+                visionErrorMessage ?: existing?.visionErrorMessage
+            },
+            validatedVisionRuntimeProfileId = if (replaceVisionState) {
+                validatedVisionRuntimeProfileId
+            } else {
+                validatedVisionRuntimeProfileId ?: existing?.validatedVisionRuntimeProfileId
+            }
         )
         val idx = current.indexOfFirst { it.modelId == modelId }
         if (idx >= 0) current[idx] = updated else current.add(updated)
@@ -360,20 +429,20 @@ class OnDeviceModelRepository(
             targetFile.outputStream().use { output -> input.copyTo(output) }
         } ?: throw IOException("Couldn't read the selected model file.")
 
-        val validationResult = validateDownloadedModel(targetFile)
-        if (!validationResult.isSuccess) {
+        val validation = validateDownloadedModel(targetFile)
+        if (!validation.text.isSuccess) {
             targetFile.delete()
             saveInstalledModel(
                 modelId = modelId,
                 localPath = targetFile.absolutePath,
                 downloadState = OnDeviceDownloadState.FAILED,
-                errorMessage = validationResult.message,
-                failureKind = validationResult.failureKind,
+                errorMessage = validation.text.message,
+                failureKind = validation.text.failureKind,
                 validatedAt = System.currentTimeMillis(),
                 validatedRuntimeProfileId = runtime.runtimeProfileId
             )
             saveDownloadState(OnDeviceDownloadState.FAILED)
-            throw IOException(validationResult.message)
+            throw IOException(validation.text.message)
         }
 
         upsertCatalogEntry(
@@ -390,7 +459,13 @@ class OnDeviceModelRepository(
             totalBytes = targetFile.length(),
             failureKind = OnDeviceFailureKind.NONE,
             validatedAt = System.currentTimeMillis(),
-            validatedRuntimeProfileId = runtime.runtimeProfileId
+            validatedRuntimeProfileId = runtime.runtimeProfileId,
+            replaceVisionState = true,
+            visionReady = false,
+            visionValidatedAt = 0L,
+            visionFailureKind = OnDeviceFailureKind.NONE,
+            visionErrorMessage = null,
+            validatedVisionRuntimeProfileId = null
         )
         saveDownloadState(OnDeviceDownloadState.READY)
         readyRecord
@@ -496,8 +571,7 @@ class OnDeviceModelRepository(
         var totalBytes = 0L
         try {
             val readyWithCompanion = existingInstall?.downloadState == OnDeviceDownloadState.READY &&
-                targetFile.exists() && targetFile.length() > 0L &&
-                (!catalogEntry.supportsVision || (visionTargetFile != null && visionTargetFile.exists() && visionTargetFile.length() > 0L))
+                targetFile.exists() && targetFile.length() > 0L
             if (readyWithCompanion) {
                 totalBytes = targetFile.length()
                 downloadedBytes = totalBytes
@@ -516,11 +590,14 @@ class OnDeviceModelRepository(
                     totalBytes,
                     targetFile.absolutePath
                 )
-                val validationResult = validateDownloadedModel(targetFile, visionTargetFile)
-                if (!validationResult.isSuccess) {
+                val validation = validateDownloadedModel(
+                    file = targetFile,
+                    visionProjectorFile = visionTargetFile?.takeIf { it.exists() && it.length() > 0L }
+                )
+                if (!validation.text.isSuccess) {
                     throw ModelValidationException(
-                        message = validationResult.message ?: OnDeviceUserMessages.runtimeUnavailable(),
-                        failureKind = validationResult.failureKind
+                        message = validation.text.message ?: OnDeviceUserMessages.runtimeUnavailable(),
+                        failureKind = validation.text.failureKind
                     )
                 }
                 val readyRecord = saveInstalledModel(
@@ -532,7 +609,13 @@ class OnDeviceModelRepository(
                     totalBytes = totalBytes,
                     failureKind = OnDeviceFailureKind.NONE,
                     validatedAt = System.currentTimeMillis(),
-                    validatedRuntimeProfileId = runtime.runtimeProfileId
+                    validatedRuntimeProfileId = runtime.runtimeProfileId,
+                    replaceVisionState = true,
+                    visionReady = validation.vision?.isSuccess == true,
+                    visionValidatedAt = if (validation.vision != null) System.currentTimeMillis() else 0L,
+                    visionFailureKind = validation.vision?.failureKind ?: OnDeviceFailureKind.NONE,
+                    visionErrorMessage = validation.vision?.takeIf { !it.isSuccess }?.message,
+                    validatedVisionRuntimeProfileId = if (validation.vision != null) runtime.runtimeProfileId else null
                 )
                 saveDownloadState(OnDeviceDownloadState.READY)
                 onProgress(
@@ -619,19 +702,43 @@ class OnDeviceModelRepository(
                 }
             }
 
+            var companionValidationFailure: OnDeviceValidationResult? = null
             if (catalogEntry.supportsVision) {
                 val companionUrl = catalogEntry.visionProjectorDownloadUrl.takeIf { it.isNotBlank() }
-                    ?: throw IOException("This model is missing its vision support file.")
                 val companionTarget = visionTargetFile
-                    ?: throw IOException("This model is missing its vision support file.")
                 val companionDownload = visionDownloadFile
-                    ?: throw IOException("This model is missing its vision support file.")
 
-                downloadUrlToFile(companionUrl, companionDownload)
-                if (companionTarget.exists()) companionTarget.delete()
-                if (!companionDownload.renameTo(companionTarget)) {
-                    companionDownload.copyTo(companionTarget, overwrite = true)
-                    companionDownload.delete()
+                if (companionUrl == null || companionTarget == null || companionDownload == null) {
+                    companionValidationFailure = OnDeviceValidationResult.failure(
+                        OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
+                        OnDeviceUserMessages.missingVisionSupportFile()
+                    )
+                } else {
+                    try {
+                        downloadUrlToFile(companionUrl, companionDownload)
+                        if (companionTarget.exists()) companionTarget.delete()
+                        if (!companionDownload.renameTo(companionTarget)) {
+                            companionDownload.copyTo(companionTarget, overwrite = true)
+                            companionDownload.delete()
+                        }
+                    } catch (t: Throwable) {
+                        companionDownload.delete()
+                        companionTarget.delete()
+                        companionValidationFailure = OnDeviceValidationResult.failure(
+                            failureKind = if (t.message?.contains("HTTP", ignoreCase = true) == true) {
+                                OnDeviceFailureKind.DOWNLOAD
+                            } else {
+                                OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR
+                            },
+                            message = OnDeviceUserMessages.visionValidationMessage(
+                                if (t.message?.contains("HTTP", ignoreCase = true) == true) {
+                                    OnDeviceFailureKind.DOWNLOAD
+                                } else {
+                                    OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR
+                                }
+                            )
+                        )
+                    }
                 }
             }
 
@@ -651,8 +758,15 @@ class OnDeviceModelRepository(
                 targetFile.absolutePath
             )
 
-            val validationResult = validateDownloadedModel(targetFile, visionTargetFile)
-            if (!validationResult.isSuccess) {
+            val validation = validateDownloadedModel(
+                file = targetFile,
+                visionProjectorFile = if (companionValidationFailure == null) {
+                    visionTargetFile?.takeIf { it.exists() && it.length() > 0L }
+                } else {
+                    null
+                }
+            )
+            if (!validation.text.isSuccess) {
                 saveInstalledModel(
                     modelId = modelId,
                     localPath = targetFile.absolutePath,
@@ -660,14 +774,14 @@ class OnDeviceModelRepository(
                     downloadState = OnDeviceDownloadState.FAILED,
                     downloadedBytes = targetFile.length(),
                     totalBytes = targetFile.length(),
-                    errorMessage = validationResult.message,
-                    failureKind = validationResult.failureKind,
+                    errorMessage = validation.text.message,
+                    failureKind = validation.text.failureKind,
                     validatedAt = System.currentTimeMillis(),
                     validatedRuntimeProfileId = runtime.runtimeProfileId
                 )
                 throw ModelValidationException(
-                    message = validationResult.message ?: OnDeviceUserMessages.runtimeUnavailable(),
-                    failureKind = validationResult.failureKind
+                    message = validation.text.message ?: OnDeviceUserMessages.runtimeUnavailable(),
+                    failureKind = validation.text.failureKind
                 )
             }
 
@@ -680,7 +794,13 @@ class OnDeviceModelRepository(
                 totalBytes = targetFile.length(),
                 failureKind = OnDeviceFailureKind.NONE,
                 validatedAt = System.currentTimeMillis(),
-                validatedRuntimeProfileId = runtime.runtimeProfileId
+                validatedRuntimeProfileId = runtime.runtimeProfileId,
+                replaceVisionState = true,
+                visionReady = (companionValidationFailure ?: validation.vision)?.isSuccess == true,
+                visionValidatedAt = if (catalogEntry.supportsVision) System.currentTimeMillis() else 0L,
+                visionFailureKind = (companionValidationFailure ?: validation.vision)?.failureKind ?: OnDeviceFailureKind.NONE,
+                visionErrorMessage = (companionValidationFailure ?: validation.vision)?.takeIf { !it.isSuccess }?.message,
+                validatedVisionRuntimeProfileId = if (catalogEntry.supportsVision) runtime.runtimeProfileId else null
             )
             saveDownloadState(OnDeviceDownloadState.READY)
             onProgress(
@@ -778,47 +898,73 @@ class OnDeviceModelRepository(
     private suspend fun validateDownloadedModel(
         file: File,
         visionProjectorFile: File? = null
-    ): OnDeviceValidationResult {
+    ): OnDeviceInstallValidation {
         if (!file.exists() || file.length() == 0L) {
-            return OnDeviceValidationResult.failure(
-                OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
-                OnDeviceUserMessages.missingModelFile()
+            return OnDeviceInstallValidation(
+                text = OnDeviceValidationResult.failure(
+                    OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
+                    OnDeviceUserMessages.missingModelFile()
+                )
             )
         }
         if (!file.name.endsWith(".gguf", ignoreCase = true)) {
-            return OnDeviceValidationResult.failure(
-                OnDeviceFailureKind.INVALID_GGUF,
-                "This file isn't a supported model. Import a GGUF model file."
+            return OnDeviceInstallValidation(
+                text = OnDeviceValidationResult.failure(
+                    OnDeviceFailureKind.INVALID_GGUF,
+                    "This file isn't a supported model. Import a GGUF model file."
+                )
             )
         }
         if (visionProjectorFile != null && (!visionProjectorFile.exists() || visionProjectorFile.length() == 0L)) {
-            return OnDeviceValidationResult.failure(
-                OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
-                "The local vision support file is missing. Download it again."
+            return OnDeviceInstallValidation(
+                text = OnDeviceValidationResult.failure(
+                    OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE,
+                    OnDeviceUserMessages.missingVisionSupportFile()
+                )
             )
         }
         return try {
             val valid = ggufMetadataReader.ensureSourceFileFormat(file)
             if (!valid) {
-                OnDeviceValidationResult.failure(
-                    OnDeviceFailureKind.INVALID_GGUF,
-                    OnDeviceUserMessages.validationMessage(OnDeviceFailureKind.INVALID_GGUF)
+                OnDeviceInstallValidation(
+                    text = OnDeviceValidationResult.failure(
+                        OnDeviceFailureKind.INVALID_GGUF,
+                        OnDeviceUserMessages.validationMessage(OnDeviceFailureKind.INVALID_GGUF)
+                    )
                 )
             } else {
-                runtime.validateModel(
-                    modelPath = file.absolutePath,
-                    visionProjectorPath = visionProjectorFile?.absolutePath
+                val textValidation = runtime.validateModel(
+                    modelPath = file.absolutePath
+                )
+                val visionValidation = if (
+                    textValidation.isSuccess &&
+                    visionProjectorFile != null
+                ) {
+                    runtime.validateVisionModel(
+                        modelPath = file.absolutePath,
+                        visionProjectorPath = visionProjectorFile.absolutePath
+                    )
+                } else {
+                    null
+                }
+                OnDeviceInstallValidation(
+                    text = textValidation,
+                    vision = visionValidation
                 )
             }
         } catch (_: InvalidFileFormatException) {
-            OnDeviceValidationResult.failure(
-                OnDeviceFailureKind.INVALID_GGUF,
-                OnDeviceUserMessages.validationMessage(OnDeviceFailureKind.INVALID_GGUF)
+            OnDeviceInstallValidation(
+                text = OnDeviceValidationResult.failure(
+                    OnDeviceFailureKind.INVALID_GGUF,
+                    OnDeviceUserMessages.validationMessage(OnDeviceFailureKind.INVALID_GGUF)
+                )
             )
         } catch (t: Throwable) {
-            OnDeviceValidationResult.failure(
-                OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR,
-                OnDeviceUserMessages.validationMessage(OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR)
+            OnDeviceInstallValidation(
+                text = OnDeviceValidationResult.failure(
+                    OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR,
+                    OnDeviceUserMessages.validationMessage(OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR)
+                )
             )
         }
     }
@@ -834,11 +980,11 @@ class OnDeviceModelRepository(
         if (visionDownloadFile?.exists() == true) return true
         if (!targetFile.exists()) return false
         if (targetFile.length() == 0L) return true
-        if (visionTargetFile != null && !visionTargetFile.exists()) return true
-        if (visionTargetFile != null && visionTargetFile.length() == 0L) return true
         if (existingInstall == null) return true
         if (existingInstall.localPath != targetFile.absolutePath) return true
         if ((existingInstall.visionProjectorPath ?: "") != (visionTargetFile?.absolutePath ?: "")) return true
+        if (existingInstall.visionReady && visionTargetFile != null && !visionTargetFile.exists()) return true
+        if (existingInstall.visionReady && visionTargetFile != null && visionTargetFile.length() == 0L) return true
         if (existingInstall.downloadState != OnDeviceDownloadState.READY) return true
         if (existingInstall.totalBytes > 0L && targetFile.length() != existingInstall.totalBytes) return true
         if (existingInstall.downloadedBytes > 0L && targetFile.length() != existingInstall.downloadedBytes) return true
@@ -928,6 +1074,18 @@ class OnDeviceModelRepository(
         installed: List<InstalledOnDeviceModel>
     ): OnDeviceModelLibraryItem = OnDeviceModelLibraryItem(
         catalogEntry = this,
-        installRecord = installed.firstOrNull { it.modelId == id }
+        installRecord = installed
+            .firstOrNull { it.modelId == id }
+            ?.takeUnless { isPinnedArtifactMismatch(this, it) }
     )
+
+    private fun isPinnedArtifactMismatch(
+        entry: OnDeviceModelCatalogEntry,
+        installed: InstalledOnDeviceModel
+    ): Boolean {
+        val expectedModelPath = resolveTargetFile(entry).absolutePath
+        val expectedProjectorPath = resolveVisionProjectorFile(entry)?.absolutePath ?: ""
+        val installedProjectorPath = installed.visionProjectorPath.orEmpty()
+        return installed.localPath != expectedModelPath || installedProjectorPath != expectedProjectorPath
+    }
 }

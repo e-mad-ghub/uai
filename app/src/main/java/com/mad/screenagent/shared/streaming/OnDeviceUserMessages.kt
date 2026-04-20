@@ -23,8 +23,19 @@ object OnDeviceUserMessages {
 
     fun missingModelFile() = "The downloaded model file is missing. Download it again."
 
+    fun missingVisionSupportFile() = "The local vision support file is missing. Download the model again."
+
     fun imageAttachmentsRequireVisionModel() =
         "The selected On-Device model can't analyze images. Choose a vision-capable local model."
+
+    fun imageSupportNotReady() =
+        "Image support isn't ready for this model on this device yet."
+
+    fun singleImageOnly() =
+        "Only one image is supported right now."
+
+    fun mixedImageAndDocumentUnsupported() =
+        "Image analysis and document/file attachments can't be used together right now."
 
     fun runtimeUnavailable() = "The on-device model couldn't respond right now."
 
@@ -73,6 +84,15 @@ object OnDeviceUserMessages {
         OnDeviceFailureKind.INVALID_GGUF -> "Invalid model file"
         OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE -> "Missing model file"
         else -> "Download failed"
+    }
+
+    fun visionValidationMessage(kind: OnDeviceFailureKind, fallback: String? = null): String = when (kind) {
+        OnDeviceFailureKind.INVALID_GGUF -> "Image support files are invalid or damaged."
+        OnDeviceFailureKind.RUNTIME_INCOMPATIBLE -> "Image analysis isn't supported for this model on this device."
+        OnDeviceFailureKind.UNAVAILABLE_ON_DEVICE -> missingVisionSupportFile()
+        OnDeviceFailureKind.DOWNLOAD -> "Couldn't prepare image support for this model right now."
+        OnDeviceFailureKind.INTERNAL_RUNTIME_ERROR -> imageSupportNotReady()
+        OnDeviceFailureKind.NONE -> fallback?.takeIf { it.isNotBlank() } ?: imageSupportNotReady()
     }
 }
 

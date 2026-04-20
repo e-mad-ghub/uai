@@ -262,6 +262,7 @@ class AppPreferences(context: Context) {
                     it[Keys.ANTHROPIC_MODEL_CATALOG_FETCHED_AT] = catalog.fetchedAt
                 }
                 AiProviderType.ON_DEVICE,
+                AiProviderType.ON_DEVICE_GEMMA3,
                 AiProviderType.OPENROUTER,
                 AiProviderType.CUSTOM -> Unit
             }

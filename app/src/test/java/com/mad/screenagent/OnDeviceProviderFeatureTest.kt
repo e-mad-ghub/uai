@@ -34,20 +34,32 @@ import org.junit.Test
 class OnDeviceProviderFeatureTest {
 
     @Test
-    fun onDeviceProviderAppearsFirstInProviderOrder() {
-        assertEquals(AiProviderType.ON_DEVICE, assistantProviderOrder().first())
+    fun gemmaOnDeviceProviderAppearsFirstInProviderOrder() {
+        assertEquals(AiProviderType.ON_DEVICE_GEMMA3, assistantProviderOrder().first())
     }
 
     @Test
-    fun onDeviceProviderUiInfoDoesNotRequireAnApiKey() {
-        val info = providerUiInfo(AiProviderType.ON_DEVICE)
+    fun gemmaOnDeviceProviderUiInfoDoesNotRequireAnApiKey() {
+        val info = providerUiInfo(AiProviderType.ON_DEVICE_GEMMA3)
 
         assertTrue(info.apiKeyHint.contains("No API key"))
-        assertFalse(providerRequiresApiKey(AiProviderType.ON_DEVICE))
+        assertFalse(providerRequiresApiKey(AiProviderType.ON_DEVICE_GEMMA3))
     }
 
     @Test
-    fun onDeviceRecommendedModelsStartWithTheCuratedStarterModel() {
+    fun gemmaOnDeviceRecommendedModelsStartWithThePinnedGemmaVisionModel() {
+        assertEquals(
+            "gemma-3-4b-it-gguf",
+            defaultRecommendedModelId(AiProviderType.ON_DEVICE_GEMMA3)
+        )
+        assertEquals(
+            listOf("gemma-3-4b-it-gguf", "gemma-3-1b-it-gguf"),
+            recommendedModelChoices(AiProviderType.ON_DEVICE_GEMMA3).map { it.id }
+        )
+    }
+
+    @Test
+    fun generalOnDeviceRecommendedModelsStillStartWithTheCuratedStarterModel() {
         assertEquals(
             "gemma-3-1b-it-gguf",
             defaultRecommendedModelId(AiProviderType.ON_DEVICE)
@@ -59,12 +71,12 @@ class OnDeviceProviderFeatureTest {
     }
 
     @Test
-    fun factoryBuildsTheOnDeviceProviderWhenSelected() {
+    fun factoryBuildsTheGemmaOnDeviceProviderWhenSelected() {
         val provider = AiProviderFactory.create(
             config = AgentConfig(
-                provider = AiProviderType.ON_DEVICE,
-                model = "gemma-3-1b-it-gguf",
-                onDevice = OnDeviceProviderConfig(selectedModelId = "gemma-3-1b-it-gguf")
+                provider = AiProviderType.ON_DEVICE_GEMMA3,
+                model = "gemma-3-4b-it-gguf",
+                onDevice = OnDeviceProviderConfig(selectedModelId = "gemma-3-4b-it-gguf")
             ),
             client = OkHttpClient(),
             onDeviceModelRepository = FakeOnDeviceModelSource(),
@@ -255,6 +267,52 @@ class OnDeviceProviderFeatureTest {
         assertEquals(0, runtime.validateCallCount)
     }
 
+    @Test
+    fun onDeviceProviderValidatesVisionOnDemandForProjectorBackedInstalls() = runBlocking {
+        val modelFile = tempModelFile()
+        val projectorFile = tempProjectorFile()
+        val runtime = FakeOnDeviceRuntime(
+            visionValidationResult = OnDeviceValidationResult.success()
+        )
+        val provider = OnDeviceProvider(
+            FakeOnDeviceModelSource(
+                installed = InstalledOnDeviceModel(
+                    modelId = "gemma-3-4b-it-gguf",
+                    localPath = modelFile.absolutePath,
+                    visionProjectorPath = projectorFile.absolutePath,
+                    downloadState = OnDeviceDownloadState.READY,
+                    installedAt = 123L,
+                    validatedRuntimeProfileId = runtime.runtimeProfileId,
+                    visionReady = false,
+                    validatedVisionRuntimeProfileId = null
+                )
+            ),
+            runtime = runtime
+        )
+
+        val chunks = provider.streamResponse(
+            messages = listOf(
+                ChatMessage(
+                    role = "user",
+                    content = "What is in this image?",
+                    images = listOf(ImageAttachment(base64 = "dGVzdA=="))
+                )
+            ),
+            config = AgentConfig(
+                provider = AiProviderType.ON_DEVICE,
+                model = "gemma-3-4b-it-gguf",
+                onDevice = OnDeviceProviderConfig(
+                    selectedModelId = "gemma-3-4b-it-gguf",
+                    selectedModelSupportsVision = true
+                )
+            )
+        ).toList()
+
+        assertTrue(chunks.first() is StreamChunk.Token)
+        assertTrue(chunks.last() is StreamChunk.Done)
+        assertEquals(1, runtime.validateVisionCallCount)
+    }
+
     private class FakeOnDeviceModelSource(
         private val installed: InstalledOnDeviceModel? = null
     ) : OnDeviceModelSource {
@@ -263,17 +321,24 @@ class OnDeviceProviderFeatureTest {
     }
 
     private class FakeOnDeviceRuntime(
-        private val validationResult: OnDeviceValidationResult = OnDeviceValidationResult.success()
+        private val validationResult: OnDeviceValidationResult = OnDeviceValidationResult.success(),
+        private val visionValidationResult: OnDeviceValidationResult = validationResult
     ) : OnDeviceRuntime {
         override val runtimeProfileId: String = "llama.android-af76639-arm64-v8a-kleidiai-openmp"
         var validateCallCount: Int = 0
+        var validateVisionCallCount: Int = 0
 
-        override suspend fun validateModel(
-            modelPath: String,
-            visionProjectorPath: String?
-        ): OnDeviceValidationResult {
+        override suspend fun validateModel(modelPath: String): OnDeviceValidationResult {
             validateCallCount += 1
             return validationResult
+        }
+
+        override suspend fun validateVisionModel(
+            modelPath: String,
+            visionProjectorPath: String
+        ): OnDeviceValidationResult {
+            validateVisionCallCount += 1
+            return visionValidationResult
         }
 
         override fun streamResponse(
@@ -289,6 +354,12 @@ class OnDeviceProviderFeatureTest {
 
     private fun tempModelFile(): File =
         File.createTempFile("gemma-3-1b-it", ".gguf").apply {
+            writeBytes(byteArrayOf(0x47, 0x47, 0x55, 0x46))
+            deleteOnExit()
+        }
+
+    private fun tempProjectorFile(): File =
+        File.createTempFile("gemma-3-4b-it-mmproj", ".gguf").apply {
             writeBytes(byteArrayOf(0x47, 0x47, 0x55, 0x46))
             deleteOnExit()
         }

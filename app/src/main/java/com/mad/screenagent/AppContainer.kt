@@ -29,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import com.mad.screenagent.data.model.AiProviderType
+import com.mad.screenagent.data.model.isOnDeviceProvider
 import com.mad.screenagent.data.model.MONEY_SAVER_MODEL
 import com.mad.screenagent.data.repository.AgentRepository
 import com.mad.screenagent.data.repository.ConversationRepository
@@ -136,8 +137,28 @@ class AppContainer(context: Context) {
      * catalog is empty or the provider is not OpenAI/Anthropic.
      */
     suspend fun resolveAgentConfig(agent: com.mad.screenagent.data.model.AgentConfig): com.mad.screenagent.data.model.AgentConfig {
-        if (agent.model != MONEY_SAVER_MODEL) return agent
-        val resolvedModel = when (agent.provider) {
+        val onDeviceResolved = if (agent.provider.isOnDeviceProvider()) {
+            val modelId = agent.onDevice.selectedModelId.ifBlank { agent.model }.trim()
+            val installed = modelId.takeIf { it.isNotBlank() }?.let {
+                onDeviceModelRepository.getInstalledModel(it)
+            }
+            val hasProjectorCandidate = installed?.visionProjectorPath
+                ?.takeIf { it.isNotBlank() }
+                ?.let { java.io.File(it).exists() && java.io.File(it).length() > 0L }
+                ?: false
+            agent.copy(
+                model = modelId.ifBlank { agent.model },
+                onDevice = agent.onDevice.copy(
+                    selectedModelId = modelId,
+                    selectedModelSupportsVision = installed?.visionReady == true || hasProjectorCandidate
+                )
+            )
+        } else {
+            agent
+        }
+
+        if (onDeviceResolved.model != MONEY_SAVER_MODEL) return onDeviceResolved
+        val resolvedModel = when (onDeviceResolved.provider) {
             AiProviderType.OPENAI -> {
                 val models = providerModelCatalogRepository.getCatalog(AiProviderType.OPENAI).models.map { it.id }
                 pickCheapestOpenAiModel(models)
@@ -146,9 +167,9 @@ class AppContainer(context: Context) {
                 val models = providerModelCatalogRepository.getCatalog(AiProviderType.ANTHROPIC).models.map { it.id }
                 pickCheapestAnthropicModel(models)
             }
-            else -> return agent
+            else -> return onDeviceResolved
         }
-        return agent.copy(model = resolvedModel)
+        return onDeviceResolved.copy(model = resolvedModel)
     }
 
     private fun pickCheapestAnthropicModel(catalog: List<String>): String =

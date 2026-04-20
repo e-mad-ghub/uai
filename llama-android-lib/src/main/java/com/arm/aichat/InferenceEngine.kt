@@ -40,6 +40,17 @@ interface InferenceEngine {
     ): Flow<String>
 
     /**
+     * Sends a user prompt with a single pre-normalized RGB bitmap to the loaded multimodal model.
+     */
+    fun sendUserPromptWithVisionBitmap(
+        message: String,
+        width: Int,
+        height: Int,
+        rgbBytes: ByteArray,
+        predictLength: Int = DEFAULT_PREDICT_LENGTH
+    ): Flow<String>
+
+    /**
      * Runs a benchmark with the specified parameters.
      */
     suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String

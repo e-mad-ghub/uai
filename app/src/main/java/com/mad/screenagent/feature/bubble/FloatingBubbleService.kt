@@ -212,6 +212,7 @@ class FloatingBubbleService : Service() {
     private var allConversations: List<ConversationEntity> = emptyList()
     private var hasConversationSnapshot = false
     private var currentConversationId: String? = null
+    private var currentConversationAgent by mutableStateOf<AgentConfig?>(null)
     private var currentConversationMessagesJob: Job? = null
     private var prefersDraftConversation = false
     private var draftAgentId: String? = null
@@ -483,6 +484,7 @@ class FloatingBubbleService : Service() {
             agent = agent
         )
         availableConversations = conversationsForOverlay()
+        currentConversationAgent = agent
     }
 
     private fun queueOrShowAssistantRepairToast(conversationId: String, message: String) {
@@ -1212,7 +1214,7 @@ class FloatingBubbleService : Service() {
                             }
                         }
                     }
-                    val bubbleAgent = selectedAgentForCurrentContext()
+                    val bubbleAgent = currentConversationAgent ?: selectedAgentForCurrentContext()
                     val bubbleCurrentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
                     val bubbleEffectiveUsed = bubbleAgent?.let { a ->
                         if (a.tokenUsedMonth == bubbleCurrentMonth) a.tokenUsed else 0L

@@ -66,7 +66,7 @@ fun ChatInputBar(
     textFieldContent: @Composable RowScope.() -> Unit
 ) {
     var attachMenuExpanded by remember { mutableStateOf(false) }
-    val inputLocked = isLoading || isPreparingAttachment
+    val interactionLocked = isLoading || isPreparingAttachment
 
     Column(modifier = modifier.fillMaxWidth()) {
 
@@ -95,7 +95,7 @@ fun ChatInputBar(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    IconButton(onClick = onCancelReply, modifier = Modifier.size(28.dp)) {
+                    IconButton(onClick = onCancelReply, modifier = Modifier.size(48.dp)) {
                         Icon(
                             Icons.Default.Close,
                             contentDescription = "Cancel reply",
@@ -183,16 +183,16 @@ fun ChatInputBar(
                                         modifier = Modifier
                                             .align(Alignment.TopEnd)
                                             .padding(2.dp)
-                                            .size(18.dp)
+                                            .size(48.dp)
                                             .clip(CircleShape)
                                             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
-                                            .clickable(enabled = !inputLocked) { onRemoveImage(index) },
+                                            .clickable(enabled = !interactionLocked) { onRemoveImage(index) },
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             Icons.Default.Close,
                                             contentDescription = "Remove image",
-                                            modifier = Modifier.size(12.dp),
+                                            modifier = Modifier.size(18.dp),
                                             tint = MaterialTheme.colorScheme.onSurface
                                         )
                                     }
@@ -206,11 +206,11 @@ fun ChatInputBar(
                         color = MaterialTheme.colorScheme.secondaryContainer,
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
+                            .heightIn(min = 48.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 12.dp)
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                         ) {
                             Icon(
                                 Icons.Default.AttachFile,
@@ -223,13 +223,13 @@ fun ChatInputBar(
                                 pendingFileName,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                maxLines = 1,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
                 }
-                IconButton(onClick = onClearAttachment, enabled = !inputLocked) {
+                IconButton(onClick = onClearAttachment, enabled = !interactionLocked) {
                     Icon(
                         Icons.Default.Close,
                         contentDescription = "Clear attachment",
@@ -254,7 +254,7 @@ fun ChatInputBar(
             ) {
                 // [+] attachment dropdown
                 Box {
-                    IconButton(onClick = { attachMenuExpanded = true }, enabled = !inputLocked) {
+                    IconButton(onClick = { attachMenuExpanded = true }, enabled = !interactionLocked) {
                         Icon(
                             Icons.Default.Add,
                             contentDescription = "Attach",
@@ -294,7 +294,7 @@ fun ChatInputBar(
                                 .size(48.dp)
                                 .clip(CircleShape)
                                 .clickable(
-                                    enabled = !inputLocked,
+                                    enabled = !interactionLocked,
                                     interactionSource = interactionSource,
                                     indication = null,
                                     onClick = onTakeScreenshot
@@ -308,7 +308,7 @@ fun ChatInputBar(
                             )
                         }
                     } else {
-                        IconButton(onClick = onTakeScreenshot, enabled = !inputLocked) {
+                        IconButton(onClick = onTakeScreenshot, enabled = !interactionLocked) {
                             Icon(
                                 Icons.Default.Screenshot,
                                 contentDescription = "Screenshot",

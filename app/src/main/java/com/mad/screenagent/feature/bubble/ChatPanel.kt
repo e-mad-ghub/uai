@@ -46,11 +46,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.window.PopupProperties
 import com.mad.screenagent.design.components.BrandMarkIcon
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
@@ -111,7 +108,7 @@ fun ChatPanel(
         conversationKey = conversationKey,
         scrollToBottomTrigger = scrollToBottomTrigger
     )
-    val maxMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(280.dp, 560.dp)
+    val maxMsgHeight = (configuration.screenHeightDp.dp * 0.64f).coerceIn(220.dp, 560.dp)
     var renderedScreenshotHint by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(screenshotHintMessage) {
@@ -151,17 +148,17 @@ fun ChatPanel(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                        verticalAlignment = Alignment.Top,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Box(modifier = Modifier.widthIn(max = 172.dp)) {
+                        Box(modifier = Modifier.weight(1f)) {
                             TextButton(
                                 onClick = {
                                     if (hasExistingConversations) {
                                         conversationDropdownExpanded = true
                                     }
                                 },
-                                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
@@ -203,58 +200,64 @@ fun ChatPanel(
                                             Text("✓", color = MaterialTheme.colorScheme.primary)
                                         }) else null
                                     )
+                                    }
                                 }
                             }
-                        }
 
                         FilledTonalButton(
                             onClick = onNewConversation,
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                            modifier = Modifier.height(32.dp)
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            modifier = Modifier.heightIn(min = 48.dp)
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(4.dp))
                             Text("New chat", style = MaterialTheme.typography.labelMedium)
                         }
-
-                        Spacer(Modifier.weight(1f))
-
-                        Box {
-                            Column(horizontalAlignment = Alignment.End) {
-                            TextButton(
-                                onClick = {
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .padding(bottom = 12.dp),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(modifier = Modifier.weight(1f)) {
+                            Column {
+                                TextButton(
+                                    onClick = {
+                                        if (agents.isNotEmpty()) {
+                                            agentDropdownExpanded = true
+                                        }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = agentName,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
                                     if (agents.isNotEmpty()) {
-                                        agentDropdownExpanded = true
+                                        Icon(
+                                            Icons.Default.ArrowDropDown,
+                                            contentDescription = "Select assistant",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
                                     }
                                 }
-                            ) {
-                                Text(
-                                    text = agentName,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.widthIn(max = 128.dp)
-                                )
-                                if (agents.isNotEmpty()) {
-                                    Icon(
-                                        Icons.Default.ArrowDropDown,
-                                        contentDescription = "Select assistant",
-                                        tint = MaterialTheme.colorScheme.primary
+                                if (!agentTokenInfo.isNullOrBlank()) {
+                                    Text(
+                                        text = agentTokenInfo,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (agentTokenInfoColor == androidx.compose.ui.graphics.Color.Unspecified)
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        else agentTokenInfoColor
                                     )
                                 }
                             }
-                            if (!agentTokenInfo.isNullOrBlank()) {
-                                Text(
-                                    text = agentTokenInfo,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (agentTokenInfoColor == androidx.compose.ui.graphics.Color.Unspecified)
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    else agentTokenInfoColor,
-                                    modifier = Modifier.padding(end = 4.dp, bottom = 4.dp)
-                                )
-                            }
-                            } // end Column
                             DropdownMenu(
                                 expanded = agentDropdownExpanded,
                                 onDismissRequest = { agentDropdownExpanded = false },
@@ -454,13 +457,9 @@ fun ChatPanel(
                             else -> "Message…"
                         }
                         val clipboardManager = LocalClipboardManager.current
-                        var tfv by remember { mutableStateOf(TextFieldValue(inputText)) }
-                        LaunchedEffect(inputText) {
-                            if (tfv.text != inputText) tfv = TextFieldValue(inputText, TextRange(inputText.length))
-                        }
                         TextField(
-                            value = tfv,
-                            onValueChange = { new -> tfv = new; onInputChange(new.text) },
+                            value = inputText,
+                            onValueChange = onInputChange,
                             modifier = Modifier.weight(1f),
                             placeholder = {
                                 Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -483,18 +482,17 @@ fun ChatPanel(
                                 replyToMessage = null
                             }),
                             maxLines = 5,
-                            enabled = !isLoading
+                            enabled = true
                         )
                         val clipText = clipboardManager.getText()?.text?.takeIf { it.isNotBlank() }
                         if (clipText != null) {
                             IconButton(
                                 onClick = {
                                     val newText = inputText + clipText
-                                    tfv = TextFieldValue(newText, TextRange(newText.length))
                                     onInputChange(newText)
                                 },
-                                modifier = Modifier.size(36.dp),
-                                enabled = !isLoading
+                                modifier = Modifier.size(48.dp),
+                                enabled = true
                             ) {
                                 Icon(
                                     Icons.Default.ContentPaste,
@@ -513,14 +511,13 @@ fun ChatPanel(
             val headerP: Placeable = measurables[0].measure(unbounded)
             val footerP: Placeable = measurables[2].measure(unbounded)
 
-            val minMsgPx = 100.dp.roundToPx()
             val maxMsgPx = maxMsgHeight.roundToPx()
-            val remaining = if (constraints.maxHeight == Constraints.Infinity) {
-                maxMsgPx
-            } else {
-                (constraints.maxHeight - headerP.height - footerP.height)
-                    .coerceIn(minMsgPx, maxMsgPx)
-            }
+            val remaining = calculateChatPanelMessageHeight(
+                totalHeightPx = constraints.maxHeight,
+                headerHeightPx = headerP.height,
+                footerHeightPx = footerP.height,
+                maxMessageHeightPx = maxMsgPx
+            )
             val messagesP: Placeable = measurables[1].measure(
                 constraints.copy(minHeight = remaining, maxHeight = remaining)
             )
@@ -573,6 +570,20 @@ fun ChatPanel(
         } // Box
         } // CompositionLocalProvider
     }
+}
+
+internal fun calculateChatPanelMessageHeight(
+    totalHeightPx: Int,
+    headerHeightPx: Int,
+    footerHeightPx: Int,
+    maxMessageHeightPx: Int
+): Int {
+    if (totalHeightPx == Constraints.Infinity) {
+        return maxMessageHeightPx.coerceAtLeast(0)
+    }
+    return (totalHeightPx - headerHeightPx - footerHeightPx)
+        .coerceAtMost(maxMessageHeightPx)
+        .coerceAtLeast(0)
 }
 
 @Composable

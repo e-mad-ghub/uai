@@ -73,7 +73,7 @@ object QuickMenuItemId {
 
 // ── Sizing constants (internal so FloatingBubbleService can hit-test) ─────────
 
-internal const val QUICK_MENU_ACTION_ICON_SIZE_DP = 44
+internal const val QUICK_MENU_ACTION_ICON_SIZE_DP = 48
 internal const val QUICK_MENU_ACTION_GAP_DP       = 8
 
 // sin(45°) = √2/2 — side items fan out along a 45° diagonal from vertical.

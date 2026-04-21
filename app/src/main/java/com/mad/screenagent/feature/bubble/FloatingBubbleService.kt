@@ -12,14 +12,11 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
-import android.util.Base64
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.KeyEvent
@@ -46,7 +43,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
@@ -81,6 +77,7 @@ import com.mad.screenagent.shared.attachment.persistImageAttachment
 import com.mad.screenagent.shared.attachment.FileAttachmentImportResult
 import com.mad.screenagent.feature.bubble.BubbleContent
 import com.mad.screenagent.feature.bubble.ChatPanel
+import com.mad.screenagent.shared.attachment.encodeImageUriForAttachment
 import com.mad.screenagent.shared.attachment.importFileAttachment
 import com.mad.screenagent.design.theme.UaiTheme
 import kotlinx.coroutines.CoroutineScope
@@ -100,7 +97,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
-import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1770,24 +1766,23 @@ class FloatingBubbleService : Service() {
     private fun launchCameraCapture() {
         MediaPickerActivity.clearCallbacks()
         val flowGeneration = suspendOverlaysForExternalFlow(reopenPanelOnReturn = true)
-        MediaPickerActivity.onBitmapResult = { bitmap ->
-            serviceScope.launch(Dispatchers.IO) {
-                if (bitmap != null) {
-                    val out = ByteArrayOutputStream()
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
-                    val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                    val imgBitmap = bitmap.asImageBitmap()
-                    val persistedUri = persistImageAttachment(applicationContext, base64)
-                    withContext(Dispatchers.Main) {
-                        pendingImages.add(Triple(base64, imgBitmap, persistedUri))
+        MediaPickerActivity.onImageResult = { uri ->
+            serviceScope.launch {
+                if (uri != null) {
+                    val (base64, bitmap) = withContext(Dispatchers.IO) {
+                        encodeImageFromUri(uri)
+                    }
+                    if (base64 != null) {
+                        val persistedUri = withContext(Dispatchers.IO) {
+                            persistImageAttachment(applicationContext, base64)
+                        } ?: uri.toString()
+                        pendingImages.add(Triple(base64, bitmap, persistedUri))
                     }
                 }
-                withContext(Dispatchers.Main) {
-                    restoreOverlaysAfterExternalFlow(
-                        flowGeneration = flowGeneration,
-                        forcePanelVisible = true
-                    )
-                }
+                restoreOverlaysAfterExternalFlow(
+                    flowGeneration = flowGeneration,
+                    forcePanelVisible = true
+                )
             }
         }
         startMediaPickerActivity(MediaPickerActivity.ACTION_CAMERA)
@@ -1959,19 +1954,7 @@ class FloatingBubbleService : Service() {
 
     private suspend fun encodeImageFromUri(uri: Uri): Pair<String?, ImageBitmap?> {
         return withContext(Dispatchers.IO) {
-            try {
-                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
-                val scale = maxOf(1, maxOf(opts.outWidth, opts.outHeight) / 1024)
-                val opts2 = BitmapFactory.Options().apply { inSampleSize = scale }
-                val bmp = contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it, null, opts2)
-                } ?: return@withContext null to null
-                val out = ByteArrayOutputStream()
-                bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
-                val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                base64 to bmp.asImageBitmap()
-            } catch (_: Exception) { null to null }
+            encodeImageUriForAttachment(applicationContext, uri)
         }
     }
 

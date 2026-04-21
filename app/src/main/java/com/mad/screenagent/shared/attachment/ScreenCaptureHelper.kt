@@ -9,15 +9,12 @@ import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.ui.graphics.ImageBitmap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Shared screen capture implementation used by both the floating bubble service
- * and the in-app screens (ConversationDetailScreen, AgoraDetailScreen).
- *
- * Must be called on the main thread. [onComplete] is invoked on the main thread with a
- * base64-encoded JPEG string and a preview [ImageBitmap], or null if capture fails / times out.
- * The caller is responsible for stopping [projection] after [onComplete] fires.
- */
+internal val captureExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+
 fun performScreenCapture(
     projection: MediaProjection,
     widthPx: Int,
@@ -28,11 +25,10 @@ fun performScreenCapture(
     val mainHandler = Handler(Looper.getMainLooper())
     val imageReader = ImageReader.newInstance(widthPx, heightPx, PixelFormat.RGBA_8888, 2)
     var virtualDisplay: VirtualDisplay? = null
-    var finished = false
+    val finished = AtomicBoolean(false)
 
     fun finish(result: Pair<String, ImageBitmap>?) {
-        if (finished) return
-        finished = true
+        if (finished.getAndSet(true)) return
         virtualDisplay?.release()
         runCatching { imageReader.close() }
         onComplete(result)
@@ -48,7 +44,7 @@ fun performScreenCapture(
         image ?: return@setOnImageAvailableListener
         imageAcquired = true
         mainHandler.removeCallbacks(timeoutRunnable)
-        Thread {
+        captureExecutor.execute {
             var result: Pair<String, ImageBitmap>? = null
             try {
                 val plane = image.planes[0]
@@ -67,7 +63,7 @@ fun performScreenCapture(
                 val r = result
                 mainHandler.post { finish(r) }
             }
-        }.start()
+        }
     }, mainHandler)
 
     virtualDisplay = projection.createVirtualDisplay(

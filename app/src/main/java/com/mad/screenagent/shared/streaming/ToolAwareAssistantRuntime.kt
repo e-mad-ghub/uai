@@ -282,7 +282,7 @@ class ToolAwareAssistantRuntime(
                 val sanitized = sanitizeGroundedAssistantResponse(fullText)
                 if (sanitized.isNotBlank()) emit(StreamChunk.Token(sanitized))
             }
-            if (error != null) emit(StreamChunk.Error(error!!))
+            if (error != null) emit(StreamChunk.Error(error))
             else emit(StreamChunk.Done)
             return@flow
         }

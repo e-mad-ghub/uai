@@ -7,12 +7,15 @@ import com.mad.screenagent.data.db.MessageDao
 import com.mad.screenagent.data.db.MessageEntity
 import com.mad.screenagent.shared.attachment.deletePersistedImageAttachment
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class ConversationRepository(
     private val conversationDao: ConversationDao,
     private val messageDao: MessageDao,
     private val context: Context
 ) {
+    private val updateMutex = Mutex()
     fun getAllConversations(): Flow<List<ConversationEntity>> =
         conversationDao.getAllConversations()
 
@@ -42,7 +45,9 @@ class ConversationRepository(
         messageDao.insert(message)
 
     suspend fun updateMessageContent(id: String, content: String, isStreaming: Boolean) =
-        messageDao.updateContent(id, content, isStreaming)
+        updateMutex.withLock {
+            messageDao.updateContent(id, content, isStreaming)
+        }
 
     suspend fun updateMessageResponseModel(id: String, modelId: String, isFallback: Boolean) =
         messageDao.updateResponseModel(id, modelId, isFallback)

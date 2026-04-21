@@ -1,6 +1,6 @@
 package com.mad.screenagent
 
-import android.content.Context
+import android.app.Application
 import com.mad.screenagent.data.db.AppDatabase
 import com.mad.screenagent.data.prefs.AppPreferences
 import com.mad.screenagent.shared.streaming.OpenRouterBestFreeRoutingStateStore
@@ -40,7 +40,7 @@ import java.util.concurrent.TimeUnit
  * Manual dependency injection container. Both MainActivity and FloatingBubbleService
  * resolve all singletons from here via (application as UaiApplication).container.
  */
-class AppContainer(context: Context) {
+class AppContainer(private val application: Application) {
 
     private val containerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -50,9 +50,9 @@ class AppContainer(context: Context) {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    val db: AppDatabase = AppDatabase.getInstance(context)
+    val db: AppDatabase = AppDatabase.getInstance(application)
 
-    val preferences: AppPreferences = AppPreferences(context)
+    val preferences: AppPreferences = AppPreferences(application)
 
     val openRouterCatalogRepository: OpenRouterCatalogRepository =
         OpenRouterCatalogRepository(preferences, okHttpClient)
@@ -112,7 +112,7 @@ class AppContainer(context: Context) {
         )
 
     val conversationRepository: ConversationRepository =
-        ConversationRepository(db.conversationDao(), db.messageDao(), context.applicationContext)
+        ConversationRepository(db.conversationDao(), db.messageDao(), application)
 
     val agentRepository: AgentRepository = AgentRepository(preferences)
 

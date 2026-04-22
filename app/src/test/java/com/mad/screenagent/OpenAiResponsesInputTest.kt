@@ -21,13 +21,13 @@ class OpenAiResponsesInputTest {
         )
         assertTrue(content is List<*>)
         val parts = content as List<*>
-        val textPart = parts[0] as Map<*, *>
-        val imagePart = parts[1] as Map<*, *>
+        val imagePart = parts[0] as Map<*, *>
+        val textPart = parts[1] as Map<*, *>
 
-        assertEquals("input_text", textPart["type"])
-        assertEquals("What is in this screenshot?", textPart["text"])
         assertEquals("input_image", imagePart["type"])
         assertEquals("data:image/png;base64,abc123", imagePart["image_url"])
+        assertEquals("input_text", textPart["type"])
+        assertEquals("What is in this screenshot?", textPart["text"])
     }
 
     @Test
@@ -45,7 +45,7 @@ class OpenAiResponsesInputTest {
         )
         assertTrue(content is List<*>)
         val parts = content as List<*>
-        val textPart = parts[0] as Map<*, *>
+        val textPart = parts.last() as Map<*, *>
 
         val text = textPart["text"] as String
         assertTrue(text.contains("<attached_file name=\"notes.txt\">"))

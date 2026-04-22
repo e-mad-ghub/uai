@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BubbleChart
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -66,7 +67,10 @@ import androidx.compose.ui.unit.dp
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.QuickActionConfig
 import com.mad.screenagent.data.model.QuickActionIconKey
+import com.mad.screenagent.data.model.canSaveQuickAction
 import com.mad.screenagent.data.model.forSlot
+import com.mad.screenagent.data.model.isQuickActionPromptEditable
+import com.mad.screenagent.data.model.normalizedQuickActionMediaToggles
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -650,8 +654,13 @@ internal fun QuickActionsSection(
                         },
                         headlineContent = { Text(action.name.ifBlank { "Unnamed Action" }) },
                         supportingContent = {
+                            val summary = if (action.usePromptAutomatically) {
+                                action.prompt
+                            } else {
+                                action.prompt.ifBlank { "Waits for prompt in Mini Chat" }
+                            }
                             Text(
-                                action.prompt.take(60).let { if (action.prompt.length > 60) "$it…" else it },
+                                summary.take(60).let { if (summary.length > 60) "$it…" else it },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -710,6 +719,8 @@ private fun QuickActionEditor(
     var prompt by rememberSaveable { mutableStateOf(action.prompt) }
     var selectedIcon by rememberSaveable { mutableStateOf(action.iconKey) }
     var takeScreenshot by rememberSaveable { mutableStateOf(action.takeScreenshot) }
+    var takePhoto by rememberSaveable { mutableStateOf(action.takePhoto) }
+    var usePromptAutomatically by rememberSaveable { mutableStateOf(action.usePromptAutomatically) }
     var conversationName by rememberSaveable { mutableStateOf(action.conversationName) }
     // Feature 2: null = "Use Active Agent" (default); non-null = dedicated agent id.
     var selectedAgentId by rememberSaveable { mutableStateOf(action.agentId) }
@@ -728,15 +739,40 @@ private fun QuickActionEditor(
             modifier = Modifier.fillMaxWidth()
         )
 
+        // Prompt auto-use toggle
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Use Prompt Automatically", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Send the saved prompt when this action is selected",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = usePromptAutomatically,
+                onCheckedChange = { usePromptAutomatically = it }
+            )
+        }
+
+        val promptEditable = isQuickActionPromptEditable(usePromptAutomatically)
+
         // Prompt
         OutlinedTextField(
             value = prompt,
             onValueChange = { prompt = it },
+            enabled = promptEditable,
             label = { Text("Prompt") },
             placeholder = { Text("What should the assistant do?") },
             minLines = 2,
             maxLines = 4,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .alpha(if (promptEditable) 1f else 0.58f)
         )
 
         // Icon picker
@@ -785,7 +821,55 @@ private fun QuickActionEditor(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(checked = takeScreenshot, onCheckedChange = { takeScreenshot = it })
+            Switch(
+                checked = takeScreenshot,
+                onCheckedChange = { checked ->
+                    val normalized = normalizedQuickActionMediaToggles(
+                        takeScreenshot = checked,
+                        takePhoto = if (checked) false else takePhoto
+                    )
+                    takeScreenshot = normalized.takeScreenshot
+                    takePhoto = normalized.takePhoto
+                }
+            )
+        }
+
+        // Camera toggle
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.CameraAlt,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text("Take Photo", style = MaterialTheme.typography.bodyMedium)
+                }
+                Text(
+                    "Open the camera when this action is triggered",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = takePhoto,
+                onCheckedChange = { checked ->
+                    val normalized = normalizedQuickActionMediaToggles(
+                        takeScreenshot = if (checked) false else takeScreenshot,
+                        takePhoto = checked
+                    )
+                    takeScreenshot = normalized.takeScreenshot
+                    takePhoto = normalized.takePhoto
+                }
+            )
         }
 
         // Conversation name
@@ -850,13 +934,19 @@ private fun QuickActionEditor(
                             prompt = prompt.trim(),
                             iconKey = selectedIcon,
                             takeScreenshot = takeScreenshot,
+                            takePhoto = takePhoto,
+                            usePromptAutomatically = usePromptAutomatically,
                             conversationName = conversationName.trim(),
                             // Feature 2: save the selected agent id (null = use active agent).
                             agentId = selectedAgentId,
                         )
                     )
                 },
-                enabled = name.isNotBlank() && prompt.isNotBlank()
+                enabled = canSaveQuickAction(
+                    name = name,
+                    prompt = prompt,
+                    usePromptAutomatically = usePromptAutomatically
+                )
             ) { Text("Save") }
         }
     }

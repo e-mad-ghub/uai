@@ -83,6 +83,8 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
+    // EXIF rotation handling for camera captures
+    implementation(libs.androidx.exifinterface)
     // PDF text extraction
     implementation(libs.pdfbox.android)
     implementation(libs.jsoup)

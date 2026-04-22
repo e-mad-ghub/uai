@@ -305,9 +305,6 @@ internal fun responsesApiInputContent(message: ChatMessage): Any {
     val textContent = message.contentWithFileContext()
     return if (message.images.isNotEmpty()) {
         buildList {
-            if (textContent.isNotBlank()) {
-                add(mapOf("type" to "input_text", "text" to textContent))
-            }
             for (img in message.images) {
                 add(
                     mapOf(
@@ -315,6 +312,10 @@ internal fun responsesApiInputContent(message: ChatMessage): Any {
                         "image_url" to "data:${img.mimeType};base64,${img.base64}"
                     )
                 )
+            }
+            // Keep the instruction text last so it applies to all attached images.
+            if (textContent.isNotBlank()) {
+                add(mapOf("type" to "input_text", "text" to textContent))
             }
         }
     } else {

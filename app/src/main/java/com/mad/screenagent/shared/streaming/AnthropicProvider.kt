@@ -118,11 +118,22 @@ class AnthropicProvider(private val client: OkHttpClient) : AiProvider {
             .fold(mutableListOf<ChatMessage>()) { acc, msg ->
                 val last = acc.lastOrNull()
                 if (last != null && last.role == msg.role) {
-                    // Merge: concatenate text content; keep attachments from last entry
+                    // Merge: concatenate text content and combine attachments so we don't drop
+                    // image context when multiple user messages occur back-to-back.
+                    val mergedContent = if (last.content.isBlank()) msg.content
+                    else if (msg.content.isBlank()) last.content
+                    else "${last.content}\n${msg.content}"
+
+                    val mergedImages = when {
+                        last.images.isEmpty() -> msg.images
+                        msg.images.isEmpty() -> last.images
+                        else -> last.images + msg.images
+                    }
                     acc[acc.lastIndex] = last.copy(
-                        content = if (last.content.isBlank()) msg.content
-                                  else if (msg.content.isBlank()) last.content
-                                  else "${last.content}\n${msg.content}"
+                        content = mergedContent,
+                        images = mergedImages,
+                        fileAttachment = msg.fileAttachment ?: last.fileAttachment,
+                        documentBase64 = msg.documentBase64 ?: last.documentBase64
                     )
                 } else {
                     acc += msg

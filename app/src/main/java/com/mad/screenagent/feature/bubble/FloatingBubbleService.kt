@@ -212,10 +212,10 @@ class FloatingBubbleService : Service() {
     private var allConversations: List<ConversationEntity> = emptyList()
     private var hasConversationSnapshot = false
     private var currentConversationId: String? = null
-    private var currentConversationAgent by mutableStateOf<AgentConfig?>(null)
+    private var agentOverride by mutableStateOf<BubbleAgentOverride?>(null)
     private var currentConversationMessagesJob: Job? = null
     private var prefersDraftConversation = false
-    private var draftAgentId: String? = null
+    private var draftAgentId by mutableStateOf<String?>(null)
     private var pendingAssistantRepairToast: PendingAssistantRepairToast? = null
     private var pendingPanelShowAfterAppHidden = false
     private var screenshotRestoreJob: Job? = null
@@ -445,9 +445,9 @@ class FloatingBubbleService : Service() {
                 ?: fallbackAgentForCurrentContext()
         }
 
-        val draftAgentId = draftAgentId
-        if (draftAgentId != null) {
-            return allAgents.firstOrNull { it.id == draftAgentId }
+        val draftSelectedAgentId = draftAgentId
+        if (draftSelectedAgentId != null) {
+            return allAgents.firstOrNull { it.id == draftSelectedAgentId }
                 ?: fallbackAgentForCurrentContext()
         }
 
@@ -476,6 +476,7 @@ class FloatingBubbleService : Service() {
     private fun applyCurrentConversationAgentSelectionLocally(agent: AgentConfig) {
         val conversationId = currentConversationId ?: run {
             draftAgentId = agent.id
+            agentOverride = BubbleAgentOverride(conversationId = null, agentId = agent.id)
             return
         }
         allConversations = updateConversationAgentSelection(
@@ -484,7 +485,7 @@ class FloatingBubbleService : Service() {
             agent = agent
         )
         availableConversations = conversationsForOverlay()
-        currentConversationAgent = agent
+        agentOverride = BubbleAgentOverride(conversationId = conversationId, agentId = agent.id)
     }
 
     private fun queueOrShowAssistantRepairToast(conversationId: String, message: String) {
@@ -615,6 +616,9 @@ class FloatingBubbleService : Service() {
         currentConversationMessagesJob?.cancel()
         currentConversationMessagesJob = null
         currentConversationId = conversationId
+        if (agentOverride?.conversationId != conversationId) {
+            agentOverride = null
+        }
         inputText = ""
         clearAttachment()
         messageThumbnails.clear()
@@ -1214,7 +1218,14 @@ class FloatingBubbleService : Service() {
                             }
                         }
                     }
-                    val bubbleAgent = currentConversationAgent ?: selectedAgentForCurrentContext()
+                    val bubbleAgent = resolveBubbleAgent(
+                        currentConversationId = currentConversationId,
+                        currentConversation = currentConversationEntity(),
+                        agents = allAgents,
+                        defaultAgent = activeAgent,
+                        draftAgentId = draftAgentId,
+                        override = agentOverride
+                    )
                     val bubbleCurrentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
                     val bubbleEffectiveUsed = bubbleAgent?.let { a ->
                         if (a.tokenUsedMonth == bubbleCurrentMonth) a.tokenUsed else 0L
@@ -1972,6 +1983,7 @@ class FloatingBubbleService : Service() {
         currentConversationId = null
         prefersDraftConversation = true
         draftAgentId = null
+        agentOverride = null
         isOverlayScreenshotCaptureInProgress = false
         pendingPanelRestoreAfterExternalFlow = false
         removeSafely(dismissZoneView, immediate = true)

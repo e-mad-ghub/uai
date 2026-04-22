@@ -29,6 +29,8 @@ enum class QuickActionIconKey(val displayName: String) {
  * @param prompt            Implicit prompt prepended to the screenshot (or sent alone when [takeScreenshot] is false).
  * @param iconKey           Which icon to show in the radial menu.
  * @param takeScreenshot    Whether to capture a screenshot before sending.
+ * @param takePhoto         Whether to open camera capture before running the action.
+ * @param usePromptAutomatically Whether [prompt] should be sent as soon as the action is ready.
  * @param conversationName  Name of the dedicated conversation. Defaults to "[name]-Session".
  *                          The service looks for an existing conversation with this exact name;
  *                          if not found, a new one is created.  If the user renames that
@@ -40,6 +42,8 @@ data class QuickActionConfig(
     val prompt: String = "",
     val iconKey: QuickActionIconKey = QuickActionIconKey.BOLT,
     val takeScreenshot: Boolean = true,
+    val takePhoto: Boolean = false,
+    val usePromptAutomatically: Boolean = true,
     val conversationName: String = "",
     // Feature 2: Optional dedicated assistant for this action.
     // null = use the currently active agent (default behaviour).
@@ -63,3 +67,57 @@ data class QuickActionConfig(
 fun List<QuickActionConfig>.forSlot(slot: Int): QuickActionConfig? =
     firstOrNull { it.slotIndex == slot }
         ?: if (all { it.slotIndex == null }) getOrNull(slot) else null
+
+fun canSaveQuickAction(
+    name: String,
+    prompt: String,
+    usePromptAutomatically: Boolean
+): Boolean {
+    return name.isNotBlank() && (!usePromptAutomatically || prompt.isNotBlank())
+}
+
+fun isQuickActionPromptEditable(usePromptAutomatically: Boolean): Boolean =
+    usePromptAutomatically
+
+data class QuickActionExecutionDecision(
+    val shouldOpenMiniChat: Boolean,
+    val shouldSendPrompt: Boolean
+)
+
+fun decideQuickActionExecution(
+    usePromptAutomatically: Boolean,
+    requestedCamera: Boolean,
+    cameraCaptureSucceeded: Boolean,
+    capturedAttachmentCount: Int
+): QuickActionExecutionDecision {
+    val cameraOnlyCanceled = requestedCamera &&
+        !cameraCaptureSucceeded &&
+        capturedAttachmentCount == 0
+    if (cameraOnlyCanceled) {
+        return QuickActionExecutionDecision(
+            shouldOpenMiniChat = false,
+            shouldSendPrompt = false
+        )
+    }
+    return QuickActionExecutionDecision(
+        shouldOpenMiniChat = true,
+        shouldSendPrompt = usePromptAutomatically
+    )
+}
+
+data class QuickActionMediaToggles(
+    val takeScreenshot: Boolean,
+    val takePhoto: Boolean
+)
+
+fun normalizedQuickActionMediaToggles(
+    takeScreenshot: Boolean,
+    takePhoto: Boolean
+): QuickActionMediaToggles {
+    // Mutually exclusive: camera wins if both are true.
+    return when {
+        takePhoto -> QuickActionMediaToggles(takeScreenshot = false, takePhoto = true)
+        takeScreenshot -> QuickActionMediaToggles(takeScreenshot = true, takePhoto = false)
+        else -> QuickActionMediaToggles(takeScreenshot = false, takePhoto = false)
+    }
+}

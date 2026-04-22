@@ -54,7 +54,9 @@ import com.mad.screenagent.MainActivity
 import com.mad.screenagent.R
 import com.mad.screenagent.UaiApplication
 import com.mad.screenagent.data.model.QuickActionConfig
+import com.mad.screenagent.data.model.decideQuickActionExecution
 import com.mad.screenagent.data.model.forSlot
+import com.mad.screenagent.data.model.normalizedQuickActionMediaToggles
 import com.mad.screenagent.shared.streaming.AssistantStreamingSession
 import com.mad.screenagent.shared.streaming.FileAttachmentContext
 import com.mad.screenagent.shared.streaming.ImageAttachment
@@ -103,6 +105,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 
 internal fun shouldMinimizeMiniChatOnWindowFocusLoss(
@@ -138,6 +141,12 @@ internal fun foregroundServiceTypeMaskForOverlayService(
         else -> null
     }
 }
+
+private data class QuickActionCapturedImage(
+    val base64: String,
+    val bitmap: ImageBitmap?,
+    val persistedUri: String?
+)
 
 class FloatingBubbleService : Service() {
 
@@ -1100,15 +1109,20 @@ class FloatingBubbleService : Service() {
                 return@launch
             }
 
+            val capturedImages = mutableListOf<QuickActionCapturedImage>()
+            val mediaToggles = normalizedQuickActionMediaToggles(
+                takeScreenshot = action.takeScreenshot,
+                takePhoto = action.takePhoto
+            )
+
             // Capture screenshot if required
-            var screenshotBase64: String? = null
-            if (action.takeScreenshot) {
+            if (mediaToggles.takeScreenshot) {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
                     miniChatErrorMessage = getString(R.string.mini_chat_screenshot_requires_android_11)
                     showChatPanel()
                     return@launch
                 }
-                screenshotBase64 = captureScreenshotSuspend() ?: run {
+                val screenshotBase64 = captureScreenshotSuspend() ?: run {
                     if (MiniChatScreenshotAccessibilityService.isAvailable()) {
                         miniChatErrorMessage = "Screenshot capture failed. The current screen may be protected."
                     } else {
@@ -1117,6 +1131,35 @@ class FloatingBubbleService : Service() {
                     showChatPanel()
                     return@launch
                 }
+                val persistedUri = withContext(Dispatchers.IO) {
+                    persistImageAttachment(applicationContext, screenshotBase64)
+                }
+                capturedImages.add(
+                    QuickActionCapturedImage(
+                        base64 = screenshotBase64,
+                        bitmap = null,
+                        persistedUri = persistedUri
+                    )
+                )
+            }
+
+            val cameraImage = if (mediaToggles.takePhoto) {
+                captureQuickActionCameraImageSuspend()
+            } else {
+                null
+            }
+            if (cameraImage != null) {
+                capturedImages.add(cameraImage)
+            }
+
+            val executionDecision = decideQuickActionExecution(
+                usePromptAutomatically = action.usePromptAutomatically,
+                requestedCamera = mediaToggles.takePhoto,
+                cameraCaptureSucceeded = cameraImage != null,
+                capturedAttachmentCount = capturedImages.size
+            )
+            if (!executionDecision.shouldOpenMiniChat) {
+                return@launch
             }
 
             // Find or create dedicated conversation by name
@@ -1139,15 +1182,19 @@ class FloatingBubbleService : Service() {
 
             prefersDraftConversation = false
             switchConversation(targetConv.id, force = true)
-            showChatPanel()
-
-            if (screenshotBase64 != null) {
-                val persistedUri = withContext(Dispatchers.IO) {
-                    persistImageAttachment(applicationContext, screenshotBase64)
-                }
-                pendingImages.add(Triple(screenshotBase64, null, persistedUri))
+            inputText = ""
+            miniChatErrorMessage = null
+            pendingPanelShowAfterAppHidden = true
+            if (!isAppUiVisible) {
+                showChatPanel()
             }
-            sendMessage(action.prompt, forceScrollToLatest = true)
+
+            capturedImages.forEach { image ->
+                pendingImages.add(Triple(image.base64, image.bitmap, image.persistedUri))
+            }
+            if (executionDecision.shouldSendPrompt) {
+                sendMessage(action.prompt, forceScrollToLatest = true)
+            }
             container.agentRepository.saveLastActiveBubbleConversationId(targetConv.id)
         }
     }
@@ -1805,6 +1852,64 @@ class FloatingBubbleService : Service() {
             }
         }
         startMediaPickerActivity(MediaPickerActivity.ACTION_CAMERA)
+    }
+
+    private suspend fun captureQuickActionCameraImageSuspend(): QuickActionCapturedImage? {
+        MediaPickerActivity.clearCallbacks()
+        val flowGeneration = suspendOverlaysForExternalFlow(reopenPanelOnReturn = false)
+        val restored = AtomicBoolean(false)
+
+        fun restoreOnce() {
+            if (restored.compareAndSet(false, true)) {
+                restoreOverlaysAfterExternalFlow(
+                    flowGeneration = flowGeneration,
+                    forcePanelVisible = false
+                )
+            }
+        }
+
+        return suspendCancellableCoroutine { cont ->
+            MediaPickerActivity.onImageResult = { uri ->
+                serviceScope.launch {
+                    val capturedImage = if (uri != null) {
+                        val (base64, bitmap) = encodeImageFromUri(uri)
+                        if (base64 != null) {
+                            val persistedUri = withContext(Dispatchers.IO) {
+                                persistImageAttachment(applicationContext, base64)
+                            } ?: uri.toString()
+                            QuickActionCapturedImage(
+                                base64 = base64,
+                                bitmap = bitmap,
+                                persistedUri = persistedUri
+                            )
+                        } else {
+                            null
+                        }
+                    } else {
+                        null
+                    }
+                    restoreOnce()
+                    if (cont.isActive) {
+                        cont.resume(capturedImage)
+                    }
+                }
+            }
+
+            cont.invokeOnCancellation {
+                MediaPickerActivity.onImageResult = null
+                serviceScope.launch { restoreOnce() }
+            }
+
+            runCatching {
+                startMediaPickerActivity(MediaPickerActivity.ACTION_CAMERA)
+            }.onFailure {
+                MediaPickerActivity.onImageResult = null
+                restoreOnce()
+                if (cont.isActive) {
+                    cont.resume(null)
+                }
+            }
+        }
     }
 
     private fun launchFilePicker() {

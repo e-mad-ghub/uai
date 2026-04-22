@@ -255,7 +255,9 @@ fun MessageBubble(
                                 label = streamingStatusText
                             )
                         } else {
-                            val displayImages = thumbnails.ifEmpty { decodedImages }
+                            // Prefer decoded multi-image payloads (imagesJson) when available so
+                            // we don't drop attachments that didn't have an in-memory thumbnail.
+                            val displayImages = if (decodedImages.isNotEmpty()) decodedImages else thumbnails
                             when {
                                 displayImages.isNotEmpty() -> {
                                     if (displayImages.size == 1) {

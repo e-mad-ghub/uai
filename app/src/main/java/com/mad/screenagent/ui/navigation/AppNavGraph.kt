@@ -1,7 +1,7 @@
 package com.mad.screenagent.ui.navigation
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -39,7 +39,7 @@ fun AppNavGraph(
     ) {
         // New conversation — generates a fresh UUID; conversation is only saved to DB on first send
         composable(Routes.NEW_CONVERSATION) {
-            val conversationId = remember { UUID.randomUUID().toString() }
+            val conversationId = rememberSaveable { UUID.randomUUID().toString() }
             val vm: ConversationDetailViewModel = viewModel(
                 key = conversationId,
                 factory = ConversationDetailViewModel.Factory(

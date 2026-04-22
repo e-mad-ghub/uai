@@ -92,3 +92,9 @@ data class AgentConfig(
         )
     }
 }
+
+internal fun tokenLimitReachedMessage(agentName: String, usedTokens: Long, tokenLimit: Long): String {
+    return "Token limit reached for \"$agentName\".\n\n" +
+        "This assistant has used $usedTokens/$tokenLimit tokens this month. " +
+        "Reset usage in the assistant settings to continue."
+}

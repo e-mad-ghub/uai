@@ -4,7 +4,6 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
@@ -12,6 +11,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import com.mad.screenagent.shared.attachment.createCameraCaptureUri
 
 /**
  * Transparent trampoline activity that launches pickers and the MediaProjection consent dialog
@@ -32,12 +32,16 @@ class MediaPickerActivity : ComponentActivity() {
     }
 
     private val cameraLauncher = registerForActivityResult(
-        ActivityResultContracts.TakePicturePreview()
-    ) { bitmap ->
-        onBitmapResult?.invoke(bitmap)
-        onBitmapResult = null
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        val resultUri = pendingCameraCaptureUri.takeIf { success }
+        pendingCameraCaptureUri = null
+        onImageResult?.invoke(resultUri)
+        onImageResult = null
         finish()
     }
+
+    private var pendingCameraCaptureUri: Uri? = null
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -50,8 +54,8 @@ class MediaPickerActivity : ComponentActivity() {
                 "Camera permission is required to take a photo.",
                 Toast.LENGTH_SHORT
             ).show()
-            onBitmapResult?.invoke(null)
-            onBitmapResult = null
+            onImageResult?.invoke(null)
+            onImageResult = null
             finish()
         }
     }
@@ -101,15 +105,29 @@ class MediaPickerActivity : ComponentActivity() {
     }
 
     private fun launchCameraCapture() {
-        runCatching { cameraLauncher.launch(null) }
+        val captureUri = createCameraCaptureUri(this)
+        if (captureUri == null) {
+            Toast.makeText(
+                this,
+                "Unable to create a camera capture file right now.",
+                Toast.LENGTH_SHORT
+            ).show()
+            onImageResult?.invoke(null)
+            onImageResult = null
+            finish()
+            return
+        }
+        pendingCameraCaptureUri = captureUri
+        runCatching { cameraLauncher.launch(captureUri) }
             .onFailure {
                 Toast.makeText(
                     this,
                     "Unable to open the camera right now.",
                     Toast.LENGTH_SHORT
                 ).show()
-                onBitmapResult?.invoke(null)
-                onBitmapResult = null
+                pendingCameraCaptureUri = null
+                onImageResult?.invoke(null)
+                onImageResult = null
                 finish()
             }
     }
@@ -122,14 +140,12 @@ class MediaPickerActivity : ComponentActivity() {
         const val ACTION_SCREENSHOT = "screenshot"
 
         @Volatile var onImageResult: ((Uri?) -> Unit)?                = null
-        @Volatile var onBitmapResult: ((Bitmap?) -> Unit)?            = null
         @Volatile var onFileResult: ((Uri?) -> Unit)?                 = null
         /** Called with (resultCode, data) after the user accepts the screen-capture consent. */
         @Volatile var onProjectionConsent: ((Int, Intent) -> Unit)?   = null
 
         fun clearCallbacks() {
             onImageResult = null
-            onBitmapResult = null
             onFileResult = null
             onProjectionConsent = null
         }

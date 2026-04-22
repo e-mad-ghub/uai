@@ -12,14 +12,11 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
-import android.util.Base64
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.KeyEvent
@@ -46,7 +43,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.unit.dp
@@ -68,11 +64,13 @@ import com.mad.screenagent.shared.streaming.compressHistory
 import com.mad.screenagent.shared.streaming.sanitizeGroundedAssistantResponse
 import com.mad.screenagent.data.db.ConversationEntity
 import com.mad.screenagent.data.db.MessageEntity
+import com.mad.screenagent.data.db.imageAttachmentsJsonOrNull
 import com.mad.screenagent.data.db.toChatMessage
 import com.mad.screenagent.data.model.canHandleImageRequests
 import com.mad.screenagent.data.model.hasInternetAccess
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AppColorTheme
+import com.mad.screenagent.data.model.tokenLimitReachedMessage
 import com.mad.screenagent.ui.MediaPickerActivity
 import com.mad.screenagent.ui.OverlayScreenCaptureOutcome
 import com.mad.screenagent.shared.chatui.dedupeMessagesByIdKeepingLatest
@@ -81,6 +79,7 @@ import com.mad.screenagent.shared.attachment.persistImageAttachment
 import com.mad.screenagent.shared.attachment.FileAttachmentImportResult
 import com.mad.screenagent.feature.bubble.BubbleContent
 import com.mad.screenagent.feature.bubble.ChatPanel
+import com.mad.screenagent.shared.attachment.encodeImageUriForAttachment
 import com.mad.screenagent.shared.attachment.importFileAttachment
 import com.mad.screenagent.design.theme.UaiTheme
 import kotlinx.coroutines.CoroutineScope
@@ -100,7 +99,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
-import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -216,9 +214,10 @@ class FloatingBubbleService : Service() {
     private var allConversations: List<ConversationEntity> = emptyList()
     private var hasConversationSnapshot = false
     private var currentConversationId: String? = null
+    private var agentOverride by mutableStateOf<BubbleAgentOverride?>(null)
     private var currentConversationMessagesJob: Job? = null
     private var prefersDraftConversation = false
-    private var draftAgentId: String? = null
+    private var draftAgentId by mutableStateOf<String?>(null)
     private var pendingAssistantRepairToast: PendingAssistantRepairToast? = null
     private var pendingPanelShowAfterAppHidden = false
     private var screenshotRestoreJob: Job? = null
@@ -448,9 +447,9 @@ class FloatingBubbleService : Service() {
                 ?: fallbackAgentForCurrentContext()
         }
 
-        val draftAgentId = draftAgentId
-        if (draftAgentId != null) {
-            return allAgents.firstOrNull { it.id == draftAgentId }
+        val draftSelectedAgentId = draftAgentId
+        if (draftSelectedAgentId != null) {
+            return allAgents.firstOrNull { it.id == draftSelectedAgentId }
                 ?: fallbackAgentForCurrentContext()
         }
 
@@ -479,6 +478,7 @@ class FloatingBubbleService : Service() {
     private fun applyCurrentConversationAgentSelectionLocally(agent: AgentConfig) {
         val conversationId = currentConversationId ?: run {
             draftAgentId = agent.id
+            agentOverride = BubbleAgentOverride(conversationId = null, agentId = agent.id)
             return
         }
         allConversations = updateConversationAgentSelection(
@@ -487,6 +487,7 @@ class FloatingBubbleService : Service() {
             agent = agent
         )
         availableConversations = conversationsForOverlay()
+        agentOverride = BubbleAgentOverride(conversationId = conversationId, agentId = agent.id)
     }
 
     private fun queueOrShowAssistantRepairToast(conversationId: String, message: String) {
@@ -617,6 +618,9 @@ class FloatingBubbleService : Service() {
         currentConversationMessagesJob?.cancel()
         currentConversationMessagesJob = null
         currentConversationId = conversationId
+        if (agentOverride?.conversationId != conversationId) {
+            agentOverride = null
+        }
         inputText = ""
         clearAttachment()
         messageThumbnails.clear()
@@ -1216,7 +1220,14 @@ class FloatingBubbleService : Service() {
                             }
                         }
                     }
-                    val bubbleAgent = selectedAgentForCurrentContext()
+                    val bubbleAgent = resolveBubbleAgent(
+                        currentConversationId = currentConversationId,
+                        currentConversation = currentConversationEntity(),
+                        agents = allAgents,
+                        defaultAgent = activeAgent,
+                        draftAgentId = draftAgentId,
+                        override = agentOverride
+                    )
                     val bubbleCurrentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
                     val bubbleEffectiveUsed = bubbleAgent?.let { a ->
                         if (a.tokenUsedMonth == bubbleCurrentMonth) a.tokenUsed else 0L
@@ -1258,16 +1269,20 @@ class FloatingBubbleService : Service() {
                         onMinimize = ::dismissChatPanelAnimated,
                         onOpenInApp = ::openInApp,
                         onAgentSelect = { agent ->
+                            val conversationIdAtSelection = currentConversationId
                             applyCurrentConversationAgentSelectionLocally(agent)
-                            serviceScope.launch {
-                                val conversation = currentConversationEntity()
-                                if (conversation != null) {
-                                    container.conversationRepository.upsertConversation(
-                                        conversation.copy(
-                                            agentId = agent.id,
-                                            agentName = agent.name
+                            if (conversationIdAtSelection != null) {
+                                serviceScope.launch {
+                                    val conversation =
+                                        container.conversationRepository.getConversationOnce(conversationIdAtSelection)
+                                    if (conversation != null) {
+                                        container.conversationRepository.upsertConversation(
+                                            conversation.copy(
+                                                agentId = agent.id,
+                                                agentName = agent.name
+                                            )
                                         )
-                                    )
+                                    }
                                 }
                             }
                         },
@@ -1770,24 +1785,23 @@ class FloatingBubbleService : Service() {
     private fun launchCameraCapture() {
         MediaPickerActivity.clearCallbacks()
         val flowGeneration = suspendOverlaysForExternalFlow(reopenPanelOnReturn = true)
-        MediaPickerActivity.onBitmapResult = { bitmap ->
-            serviceScope.launch(Dispatchers.IO) {
-                if (bitmap != null) {
-                    val out = ByteArrayOutputStream()
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
-                    val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                    val imgBitmap = bitmap.asImageBitmap()
-                    val persistedUri = persistImageAttachment(applicationContext, base64)
-                    withContext(Dispatchers.Main) {
-                        pendingImages.add(Triple(base64, imgBitmap, persistedUri))
+        MediaPickerActivity.onImageResult = { uri ->
+            serviceScope.launch {
+                if (uri != null) {
+                    val (base64, bitmap) = withContext(Dispatchers.IO) {
+                        encodeImageFromUri(uri)
+                    }
+                    if (base64 != null) {
+                        val persistedUri = withContext(Dispatchers.IO) {
+                            persistImageAttachment(applicationContext, base64)
+                        } ?: uri.toString()
+                        pendingImages.add(Triple(base64, bitmap, persistedUri))
                     }
                 }
-                withContext(Dispatchers.Main) {
-                    restoreOverlaysAfterExternalFlow(
-                        flowGeneration = flowGeneration,
-                        forcePanelVisible = true
-                    )
-                }
+                restoreOverlaysAfterExternalFlow(
+                    flowGeneration = flowGeneration,
+                    forcePanelVisible = true
+                )
             }
         }
         startMediaPickerActivity(MediaPickerActivity.ACTION_CAMERA)
@@ -1959,19 +1973,7 @@ class FloatingBubbleService : Service() {
 
     private suspend fun encodeImageFromUri(uri: Uri): Pair<String?, ImageBitmap?> {
         return withContext(Dispatchers.IO) {
-            try {
-                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
-                val scale = maxOf(1, maxOf(opts.outWidth, opts.outHeight) / 1024)
-                val opts2 = BitmapFactory.Options().apply { inSampleSize = scale }
-                val bmp = contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it, null, opts2)
-                } ?: return@withContext null to null
-                val out = ByteArrayOutputStream()
-                bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
-                val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                base64 to bmp.asImageBitmap()
-            } catch (_: Exception) { null to null }
+            encodeImageUriForAttachment(applicationContext, uri)
         }
     }
 
@@ -1987,6 +1989,7 @@ class FloatingBubbleService : Service() {
         currentConversationId = null
         prefersDraftConversation = true
         draftAgentId = null
+        agentOverride = null
         isOverlayScreenshotCaptureInProgress = false
         pendingPanelRestoreAfterExternalFlow = false
         removeSafely(dismissZoneView, immediate = true)
@@ -2031,6 +2034,7 @@ class FloatingBubbleService : Service() {
     ) {
         val agent = selectedAgentForCurrentContext()
         val imageList = pendingImages.toList()
+        val imageAttachments = imageList.map { ImageAttachment(it.first) }
         val attachedFile = pendingFileText?.let {
             FileAttachmentContext(
                 displayName = pendingFileName ?: "file",
@@ -2048,21 +2052,24 @@ class FloatingBubbleService : Service() {
             val currentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
             val effectiveUsed = if (agent.tokenUsedMonth == currentMonth) agent.tokenUsed else 0L
             if (effectiveUsed >= tokenLimit) {
-                // Show a system message in the chat about the limit
-                val container = (application as UaiApplication).container
+                val limitMessage = tokenLimitReachedMessage(agent.name, effectiveUsed, tokenLimit)
+                val convId = currentConversationId
+                if (convId == null) {
+                    miniChatErrorMessage = limitMessage
+                    return
+                }
+                miniChatErrorMessage = null
                 serviceScope.launch {
-                    val convId = currentConversationId
-                    if (convId != null) {
-                        val limitMsg = MessageEntity(
-                            id = UUID.randomUUID().toString(),
-                            conversationId = convId,
-                            role = "assistant",
-                            content = "Token limit reached for \"${agent.name}\".\n\nThis assistant has used $effectiveUsed/$tokenLimit tokens this month. Reset usage in the assistant settings to continue.",
-                            createdAt = System.currentTimeMillis()
-                        )
-                        container.conversationRepository.insertMessage(limitMsg)
-                        upsertChatMessage(limitMsg)
-                    }
+                    val container = (application as UaiApplication).container
+                    val limitMsg = MessageEntity(
+                        id = UUID.randomUUID().toString(),
+                        conversationId = convId,
+                        role = "assistant",
+                        content = limitMessage,
+                        createdAt = System.currentTimeMillis()
+                    )
+                    container.conversationRepository.insertMessage(limitMsg)
+                    upsertChatMessage(limitMsg)
                 }
                 return
             }
@@ -2123,7 +2130,8 @@ class FloatingBubbleService : Service() {
                     createdAt = System.currentTimeMillis(),
                     imageUri = persistedImageUri,
                     attachedFileName = attachedFile?.displayName,
-                    attachedFileText = attachedFile?.extractedText
+                    attachedFileText = attachedFile?.extractedText,
+                    imagesJson = imageAttachmentsJsonOrNull(imageAttachments)
                 )
                 container.conversationRepository.insertMessage(userMsg)
                 upsertChatMessage(userMsg)
@@ -2170,7 +2178,7 @@ class FloatingBubbleService : Service() {
                     if (idx == allHistory.lastIndex && msg.role == "user") {
                         when {
                             imageList.isNotEmpty() -> msg.toChatMessage(
-                                images = imageList.map { ImageAttachment(it.first) }
+                                images = imageAttachments
                             )
                             else -> msg.toChatMessage()
                         }

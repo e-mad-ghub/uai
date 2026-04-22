@@ -8,51 +8,13 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
-import android.util.Base64
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
-import java.io.ByteArrayOutputStream
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
-// Maximum pixel length of the longest side sent to AI vision APIs.
-// 2048px covers all AI provider limits, fits all Android screen sizes without
-// meaningful quality loss, and keeps JPEG payloads under ~1.5 MB.
-private const val MAX_BITMAP_SIDE_PX = 2048
+internal val captureExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
-/**
- * Converts a captured bitmap into the attachment payload used by chat messages.
- * The input bitmap is treated as owned by this function and may be recycled.
- * Scales down so the longest side is at most [MAX_BITMAP_SIDE_PX] using float-ratio
- * arithmetic (integer division would silently skip scaling for 4K screens).
- */
-fun encodeBitmapForAttachment(bitmap: Bitmap): Pair<String, ImageBitmap> {
-    val maxSide = maxOf(bitmap.width, bitmap.height)
-    val scaled = if (maxSide > MAX_BITMAP_SIDE_PX) {
-        val ratio = MAX_BITMAP_SIDE_PX.toFloat() / maxSide
-        Bitmap.createScaledBitmap(
-            bitmap,
-            maxOf(1, (bitmap.width * ratio).toInt()),
-            maxOf(1, (bitmap.height * ratio).toInt()),
-            true
-        ).also {
-            if (it !== bitmap) bitmap.recycle()
-        }
-    } else {
-        bitmap
-    }
-
-    val out = ByteArrayOutputStream()
-    scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
-    return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP) to scaled.asImageBitmap()
-}
-
-/**
- * Shared screen capture implementation used by both the floating bubble service
- * and the in-app screens (ConversationDetailScreen, AgoraDetailScreen).
- *
- * Must be called on the main thread. [onComplete] is invoked on the main thread with a
- * base64-encoded JPEG string and a preview [ImageBitmap], or null if capture fails / times out.
- * The caller is responsible for stopping [projection] after [onComplete] fires.
- */
 fun performScreenCapture(
     projection: MediaProjection,
     widthPx: Int,
@@ -63,11 +25,10 @@ fun performScreenCapture(
     val mainHandler = Handler(Looper.getMainLooper())
     val imageReader = ImageReader.newInstance(widthPx, heightPx, PixelFormat.RGBA_8888, 2)
     var virtualDisplay: VirtualDisplay? = null
-    var finished = false
+    val finished = AtomicBoolean(false)
 
     fun finish(result: Pair<String, ImageBitmap>?) {
-        if (finished) return
-        finished = true
+        if (finished.getAndSet(true)) return
         virtualDisplay?.release()
         runCatching { imageReader.close() }
         onComplete(result)
@@ -83,7 +44,7 @@ fun performScreenCapture(
         image ?: return@setOnImageAvailableListener
         imageAcquired = true
         mainHandler.removeCallbacks(timeoutRunnable)
-        Thread {
+        captureExecutor.execute {
             var result: Pair<String, ImageBitmap>? = null
             try {
                 val plane = image.planes[0]
@@ -102,7 +63,7 @@ fun performScreenCapture(
                 val r = result
                 mainHandler.post { finish(r) }
             }
-        }.start()
+        }
     }, mainHandler)
 
     virtualDisplay = projection.createVirtualDisplay(

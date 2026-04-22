@@ -3,11 +3,8 @@ package com.mad.screenagent.feature.conversations
 import android.app.Activity
 import android.content.Intent
 import android.content.ContextWrapper
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.Settings
-import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -26,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -54,6 +50,8 @@ import com.mad.screenagent.shared.chatui.ChatInputBar
 import com.mad.screenagent.shared.chatui.ChatMessageList
 import com.mad.screenagent.shared.chatui.MessageBubble
 import com.mad.screenagent.shared.chatui.buildQuotedReplyContext
+import com.mad.screenagent.shared.attachment.createCameraCaptureUri
+import com.mad.screenagent.shared.attachment.encodeImageUriForAttachment
 import com.mad.screenagent.shared.attachment.importFileAttachment
 import com.mad.screenagent.shared.attachment.persistImageAttachment
 import com.mad.screenagent.shared.attachment.rememberCameraPermissionRequester
@@ -61,7 +59,6 @@ import com.mad.screenagent.shared.chatui.rememberChatMessageListBehavior
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -154,24 +151,39 @@ fun ConversationDetailScreen(
         }
     }
 
-    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-        if (bitmap != null) {
+    var pendingCameraCaptureUri by remember { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val capturedUri = pendingCameraCaptureUri
+        pendingCameraCaptureUri = null
+        if (success && capturedUri != null) {
             pendingFileName = null; pendingFileText = null
             attachmentPreparationLabel = "Preparing photo…"
-            scope.launch(Dispatchers.IO) {
-                val out = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
-                val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                withContext(Dispatchers.Main) {
-                    pendingImageList.add(base64 to bitmap.asImageBitmap())
-                    attachmentPreparationLabel = null
+            scope.launch {
+                val (base64, bmp) = withContext(Dispatchers.IO) {
+                    encodeImageUriForAttachment(context, capturedUri)
                 }
+                if (base64 != null && bmp != null) {
+                    pendingImageList.add(base64 to bmp)
+                } else {
+                    snackbarHostState.showSnackbar("Could not prepare that photo.")
+                }
+                attachmentPreparationLabel = null
             }
         }
     }
 
     val requestCameraPermission = rememberCameraPermissionRequester(
-        onGranted = { cameraLauncher.launch(null) },
+        onGranted = {
+            val captureUri = createCameraCaptureUri(context)
+            if (captureUri == null) {
+                scope.launch {
+                    snackbarHostState.showSnackbar("Unable to create a camera capture file.")
+                }
+            } else {
+                pendingCameraCaptureUri = captureUri
+                cameraLauncher.launch(captureUri)
+            }
+        },
         onDenied = {
             scope.launch {
                 snackbarHostState.showSnackbar("Camera permission is required to take a photo.")
@@ -484,8 +496,8 @@ fun ConversationDetailScreen(
                     modifier = Modifier.navigationBarsPadding().imePadding()
                 ) {
                     val clipboardManager = LocalClipboardManager.current
-                    var tfv by remember { mutableStateOf(TextFieldValue(inputText)) }
-                    LaunchedEffect(inputText) {
+                    var tfv by remember(conversation?.id) { mutableStateOf(TextFieldValue(inputText)) }
+                    LaunchedEffect(conversation?.id, inputText) {
                         if (tfv.text != inputText) tfv = TextFieldValue(inputText, TextRange(inputText.length))
                     }
                     TextField(
@@ -513,18 +525,18 @@ fun ConversationDetailScreen(
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
                         keyboardActions = KeyboardActions(onSend = { doSend() }),
                         maxLines = 5,
-                        enabled = !isLoading
+                        enabled = !isPreparingAttachment
                     )
                     val clipText = clipboardManager.getText()?.text?.takeIf { it.isNotBlank() }
                     if (clipText != null) {
                         IconButton(
                             onClick = {
-                                val newText = inputText + clipText
+                                val newText = tfv.text + clipText
                                 tfv = TextFieldValue(newText, TextRange(newText.length))
                                 viewModel.onInputChange(newText)
                             },
-                            modifier = Modifier.size(36.dp),
-                            enabled = !isLoading
+                            modifier = Modifier.size(48.dp),
+                            enabled = !isPreparingAttachment
                         ) {
                             Icon(
                                 Icons.Default.ContentPaste,
@@ -567,14 +579,5 @@ private fun AssistantSetupPromptCard(
 }
 
 private fun encodeImageForApi(context: android.content.Context, uri: Uri): Pair<String?, ImageBitmap?> {
-    return try {
-        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
-        val scale = maxOf(1, maxOf(opts.outWidth, opts.outHeight) / 1024)
-        val opts2 = BitmapFactory.Options().apply { inSampleSize = scale }
-        val bmp: Bitmap = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts2) } ?: return null to null
-        val out = ByteArrayOutputStream()
-        bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
-        Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP) to bmp.asImageBitmap()
-    } catch (_: Exception) { null to null }
+    return encodeImageUriForAttachment(context, uri)
 }

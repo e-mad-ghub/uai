@@ -755,7 +755,7 @@ private fun QuickActionEditor(
                     border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
                              else null,
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(48.dp)
                         .clickable { selectedIcon = key }
                 ) {
                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {

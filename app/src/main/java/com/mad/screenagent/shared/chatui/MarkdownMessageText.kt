@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -30,7 +31,10 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.ClickableText
 
 private sealed interface MarkdownBlock {
     data class Heading(val level: Int, val text: String) : MarkdownBlock
@@ -168,10 +172,26 @@ private fun MarkdownInlineText(
     color: Color,
     style: TextStyle
 ) {
-    Text(
-        text = markdownInlineAnnotatedString(text = text, color = color),
-        style = style,
-        color = color
+    val uriHandler = LocalUriHandler.current
+    val annotated = remember(text, color) {
+        buildAnnotatedString {
+            appendMarkdownInlineWithUrls(text = text, color = color)
+        }
+    }
+
+    ClickableText(
+        text = annotated,
+        style = style.copy(color = color),
+        onClick = { offset ->
+            annotated.getStringAnnotations(tag = "URL", start = offset, end = offset)
+                .firstOrNull()?.let { annotation ->
+                    try {
+                        uriHandler.openUri(annotation.item)
+                    } catch (e: Exception) {
+                        // Silently fail if URI handler is unavailable
+                    }
+                }
+        }
     )
 }
 
@@ -285,11 +305,87 @@ private fun markdownInlineAnnotatedString(
     color: Color
 ): AnnotatedString {
     return buildAnnotatedString {
-        appendMarkdownInline(text = text, color = color)
+        appendMarkdownInlineWithUrls(text = text, color = color)
     }
 }
 
-private fun AnnotatedString.Builder.appendMarkdownInline(
+private fun AnnotatedString.Builder.appendTextWithLinkAnnotations(
+    text: String,
+    linkColor: Color
+) {
+    // Match markdown links: [text](url)
+    val markdownLinkRegex = Regex("""\[([^\]]+)\]\(([^)]+)\)""")
+    // Match bare URLs: https://... or www....
+    val urlRegex = Regex("""(https?://[^\s<>\]]+|www\.[^\s<>\]]+)""")
+    
+    var currentIndex = 0
+    var lastProcessedIndex = 0
+    
+    // Collect all matches with their types
+    data class LinkMatch(val startInOriginal: Int, val endInOriginal: Int, val displayText: String, val url: String, val isMarkdown: Boolean)
+    val allLinks = mutableListOf<LinkMatch>()
+    
+    // Find markdown links
+    markdownLinkRegex.findAll(text).forEach { match ->
+        val displayText = match.groupValues[1]
+        val url = match.groupValues[2]
+        allLinks.add(LinkMatch(match.range.first, match.range.last + 1, displayText, url, true))
+    }
+    
+    // Find bare URLs (but skip if inside markdown links)
+    val markdownRanges = allLinks.map { IntRange(it.startInOriginal, it.endInOriginal - 1) }
+    urlRegex.findAll(text).forEach { match ->
+        // Skip if this URL is inside a markdown link
+        val isInsideMarkdownLink = markdownRanges.any { 
+            match.range.first >= it.first && match.range.last <= it.last 
+        }
+        if (!isInsideMarkdownLink) {
+            allLinks.add(LinkMatch(match.range.first, match.range.last + 1, match.value, match.value, false))
+        }
+    }
+    
+    // Sort by position
+    allLinks.sortBy { it.startInOriginal }
+    
+    // Build the annotated string by processing in order
+    for (link in allLinks) {
+        // Append text before this link
+        if (link.startInOriginal > lastProcessedIndex) {
+            append(text.substring(lastProcessedIndex, link.startInOriginal))
+        }
+        
+        // Add the link display text with annotation
+        val displayStart = length
+        append(link.displayText)
+        val displayEnd = length
+        
+        val finalUrl = if (link.url.startsWith("www.")) "https://" + link.url else link.url
+        
+        addStringAnnotation(
+            tag = "URL",
+            annotation = finalUrl,
+            start = displayStart,
+            end = displayEnd
+        )
+        addStyle(
+            SpanStyle(
+                color = linkColor,
+                textDecoration = TextDecoration.Underline
+            ),
+            displayStart,
+            displayEnd
+        )
+        
+        lastProcessedIndex = link.endInOriginal
+    }
+    
+    // Append any remaining text after last link
+    if (lastProcessedIndex < text.length) {
+        append(text.substring(lastProcessedIndex))
+    }
+}
+
+private fun AnnotatedString.Builder.appendMarkdownInlineWithUrls(
     text: String,
     color: Color
 ) {
@@ -300,11 +396,11 @@ private fun AnnotatedString.Builder.appendMarkdownInline(
                 val end = text.indexOf("**", startIndex = index + 2)
                 if (end > index + 2) {
                     pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
-                    append(text.substring(index + 2, end))
+                    appendTextWithLinkAnnotations(text.substring(index + 2, end), color)
                     pop()
                     index = end + 2
                 } else {
-                    append(text[index])
+                    appendTextWithLinkAnnotations(text.substring(index, index + 1), color)
                     index += 1
                 }
             }
@@ -313,11 +409,11 @@ private fun AnnotatedString.Builder.appendMarkdownInline(
                 val end = text.indexOf('*', startIndex = index + 1)
                 if (end > index + 1) {
                     pushStyle(SpanStyle(fontStyle = FontStyle.Italic))
-                    append(text.substring(index + 1, end))
+                    appendTextWithLinkAnnotations(text.substring(index + 1, end), color)
                     pop()
                     index = end + 1
                 } else {
-                    append(text[index])
+                    appendTextWithLinkAnnotations(text.substring(index, index + 1), color)
                     index += 1
                 }
             }
@@ -331,18 +427,25 @@ private fun AnnotatedString.Builder.appendMarkdownInline(
                             background = color.copy(alpha = 0.14f)
                         )
                     )
-                    append(text.substring(index + 1, end))
+                    appendTextWithLinkAnnotations(text.substring(index + 1, end), color)
                     pop()
                     index = end + 1
                 } else {
-                    append(text[index])
+                    appendTextWithLinkAnnotations(text.substring(index, index + 1), color)
                     index += 1
                 }
             }
 
             else -> {
-                append(text[index])
-                index += 1
+                // Collect consecutive plain text characters
+                val start = index
+                while (index < text.length && 
+                       !text.startsWith("**", index) && 
+                       text[index] != '*' && 
+                       text[index] != '`') {
+                    index++
+                }
+                appendTextWithLinkAnnotations(text.substring(start, index), color)
             }
         }
     }

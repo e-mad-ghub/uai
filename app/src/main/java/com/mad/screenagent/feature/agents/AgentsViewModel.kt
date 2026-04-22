@@ -35,11 +35,16 @@ class AgentsViewModel(private val repo: AgentRepository) : ViewModel() {
 
     fun deleteAgent(agent: AgentConfig) {
         viewModelScope.launch {
-            val current = uiState.value.agents.toMutableList()
-            current.removeIf { it.id == agent.id }
-            repo.saveAgentList(current)
-            if (uiState.value.activeAgentId == agent.id) {
-                repo.setActiveAgent(current.firstOrNull()?.id)
+            val currentState = uiState.value
+            val remainingAgents = currentState.agents.filterNot { it.id == agent.id }
+            val replacementActiveAgentId = activeAgentIdAfterDeletingAgent(
+                agentsBeforeDelete = currentState.agents,
+                activeAgentId = currentState.activeAgentId,
+                deletedAgentId = agent.id
+            )
+            repo.saveAgentList(remainingAgents)
+            if (currentState.activeAgentId == agent.id) {
+                repo.setActiveAgent(replacementActiveAgentId)
             }
         }
     }
@@ -48,4 +53,13 @@ class AgentsViewModel(private val repo: AgentRepository) : ViewModel() {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>) = AgentsViewModel(repo) as T
     }
+}
+
+internal fun activeAgentIdAfterDeletingAgent(
+    agentsBeforeDelete: List<AgentConfig>,
+    activeAgentId: String?,
+    deletedAgentId: String
+): String? {
+    if (activeAgentId != deletedAgentId) return activeAgentId
+    return agentsBeforeDelete.firstOrNull { it.id != deletedAgentId }?.id
 }

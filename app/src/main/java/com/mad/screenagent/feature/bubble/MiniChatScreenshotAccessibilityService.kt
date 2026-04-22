@@ -15,6 +15,7 @@ import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.graphics.ImageBitmap
+import com.mad.screenagent.shared.attachment.captureExecutor
 import com.mad.screenagent.shared.attachment.encodeBitmapForAttachment
 
 sealed interface AccessibilityScreenCaptureOutcome {
@@ -48,7 +49,7 @@ class MiniChatScreenshotAccessibilityService : AccessibilityService() {
     ) {
         takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
             override fun onSuccess(screenshot: ScreenshotResult) {
-                Thread {
+                captureExecutor.execute {
                     val buffer = screenshot.hardwareBuffer
                     val bitmap = runCatching {
                         Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)
@@ -64,7 +65,7 @@ class MiniChatScreenshotAccessibilityService : AccessibilityService() {
                     }
 
                     mainHandler.post { onResult(outcome) }
-                }.start()
+                }
             }
 
             override fun onFailure(errorCode: Int) {

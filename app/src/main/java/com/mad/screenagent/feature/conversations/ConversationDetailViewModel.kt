@@ -8,7 +8,6 @@ import com.mad.screenagent.shared.streaming.AssistantStreamingSession
 import com.mad.screenagent.shared.streaming.FileAttachmentContext
 import com.mad.screenagent.shared.streaming.ImageAttachment
 import com.mad.screenagent.shared.streaming.StreamChunk
-import com.google.gson.Gson
 import com.mad.screenagent.shared.streaming.ThrottledStreamingMessageWriter
 import com.mad.screenagent.shared.streaming.ToolAwareAssistantRuntime
 import com.mad.screenagent.shared.streaming.WebGateway
@@ -16,10 +15,12 @@ import com.mad.screenagent.shared.streaming.compressHistory
 import com.mad.screenagent.shared.streaming.sanitizeGroundedAssistantResponse
 import com.mad.screenagent.data.db.ConversationEntity
 import com.mad.screenagent.data.db.MessageEntity
+import com.mad.screenagent.data.db.imageAttachmentsJsonOrNull
 import com.mad.screenagent.data.db.toChatMessage
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.canHandleImageRequests
 import com.mad.screenagent.data.model.hasInternetAccess
+import com.mad.screenagent.data.model.tokenLimitReachedMessage
 import com.mad.screenagent.data.repository.AgentRepository
 import com.mad.screenagent.data.repository.ConversationRepository
 import kotlinx.coroutines.Job
@@ -261,7 +262,7 @@ class ConversationDetailViewModel(
             if (effectiveUsed >= tokenLimit) {
                 viewModelScope.launch {
                     _errorEvent.send(
-                        "Token limit reached for \"${agent.name}\".\n\nThis assistant has used $effectiveUsed/$tokenLimit tokens this month. Reset usage in the assistant settings to continue."
+                        tokenLimitReachedMessage(agent.name, effectiveUsed, tokenLimit)
                     )
                 }
                 return
@@ -321,7 +322,7 @@ class ConversationDetailViewModel(
                     imageUri = imageUri,
                     attachedFileName = attachedFile?.displayName,
                     attachedFileText = attachedFile?.extractedText,
-                    imagesJson = if (images.isNotEmpty()) Gson().toJson(images) else null
+                    imagesJson = imageAttachmentsJsonOrNull(images)
                 )
             )
 

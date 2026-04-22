@@ -53,4 +53,28 @@ class MiniChatConversationSelectionTest {
         assertEquals(replacementAgent.name, updated[1].agentName)
         assertFalse(updated[2].agentId == replacementAgent.id)
     }
+
+    @Test
+    fun updateConversationAgentSelection_leavesConversationsUnchangedWhenTargetMissing() {
+        val currentAgent = AgentConfig(id = "agent-old", name = "Old Assistant")
+        val replacementAgent = AgentConfig(id = "agent-new", name = "New Assistant")
+        val conversations = listOf(
+            ConversationEntity(
+                id = "conversation-1",
+                title = "One",
+                agentId = currentAgent.id,
+                agentName = currentAgent.name,
+                createdAt = 1L,
+                updatedAt = 1L
+            )
+        )
+
+        val updated = updateConversationAgentSelection(
+            conversations = conversations,
+            conversationId = "conversation-2",
+            agent = replacementAgent
+        )
+
+        assertEquals(conversations, updated)
+    }
 }

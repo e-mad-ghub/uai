@@ -27,6 +27,10 @@ fun MessageEntity.storedImages(): List<ImageAttachment> {
     }
 }
 
+fun imageAttachmentsJsonOrNull(images: List<ImageAttachment>): String? {
+    return images.takeIf { it.isNotEmpty() }?.let { gson.toJson(it) }
+}
+
 fun MessageEntity.toChatMessage(
     contentOverride: String = content,
     images: List<ImageAttachment> = storedImages()

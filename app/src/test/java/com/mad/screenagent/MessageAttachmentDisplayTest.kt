@@ -2,12 +2,16 @@ package com.mad.screenagent
 
 import com.mad.screenagent.shared.streaming.ChatMessage
 import com.mad.screenagent.shared.streaming.FileAttachmentContext
+import com.mad.screenagent.shared.streaming.ImageAttachment
 import com.mad.screenagent.shared.streaming.contentWithFileContext
 import com.mad.screenagent.data.db.MessageEntity
+import com.mad.screenagent.data.db.imageAttachmentsJsonOrNull
+import com.mad.screenagent.data.db.toChatMessage
 import com.mad.screenagent.shared.chatui.buildCopyableMessageText
 import com.mad.screenagent.shared.chatui.buildQuotedReplyContext
 import com.mad.screenagent.shared.chatui.parseAttachedFileDisplay
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -65,5 +69,29 @@ class MessageAttachmentDisplayTest {
         assertTrue(providerContent.contains("<attached_file name=\"report.txt\">"))
         assertTrue(providerContent.contains("alpha beta"))
         assertTrue(providerContent.endsWith("What matters here?"))
+    }
+
+    @Test
+    fun imageAttachmentsJsonOrNull_serializesMultipleImagesForMessageHistory() {
+        val images = listOf(
+            ImageAttachment(base64 = "image-a", mimeType = "image/jpeg"),
+            ImageAttachment(base64 = "image-b", mimeType = "image/png")
+        )
+        val json = imageAttachmentsJsonOrNull(images)
+        val message = MessageEntity(
+            id = "m3",
+            conversationId = "c1",
+            role = "user",
+            content = "Compare these.",
+            createdAt = 3L,
+            imagesJson = json
+        )
+
+        assertEquals(images, message.toChatMessage().images)
+    }
+
+    @Test
+    fun imageAttachmentsJsonOrNull_returnsNullForEmptyImageList() {
+        assertNull(imageAttachmentsJsonOrNull(emptyList()))
     }
 }

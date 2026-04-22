@@ -64,11 +64,13 @@ import com.mad.screenagent.shared.streaming.compressHistory
 import com.mad.screenagent.shared.streaming.sanitizeGroundedAssistantResponse
 import com.mad.screenagent.data.db.ConversationEntity
 import com.mad.screenagent.data.db.MessageEntity
+import com.mad.screenagent.data.db.imageAttachmentsJsonOrNull
 import com.mad.screenagent.data.db.toChatMessage
 import com.mad.screenagent.data.model.canHandleImageRequests
 import com.mad.screenagent.data.model.hasInternetAccess
 import com.mad.screenagent.data.model.AgentConfig
 import com.mad.screenagent.data.model.AppColorTheme
+import com.mad.screenagent.data.model.tokenLimitReachedMessage
 import com.mad.screenagent.ui.MediaPickerActivity
 import com.mad.screenagent.ui.OverlayScreenCaptureOutcome
 import com.mad.screenagent.shared.chatui.dedupeMessagesByIdKeepingLatest
@@ -1267,16 +1269,20 @@ class FloatingBubbleService : Service() {
                         onMinimize = ::dismissChatPanelAnimated,
                         onOpenInApp = ::openInApp,
                         onAgentSelect = { agent ->
+                            val conversationIdAtSelection = currentConversationId
                             applyCurrentConversationAgentSelectionLocally(agent)
-                            serviceScope.launch {
-                                val conversation = currentConversationEntity()
-                                if (conversation != null) {
-                                    container.conversationRepository.upsertConversation(
-                                        conversation.copy(
-                                            agentId = agent.id,
-                                            agentName = agent.name
+                            if (conversationIdAtSelection != null) {
+                                serviceScope.launch {
+                                    val conversation =
+                                        container.conversationRepository.getConversationOnce(conversationIdAtSelection)
+                                    if (conversation != null) {
+                                        container.conversationRepository.upsertConversation(
+                                            conversation.copy(
+                                                agentId = agent.id,
+                                                agentName = agent.name
+                                            )
                                         )
-                                    )
+                                    }
                                 }
                             }
                         },
@@ -2028,6 +2034,7 @@ class FloatingBubbleService : Service() {
     ) {
         val agent = selectedAgentForCurrentContext()
         val imageList = pendingImages.toList()
+        val imageAttachments = imageList.map { ImageAttachment(it.first) }
         val attachedFile = pendingFileText?.let {
             FileAttachmentContext(
                 displayName = pendingFileName ?: "file",
@@ -2045,21 +2052,24 @@ class FloatingBubbleService : Service() {
             val currentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
             val effectiveUsed = if (agent.tokenUsedMonth == currentMonth) agent.tokenUsed else 0L
             if (effectiveUsed >= tokenLimit) {
-                // Show a system message in the chat about the limit
-                val container = (application as UaiApplication).container
+                val limitMessage = tokenLimitReachedMessage(agent.name, effectiveUsed, tokenLimit)
+                val convId = currentConversationId
+                if (convId == null) {
+                    miniChatErrorMessage = limitMessage
+                    return
+                }
+                miniChatErrorMessage = null
                 serviceScope.launch {
-                    val convId = currentConversationId
-                    if (convId != null) {
-                        val limitMsg = MessageEntity(
-                            id = UUID.randomUUID().toString(),
-                            conversationId = convId,
-                            role = "assistant",
-                            content = "Token limit reached for \"${agent.name}\".\n\nThis assistant has used $effectiveUsed/$tokenLimit tokens this month. Reset usage in the assistant settings to continue.",
-                            createdAt = System.currentTimeMillis()
-                        )
-                        container.conversationRepository.insertMessage(limitMsg)
-                        upsertChatMessage(limitMsg)
-                    }
+                    val container = (application as UaiApplication).container
+                    val limitMsg = MessageEntity(
+                        id = UUID.randomUUID().toString(),
+                        conversationId = convId,
+                        role = "assistant",
+                        content = limitMessage,
+                        createdAt = System.currentTimeMillis()
+                    )
+                    container.conversationRepository.insertMessage(limitMsg)
+                    upsertChatMessage(limitMsg)
                 }
                 return
             }
@@ -2120,7 +2130,8 @@ class FloatingBubbleService : Service() {
                     createdAt = System.currentTimeMillis(),
                     imageUri = persistedImageUri,
                     attachedFileName = attachedFile?.displayName,
-                    attachedFileText = attachedFile?.extractedText
+                    attachedFileText = attachedFile?.extractedText,
+                    imagesJson = imageAttachmentsJsonOrNull(imageAttachments)
                 )
                 container.conversationRepository.insertMessage(userMsg)
                 upsertChatMessage(userMsg)
@@ -2167,7 +2178,7 @@ class FloatingBubbleService : Service() {
                     if (idx == allHistory.lastIndex && msg.role == "user") {
                         when {
                             imageList.isNotEmpty() -> msg.toChatMessage(
-                                images = imageList.map { ImageAttachment(it.first) }
+                                images = imageAttachments
                             )
                             else -> msg.toChatMessage()
                         }

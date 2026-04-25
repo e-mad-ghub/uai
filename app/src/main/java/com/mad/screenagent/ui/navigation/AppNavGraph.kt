@@ -47,6 +47,7 @@ fun AppNavGraph(
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
                     assistantRuntime = container.assistantRuntime,
+                    multiImageRuntime = container.multiImageConversationRuntime,
                     webGateway = container.webGateway,
                     providerFactory = container.providerFactory,
                     agentResolver = container::resolveAgentConfig
@@ -71,6 +72,7 @@ fun AppNavGraph(
                     repo = container.conversationRepository,
                     agentRepo = container.agentRepository,
                     assistantRuntime = container.assistantRuntime,
+                    multiImageRuntime = container.multiImageConversationRuntime,
                     webGateway = container.webGateway,
                     providerFactory = container.providerFactory,
                     agentResolver = container::resolveAgentConfig

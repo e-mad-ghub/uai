@@ -3,6 +3,7 @@ package com.mad.screenagent
 import com.mad.screenagent.shared.streaming.AssistantToolRequest
 import com.mad.screenagent.shared.streaming.ChatMessage
 import com.mad.screenagent.shared.streaming.ImageAttachment
+import com.mad.screenagent.shared.streaming.MultiImageConversationRuntime
 import com.mad.screenagent.shared.streaming.SearchToolExecutor
 import com.mad.screenagent.shared.streaming.StreamChunk
 import com.mad.screenagent.shared.streaming.ToolAwareAssistantRuntime
@@ -87,7 +88,8 @@ class ToolAwareAssistantRuntimeTest {
                         )
                     )
                 )
-            }
+            },
+            multiImageRuntime = MultiImageConversationRuntime { providers.removeFirst() }
         )
 
         val chunks = runtime.streamResponse(
@@ -126,6 +128,19 @@ class ToolAwareAssistantRuntimeTest {
                 searchCalled = true
                 fail("search tool should not run for plain image analysis")
                 null
+            },
+            multiImageRuntime = MultiImageConversationRuntime { config ->
+                receivedSystemPrompt = config.systemPrompt
+                object : com.mad.screenagent.shared.streaming.AiProvider {
+                    override fun streamResponse(
+                        messages: List<ChatMessage>,
+                        config: AgentConfig
+                    ): Flow<StreamChunk> = flow {
+                        receivedImageCount = messages.first { it.role == "user" }.images.size
+                        emit(StreamChunk.Token("I can see the image."))
+                        emit(StreamChunk.Done)
+                    }
+                }
             }
         )
 
@@ -185,6 +200,28 @@ class ToolAwareAssistantRuntimeTest {
                         )
                     )
                 )
+            },
+            multiImageRuntime = MultiImageConversationRuntime {
+                object : com.mad.screenagent.shared.streaming.AiProvider {
+                    private val callIndex = seenImageCounts.size
+
+                    override fun streamResponse(
+                        messages: List<ChatMessage>,
+                        config: AgentConfig
+                    ): Flow<StreamChunk> = flow {
+                        seenImageCounts += messages.first { it.role == "user" }.images.size
+                        if (callIndex == 0) {
+                            emit(
+                                StreamChunk.Token(
+                                    "<tool_request>{\"tool\":\"search_web\",\"query\":\"latest news about the product in the screenshot\"}</tool_request>"
+                                )
+                            )
+                        } else {
+                            emit(StreamChunk.Token("I checked the screenshot and the sources."))
+                        }
+                        emit(StreamChunk.Done)
+                    }
+                }
             }
         )
 
@@ -204,10 +241,7 @@ class ToolAwareAssistantRuntimeTest {
     }
 
     @Test
-    fun openRouterBucketUsesGeneralWhenLastUserMessageIsToolResultNotImage() {
-        // The classifier only checks the *current* (last) user turn for images to avoid
-        // locking all tool-round follow-ups into VISION even when no image is in scope.
-        // A <tool_result> injected after an image turn therefore yields GENERAL, not VISION.
+    fun openRouterBucketUsesVisionWhenConversationStillCarriesRawImageTurn() {
         val bucket = classifyOpenRouterRequestBucket(
             listOf(
                 ChatMessage(
@@ -226,7 +260,7 @@ class ToolAwareAssistantRuntimeTest {
             )
         )
 
-        assertEquals(OpenRouterFreeRoutingBucket.GENERAL, bucket)
+        assertEquals(OpenRouterFreeRoutingBucket.VISION, bucket)
     }
 
     @Test

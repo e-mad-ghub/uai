@@ -43,7 +43,7 @@ class OpenAiProvider(
         try {
             call.execute().use { response ->
                 if (!response.isSuccessful) {
-                    emit(StreamChunk.Error(Exception(httpErrorMessage(response.code))))
+                    emit(StreamChunk.Error(Exception(buildOpenAiErrorMessage(response.code, response.body?.string()))))
                     return@use
                 }
                 val source = response.body?.source() ?: run {
@@ -97,7 +97,7 @@ class OpenAiProvider(
         try {
             call.execute().use { response ->
                 if (!response.isSuccessful) {
-                    emit(StreamChunk.Error(Exception(httpErrorMessage(response.code))))
+                    emit(StreamChunk.Error(Exception(buildOpenAiErrorMessage(response.code, response.body?.string()))))
                     return@use
                 }
                 val source = response.body?.source() ?: run {
@@ -300,6 +300,24 @@ internal fun parseResponsesApiUsage(line: String): OpenAiUsageTotals? {
 
 internal fun shouldUseOpenAiResponsesApi(config: AgentConfig): Boolean =
     config.provider == AiProviderType.OPENAI && config.nativeWebSearchEnabled
+
+internal fun buildOpenAiErrorMessage(code: Int, rawBody: String?): String {
+    val normalizedBody = rawBody?.trim().orEmpty()
+    if (normalizedBody.isBlank()) return httpErrorMessage(code)
+
+    val parsedMessage = try {
+        Gson().fromJson(normalizedBody, JsonObject::class.java)
+            ?.getAsJsonObject("error")
+            ?.get("message")
+            ?.asString
+            ?.trim()
+    } catch (_: Exception) {
+        null
+    }
+
+    val detail = parsedMessage?.takeIf { it.isNotBlank() } ?: normalizedBody.take(400)
+    return "${httpErrorMessage(code)}\n$detail".trim()
+}
 
 internal fun responsesApiInputContent(message: ChatMessage): Any {
     val textContent = message.contentWithFileContext()

@@ -26,6 +26,9 @@ interface MessageDao {
     @Query("UPDATE messages SET responseModelId = :modelId, responseModelIsFallback = :isFallback WHERE id = :id")
     suspend fun updateResponseModel(id: String, modelId: String, isFallback: Boolean)
 
+    @Query("UPDATE messages SET attachmentMemoryJson = :attachmentMemoryJson WHERE id = :id")
+    suspend fun updateAttachmentMemory(id: String, attachmentMemoryJson: String?)
+
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteByConversation(conversationId: String)
 

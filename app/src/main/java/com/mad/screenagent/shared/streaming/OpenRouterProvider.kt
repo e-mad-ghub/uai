@@ -22,8 +22,7 @@ internal fun classifyOpenRouterRequestBucket(messages: List<ChatMessage>): OpenR
     val lastUserMessage = userMessages.lastOrNull()
     val lastUserContent = lastUserMessage?.content.orEmpty()
     return when {
-        // Only check the current turn for images so prior image turns don't force VISION routing
-        lastUserMessage?.images?.isNotEmpty() == true -> OpenRouterFreeRoutingBucket.VISION
+        userMessages.any { it.images.isNotEmpty() } -> OpenRouterFreeRoutingBucket.VISION
         userMessages.any { it.fileAttachment != null } ||
             lastUserContent.contains("<attached_file ", ignoreCase = true) ->
             OpenRouterFreeRoutingBucket.DOCUMENT

@@ -1,6 +1,7 @@
 package com.mad.screenagent.data.db
 
 import com.mad.screenagent.shared.streaming.ChatMessage
+import com.mad.screenagent.shared.streaming.AttachmentTurnMemory
 import com.mad.screenagent.shared.streaming.FileAttachmentContext
 import com.mad.screenagent.shared.streaming.ImageAttachment
 import com.google.gson.Gson
@@ -17,6 +18,12 @@ fun MessageEntity.fileAttachmentOrNull(): FileAttachmentContext? {
     )
 }
 
+fun MessageEntity.hasDirectAttachmentContext(): Boolean {
+    return storedImages().isNotEmpty() ||
+        fileAttachmentOrNull() != null ||
+        !documentBase64.isNullOrBlank()
+}
+
 fun MessageEntity.storedImages(): List<ImageAttachment> {
     val json = imagesJson?.takeIf { it.isNotBlank() } ?: return emptyList()
     return try {
@@ -31,11 +38,25 @@ fun imageAttachmentsJsonOrNull(images: List<ImageAttachment>): String? {
     return images.takeIf { it.isNotEmpty() }?.let { gson.toJson(it) }
 }
 
+fun MessageEntity.attachmentMemoryOrNull(): AttachmentTurnMemory? {
+    val json = attachmentMemoryJson?.takeIf { it.isNotBlank() } ?: return null
+    return try {
+        gson.fromJson(json, AttachmentTurnMemory::class.java)
+    } catch (_: Exception) {
+        null
+    }
+}
+
+fun attachmentMemoryJsonOrNull(memory: AttachmentTurnMemory?): String? {
+    return memory?.takeIf { it.images.isNotEmpty() }?.let { gson.toJson(it) }
+}
+
 fun MessageEntity.toChatMessage(
     contentOverride: String = content,
     images: List<ImageAttachment> = storedImages()
 ): ChatMessage {
     return ChatMessage(
+        messageId = id,
         role = role,
         content = contentOverride,
         images = images,

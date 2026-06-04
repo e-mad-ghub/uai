@@ -161,6 +161,7 @@ private fun buildToolRequestJson(req: AssistantToolRequest): String {
 class ToolAwareAssistantRuntime(
     private val providerFactory: (AgentConfig) -> AiProvider,
     private val searchToolExecutor: SearchToolExecutor,
+    private val multiImageRuntime: MultiImageConversationRuntime,
     private val maxToolRounds: Int = 2
 ) {
 
@@ -174,11 +175,19 @@ class ToolAwareAssistantRuntime(
         conversationKey: String?,
         messages: List<ChatMessage>,
         config: AgentConfig,
-        onStatusChanged: (String?) -> Unit = {}
+        onStatusChanged: (String?) -> Unit = {},
+        onAttachmentMemoryGenerated: suspend (String, AttachmentTurnMemory) -> Unit = { _, _ -> }
     ): Flow<StreamChunk> = flow {
         if (shouldBypassToolLoop(messages)) {
-            providerFactory(config)
-                .streamResponse(messages, config)
+            multiImageRuntime
+                .streamResponse(
+                    messages = messages,
+                    config = config,
+                    directStreamFactory = { currentMessages, currentConfig ->
+                        providerFactory(currentConfig).streamResponse(currentMessages, currentConfig)
+                    },
+                    onAttachmentMemoryGenerated = onAttachmentMemoryGenerated
+                )
                 .collect { emit(it) }
             return@flow
         }
@@ -190,7 +199,6 @@ class ToolAwareAssistantRuntime(
 
         repeat(maxToolRounds + 1) { round ->
             onStatusChanged("Generating the best answer…")
-            val provider = providerFactory(toolAwareConfig)
 
             // Collect tokens with early streaming: buffer only until we can tell whether
             // the response starts with a <tool_request> block or is a real answer.
@@ -201,7 +209,14 @@ class ToolAwareAssistantRuntime(
             var error: Throwable? = null
             var streaming = false  // true once we've committed to emitting tokens live
 
-            provider.streamResponse(workingMessages, toolAwareConfig).collect { chunk ->
+            multiImageRuntime.streamResponse(
+                messages = workingMessages,
+                config = toolAwareConfig,
+                directStreamFactory = { currentMessages, currentConfig ->
+                    providerFactory(currentConfig).streamResponse(currentMessages, currentConfig)
+                },
+                onAttachmentMemoryGenerated = onAttachmentMemoryGenerated
+            ).collect { chunk ->
                 when (chunk) {
                     is StreamChunk.Token -> {
                         accumulated.append(chunk.text)

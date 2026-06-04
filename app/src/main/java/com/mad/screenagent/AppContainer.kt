@@ -16,6 +16,7 @@ import com.mad.screenagent.shared.streaming.NewsRssProvider
 import com.mad.screenagent.shared.streaming.SearXSearchProvider
 import com.mad.screenagent.shared.streaming.SearchPlanningService
 import com.mad.screenagent.shared.streaming.ToolAwareAssistantRuntime
+import com.mad.screenagent.shared.streaming.MultiImageConversationRuntime
 import com.mad.screenagent.shared.streaming.WebGateway
 import com.mad.screenagent.shared.streaming.WebGatewaySearchToolExecutor
 import com.mad.screenagent.shared.streaming.WebGroundingService
@@ -99,6 +100,9 @@ class AppContainer(private val application: Application) {
     val searchPlanningService: SearchPlanningService =
         SearchPlanningService(providerFactory)
 
+    val multiImageConversationRuntime: MultiImageConversationRuntime =
+        MultiImageConversationRuntime(providerFactory)
+
     val webGateway: WebGateway =
         WebGateway(
             groundingService = webGroundingService,
@@ -108,7 +112,8 @@ class AppContainer(private val application: Application) {
     val assistantRuntime: ToolAwareAssistantRuntime =
         ToolAwareAssistantRuntime(
             providerFactory = providerFactory,
-            searchToolExecutor = WebGatewaySearchToolExecutor(webGateway)
+            searchToolExecutor = WebGatewaySearchToolExecutor(webGateway),
+            multiImageRuntime = multiImageConversationRuntime
         )
 
     val conversationRepository: ConversationRepository =

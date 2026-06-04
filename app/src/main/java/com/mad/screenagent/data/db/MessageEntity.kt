@@ -33,5 +33,6 @@ data class MessageEntity(
     val responseModelId: String? = null,
     val responseModelIsFallback: Boolean = false,
     val imagesJson: String? = null,       // Gson JSON array of base64 image strings for multi-image messages
-    val documentBase64: String? = null    // base64-encoded PDF for Anthropic document support
+    val documentBase64: String? = null,   // base64-encoded PDF for Anthropic document support
+    val attachmentMemoryJson: String? = null
 )

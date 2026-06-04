@@ -7,14 +7,16 @@ import com.mad.screenagent.shared.streaming.AiProvider
 import com.mad.screenagent.shared.streaming.AssistantStreamingSession
 import com.mad.screenagent.shared.streaming.FileAttachmentContext
 import com.mad.screenagent.shared.streaming.ImageAttachment
+import com.mad.screenagent.shared.streaming.MultiImageConversationRuntime
 import com.mad.screenagent.shared.streaming.StreamChunk
 import com.mad.screenagent.shared.streaming.ThrottledStreamingMessageWriter
 import com.mad.screenagent.shared.streaming.ToolAwareAssistantRuntime
 import com.mad.screenagent.shared.streaming.WebGateway
-import com.mad.screenagent.shared.streaming.compressHistory
+import com.mad.screenagent.shared.streaming.buildConversationHistory
 import com.mad.screenagent.shared.streaming.sanitizeGroundedAssistantResponse
 import com.mad.screenagent.data.db.ConversationEntity
 import com.mad.screenagent.data.db.MessageEntity
+import com.mad.screenagent.data.db.attachmentMemoryJsonOrNull
 import com.mad.screenagent.data.db.imageAttachmentsJsonOrNull
 import com.mad.screenagent.data.db.toChatMessage
 import com.mad.screenagent.data.model.AgentConfig
@@ -42,6 +44,7 @@ class ConversationDetailViewModel(
     private val repo: ConversationRepository,
     private val agentRepo: AgentRepository,
     private val assistantRuntime: ToolAwareAssistantRuntime,
+    private val multiImageRuntime: MultiImageConversationRuntime,
     private val webGateway: WebGateway,
     private val providerFactory: (AgentConfig) -> AiProvider,
     private val agentResolver: suspend (AgentConfig) -> AgentConfig = { it }
@@ -183,6 +186,19 @@ class ConversationDetailViewModel(
         _activeSession.value?.markStopped()
     }
 
+    private suspend fun persistAttachmentMemory(messageId: String, memory: com.mad.screenagent.shared.streaming.AttachmentTurnMemory) {
+        repo.updateMessageAttachmentMemory(messageId, attachmentMemoryJsonOrNull(memory))
+    }
+
+    private suspend fun generateAttachmentMemoryIfMissing(messageId: String, agent: AgentConfig) {
+        val message = repo.getMessageOnce(messageId) ?: return
+        if (!message.attachmentMemoryJson.isNullOrBlank()) return
+        val memory = multiImageRuntime.summarizeImageTurn(message.toChatMessage(), agent) { usage ->
+            agentRepo.addTokenUsage(agent.id, (usage.inputTokens + usage.outputTokens).toLong())
+        } ?: return
+        persistAttachmentMemory(messageId, memory)
+    }
+
     private suspend fun repairConversationAssignmentIfNeeded(
         conversation: ConversationEntity,
         agents: List<AgentConfig>,
@@ -312,9 +328,10 @@ class ConversationDetailViewModel(
                 }
             }
 
+            val userMessageId = UUID.randomUUID().toString()
             repo.insertMessage(
                 MessageEntity(
-                    id = UUID.randomUUID().toString(),
+                    id = userMessageId,
                     conversationId = conversationId,
                     role = "user",
                     content = text,
@@ -343,49 +360,51 @@ class ConversationDetailViewModel(
             session.start(this)
             _activeSession.value = session
             var accumulated = ""
+            var resolvedAgent = agent
             val streamingWriter = ThrottledStreamingMessageWriter { content, isStreaming ->
                 repo.updateMessageContent(assistantId, content, isStreaming)
             }
 
             try {
+                resolvedAgent = agentResolver(agent)
+
                 // If the agent doesn't support the attachment type, say so in the chat
-                if (images.isNotEmpty() && !agent.canHandleImageRequests()) {
+                if (images.isNotEmpty() && !resolvedAgent.canHandleImageRequests()) {
                     accumulated =
-                        "I don't support image analysis with \"${agent.model}\". Please switch to a vision-capable model in agent settings."
+                        "I don't support image analysis with \"${resolvedAgent.model}\". Please switch to a vision-capable model in agent settings."
                     return@launch
                 }
 
-                // Build history; the latest user message already has imagesJson stored in DB.
                 val dbHistory = repo.getMessagesList(conversationId).filter { !it.isStreaming }
-                val history = compressHistory(dbHistory.map { msg -> msg.toChatMessage() })
-
-                // Resolve Money Saver sentinel to actual cheapest model if needed.
-                val agent = agentResolver(agent)
+                val history = buildConversationHistory(
+                    messages = dbHistory,
+                    keepMostRecentRawImageTurn = resolvedAgent.canHandleImageRequests()
+                )
 
                 // Shared chunk processor used by both paths below.
                 suspend fun processChunk(chunk: StreamChunk) {
                     when (chunk) {
                         is StreamChunk.Token -> {
                             accumulated += chunk.text
-                            val sanitized = if (agent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
+                            val sanitized = if (resolvedAgent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
                             session.onToken(sanitized)
                             streamingWriter.emitStreaming(sanitized)
                         }
                         is StreamChunk.ModelSelection ->
                             repo.updateMessageResponseModel(assistantId, chunk.modelId, chunk.viaFallback)
                         is StreamChunk.Usage ->
-                            agentRepo.addTokenUsage(agent.id, (chunk.inputTokens + chunk.outputTokens).toLong())
+                            agentRepo.addTokenUsage(resolvedAgent.id, (chunk.inputTokens + chunk.outputTokens).toLong())
                         is StreamChunk.Done -> Unit
                         is StreamChunk.Error -> {
                             val errMsg = chunk.cause.message ?: "Unknown error"
                             _errorEvent.trySend(
-                                "Request failed: $errMsg\n\nThe model \"${agent.model}\" may not support this request. Try switching to a different model."
+                                "Request failed: $errMsg\n\nThe model \"${resolvedAgent.model}\" may not support this request. Try switching to a different model."
                             )
                         }
                     }
                 }
 
-                if (agent.hasInternetAccess) {
+                if (resolvedAgent.hasInternetAccess) {
                     val shouldPrepareWebTurn = webGateway.shouldPrepareTurn(
                         conversationKey = conversationId,
                         messages = history
@@ -415,7 +434,7 @@ class ConversationDetailViewModel(
                             webGateway.prepareTurn(
                                 conversationKey = conversationId,
                                 messages = history,
-                                planningConfig = agent
+                                planningConfig = resolvedAgent
                             ) { status -> _onlineSearchStatus.value = status }
                         } catch (_: Exception) { null }
                     }
@@ -427,8 +446,11 @@ class ConversationDetailViewModel(
                                 .streamResponse(
                                     conversationKey = conversationId,
                                     messages = history,
-                                    config = agent,
-                                    onStatusChanged = { status -> _onlineSearchStatus.value = status }
+                                    config = resolvedAgent,
+                                    onStatusChanged = { status -> _onlineSearchStatus.value = status },
+                                    onAttachmentMemoryGenerated = { messageId, memory ->
+                                        persistAttachmentMemory(messageId, memory)
+                                    }
                                 )
                                 .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
                                 .collect { speculativeBuffer.send(it) }
@@ -445,8 +467,11 @@ class ConversationDetailViewModel(
                             .streamResponse(
                                 conversationKey = conversationId,
                                 messages = preparedTurn.messages,
-                                config = agent,
-                                onStatusChanged = { status -> _onlineSearchStatus.value = status }
+                                config = resolvedAgent,
+                                onStatusChanged = { status -> _onlineSearchStatus.value = status },
+                                onAttachmentMemoryGenerated = { messageId, memory ->
+                                    persistAttachmentMemory(messageId, memory)
+                                }
                             )
                             .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
                             .collect { chunk -> processChunk(chunk) }
@@ -458,8 +483,17 @@ class ConversationDetailViewModel(
                 } else {
                     // Internet Service OFF: call the raw provider directly,
                     // no planning overhead, no tool-aware system prompt additions.
-                    providerFactory(agent)
-                        .streamResponse(history, agent)
+                    multiImageRuntime
+                        .streamResponse(
+                            messages = history,
+                            config = resolvedAgent,
+                            directStreamFactory = { currentMessages, currentConfig ->
+                                providerFactory(currentConfig).streamResponse(currentMessages, currentConfig)
+                            },
+                            onAttachmentMemoryGenerated = { messageId, memory ->
+                                persistAttachmentMemory(messageId, memory)
+                            }
+                        )
                         .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
                         .collect { chunk -> processChunk(chunk) }
                 }
@@ -471,9 +505,14 @@ class ConversationDetailViewModel(
                         session.markDeleted()
                         repo.deleteMessage(assistantId)
                     } else {
-                        val sanitized = if (agent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
+                        val sanitized = if (resolvedAgent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
                         streamingWriter.emitFinal(sanitized)
                         session.finalize(sanitized)
+                        if (images.isNotEmpty() && resolvedAgent.canHandleImageRequests()) {
+                            launch {
+                                generateAttachmentMemoryIfMissing(userMessageId, resolvedAgent)
+                            }
+                        }
                     }
                     repo.touchConversation(conversationId)
                     // Guard: stopResponse() sets _isLoading=false immediately, which lets
@@ -498,6 +537,7 @@ class ConversationDetailViewModel(
         private val repo: ConversationRepository,
         private val agentRepo: AgentRepository,
         private val assistantRuntime: ToolAwareAssistantRuntime,
+        private val multiImageRuntime: MultiImageConversationRuntime,
         private val webGateway: WebGateway,
         private val providerFactory: (AgentConfig) -> AiProvider,
         private val agentResolver: suspend (AgentConfig) -> AgentConfig = { it }
@@ -509,6 +549,7 @@ class ConversationDetailViewModel(
                 repo,
                 agentRepo,
                 assistantRuntime,
+                multiImageRuntime,
                 webGateway,
                 providerFactory,
                 agentResolver

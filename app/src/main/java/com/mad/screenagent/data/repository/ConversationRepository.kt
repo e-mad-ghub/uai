@@ -31,6 +31,9 @@ class ConversationRepository(
     suspend fun getMessagesList(conversationId: String): List<MessageEntity> =
         messageDao.getMessagesList(conversationId)
 
+    suspend fun getMessageOnce(id: String): MessageEntity? =
+        messageDao.getById(id)
+
     suspend fun upsertConversation(conversation: ConversationEntity) =
         conversationDao.upsert(conversation)
 
@@ -51,6 +54,9 @@ class ConversationRepository(
 
     suspend fun updateMessageResponseModel(id: String, modelId: String, isFallback: Boolean) =
         messageDao.updateResponseModel(id, modelId, isFallback)
+
+    suspend fun updateMessageAttachmentMemory(id: String, attachmentMemoryJson: String?) =
+        messageDao.updateAttachmentMemory(id, attachmentMemoryJson)
 
     suspend fun deleteMessage(id: String) {
         deletePersistedImageAttachment(context, messageDao.getById(id)?.imageUri)

@@ -62,10 +62,11 @@ import com.mad.screenagent.shared.streaming.FileAttachmentContext
 import com.mad.screenagent.shared.streaming.ImageAttachment
 import com.mad.screenagent.shared.streaming.StreamChunk
 import com.mad.screenagent.shared.streaming.ThrottledStreamingMessageWriter
-import com.mad.screenagent.shared.streaming.compressHistory
+import com.mad.screenagent.shared.streaming.buildConversationHistory
 import com.mad.screenagent.shared.streaming.sanitizeGroundedAssistantResponse
 import com.mad.screenagent.data.db.ConversationEntity
 import com.mad.screenagent.data.db.MessageEntity
+import com.mad.screenagent.data.db.attachmentMemoryJsonOrNull
 import com.mad.screenagent.data.db.imageAttachmentsJsonOrNull
 import com.mad.screenagent.data.db.toChatMessage
 import com.mad.screenagent.data.model.canHandleImageRequests
@@ -2133,6 +2134,33 @@ class FloatingBubbleService : Service() {
         scheduleBubbleIdleFade()
     }
 
+    private suspend fun persistAttachmentMemory(
+        messageId: String,
+        memory: com.mad.screenagent.shared.streaming.AttachmentTurnMemory
+    ) {
+        (application as UaiApplication).container.conversationRepository
+            .updateMessageAttachmentMemory(messageId, attachmentMemoryJsonOrNull(memory))
+    }
+
+    private suspend fun generateAttachmentMemoryIfMissing(
+        messageId: String,
+        agent: AgentConfig
+    ) {
+        val container = (application as UaiApplication).container
+        val message = container.conversationRepository.getMessageOnce(messageId) ?: return
+        if (!message.attachmentMemoryJson.isNullOrBlank()) return
+        val memory = container.multiImageConversationRuntime.summarizeImageTurn(
+            message = message.toChatMessage(),
+            config = agent
+        ) { usage ->
+            container.agentRepository.addTokenUsage(
+                agent.id,
+                (usage.inputTokens + usage.outputTokens).toLong()
+            )
+        } ?: return
+        persistAttachmentMemory(messageId, memory)
+    }
+
     private fun sendMessage(
         text: String,
         forceScrollToLatest: Boolean = false
@@ -2194,6 +2222,8 @@ class FloatingBubbleService : Service() {
             var accumulated = ""
             var streamingWriter: ThrottledStreamingMessageWriter? = null
             var session: AssistantStreamingSession? = null
+            var resolvedAgent = agent
+            var userMessageId: String? = null
 
             try {
                 if (currentConversationId == null) {
@@ -2227,8 +2257,9 @@ class FloatingBubbleService : Service() {
                         withContext(Dispatchers.IO) { persistImageAttachment(applicationContext, it) }
                     }
 
+                userMessageId = UUID.randomUUID().toString()
                 val userMsg = MessageEntity(
-                    id = UUID.randomUUID().toString(),
+                    id = userMessageId!!,
                     conversationId = activeConversationId,
                     role = "user",
                     content = fullText,
@@ -2264,10 +2295,11 @@ class FloatingBubbleService : Service() {
                 session = AssistantStreamingSession(messageId)
                 session!!.start(serviceScope)
                 currentSession = session
+                resolvedAgent = container.resolveAgentConfig(agent)
 
                 // If agent doesn't support vision, insert a capability notice instead of calling API
-                if (imageList.isNotEmpty() && !agent.canHandleImageRequests()) {
-                    val notice = "I don't support image analysis with \"${agent.model}\". " +
+                if (imageList.isNotEmpty() && !resolvedAgent.canHandleImageRequests()) {
+                    val notice = "I don't support image analysis with \"${resolvedAgent.model}\". " +
                             "Please switch to a vision-capable model in agent settings."
                     accumulated = notice  // must be non-blank so finally doesn't delete the message
                     val idx = chatMessages.indexOfFirst { it.id == messageId }
@@ -2277,21 +2309,13 @@ class FloatingBubbleService : Service() {
                     return@launch
                 }
 
-                // Build history, attaching images to the last user message.
-                val allHistory = chatMessages.filter { !it.isStreaming }
-                val history = compressHistory(allHistory.mapIndexed { idx, msg ->
-                    if (idx == allHistory.lastIndex && msg.role == "user") {
-                        when {
-                            imageList.isNotEmpty() -> msg.toChatMessage(
-                                images = imageAttachments
-                            )
-                            else -> msg.toChatMessage()
-                        }
-                    } else {
-                        msg.toChatMessage()
-                    }
-                })
-                val resolvedAgent = container.resolveAgentConfig(agent)
+                val dbHistory = container.conversationRepository
+                    .getMessagesList(activeConversationId)
+                    .filter { !it.isStreaming }
+                val history = buildConversationHistory(
+                    messages = dbHistory,
+                    keepMostRecentRawImageTurn = resolvedAgent.canHandleImageRequests()
+                )
                 val shouldPrepareWebTurn = resolvedAgent.hasInternetAccess &&
                     container.webGateway.shouldPrepareTurn(
                         conversationKey = activeConversationId,
@@ -2322,10 +2346,22 @@ class FloatingBubbleService : Service() {
                         conversationKey = activeConversationId,
                         messages = effectiveHistory,
                         config = resolvedAgent,
-                        onStatusChanged = { status -> onlineSearchStatusMessage = status }
+                        onStatusChanged = { status -> onlineSearchStatusMessage = status },
+                        onAttachmentMemoryGenerated = { messageIdForMemory, memory ->
+                            persistAttachmentMemory(messageIdForMemory, memory)
+                        }
                     )
                 } else {
-                    container.providerFactory(resolvedAgent).streamResponse(effectiveHistory, resolvedAgent)
+                    container.multiImageConversationRuntime.streamResponse(
+                        messages = effectiveHistory,
+                        config = resolvedAgent,
+                        directStreamFactory = { currentMessages, currentConfig ->
+                            container.providerFactory(currentConfig).streamResponse(currentMessages, currentConfig)
+                        },
+                        onAttachmentMemoryGenerated = { messageIdForMemory, memory ->
+                            persistAttachmentMemory(messageIdForMemory, memory)
+                        }
+                    )
                 }
                 responseStream
                     .catch { e -> if (currentCoroutineContext().isActive) emit(StreamChunk.Error(e)) }
@@ -2377,10 +2413,15 @@ class FloatingBubbleService : Service() {
                             if (idx != -1) chatMessages.removeAt(idx)
                             container.conversationRepository.deleteMessage(id)
                         } else {
-                            val sanitized = if (agent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
+                            val sanitized = if (resolvedAgent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
                             streamingWriter?.emitFinal(sanitized)
                             session?.finalize(sanitized)
                             if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = sanitized, isStreaming = false)
+                            if (imageList.isNotEmpty() && resolvedAgent.canHandleImageRequests() && userMessageId != null) {
+                                launch {
+                                    generateAttachmentMemoryIfMissing(userMessageId!!, resolvedAgent)
+                                }
+                            }
                         }
                         convId?.let { container.conversationRepository.touchConversation(it) }
                     }

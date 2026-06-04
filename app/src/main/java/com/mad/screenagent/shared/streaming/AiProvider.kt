@@ -19,7 +19,8 @@ data class ChatMessage(
     val images: List<ImageAttachment> = emptyList(),
     val fileAttachment: FileAttachmentContext? = null,
     /** Base64-encoded PDF — only sent by providers that support it (Anthropic). */
-    val documentBase64: String? = null
+    val documentBase64: String? = null,
+    val messageId: String? = null
 )
 
 fun ChatMessage.contentWithFileContext(): String {

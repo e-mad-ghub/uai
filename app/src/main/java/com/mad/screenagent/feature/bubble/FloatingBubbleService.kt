@@ -2815,7 +2815,7 @@ class FloatingBubbleService : Service() {
         private const val DISMISS_RADIUS_DP = 30
         private const val DISMISS_HIT_DP = 60
         private const val BUBBLE_NORMAL_ALPHA = 0.82f
-        private const val BUBBLE_IDLE_ALPHA = 0.55f
+        private const val BUBBLE_IDLE_ALPHA = 0.18f
         private const val BUBBLE_IDLE_DELAY_MS = 3_000L
         private const val BUBBLE_ALPHA_ANIMATION_MS = 180L
         private val BUBBLE_WINDOW_FLAGS =

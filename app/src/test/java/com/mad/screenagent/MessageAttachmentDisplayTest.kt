@@ -5,8 +5,12 @@ import com.mad.screenagent.shared.streaming.FileAttachmentContext
 import com.mad.screenagent.shared.streaming.ImageAttachment
 import com.mad.screenagent.shared.streaming.contentWithFileContext
 import com.mad.screenagent.data.db.MessageEntity
+import com.mad.screenagent.data.db.attachmentMemoryJsonOrNull
+import com.mad.screenagent.data.db.attachmentMemoryOrNull
 import com.mad.screenagent.data.db.imageAttachmentsJsonOrNull
 import com.mad.screenagent.data.db.toChatMessage
+import com.mad.screenagent.shared.streaming.AttachmentImageMemory
+import com.mad.screenagent.shared.streaming.AttachmentTurnMemory
 import com.mad.screenagent.shared.chatui.buildCopyableMessageText
 import com.mad.screenagent.shared.chatui.buildQuotedReplyContext
 import com.mad.screenagent.shared.chatui.parseAttachedFileDisplay
@@ -88,6 +92,95 @@ class MessageAttachmentDisplayTest {
         )
 
         assertEquals(images, message.toChatMessage().images)
+    }
+
+    @Test
+    fun imageAttachmentParsing_skipsMalformedRowsWithoutCrashing() {
+        val message = MessageEntity(
+            id = "m4",
+            conversationId = "c1",
+            role = "user",
+            content = "Who is this?",
+            createdAt = 4L,
+            imagesJson = """[{"mimeType":"image/png"},{"base64":"image-a","mimeType":"image/png"}]"""
+        )
+
+        assertEquals(
+            listOf(ImageAttachment(base64 = "image-a", mimeType = "image/png")),
+            message.toChatMessage().images
+        )
+    }
+
+    @Test
+    fun attachmentMemoryParsing_skipsMalformedRowsWithoutCrashing() {
+        val message = MessageEntity(
+            id = "m5",
+            conversationId = "c1",
+            role = "user",
+            content = "Who is this?",
+            createdAt = 5L,
+            attachmentMemoryJson = """
+                {
+                  "generatedAt": 123,
+                  "generatedByProvider": "openai",
+                  "generatedByModel": "vision-model",
+                  "images": [
+                    {"index": 0, "label": "Image 1"},
+                    {"index": 1, "label": "Image 2", "summary": "A person wearing a dark jacket."}
+                  ]
+                }
+            """.trimIndent()
+        )
+
+        assertEquals(
+            AttachmentTurnMemory(
+                generatedAt = 123,
+                generatedByProvider = "openai",
+                generatedByModel = "vision-model",
+                images = listOf(
+                    AttachmentImageMemory(
+                        index = 1,
+                        label = "Image 2",
+                        summary = "A person wearing a dark jacket."
+                    )
+                )
+            ),
+            message.attachmentMemoryOrNull()
+        )
+    }
+
+    @Test
+    fun attachmentMemoryJsonOrNull_serializesStableFieldNamesForRelease() {
+        val memory = AttachmentTurnMemory(
+            generatedAt = 10,
+            generatedByProvider = "provider",
+            generatedByModel = "model",
+            fallbackReason = "fallback",
+            images = listOf(
+                AttachmentImageMemory(
+                    index = 0,
+                    label = "Image 1",
+                    summary = "A screenshot."
+                )
+            )
+        )
+
+        val json = attachmentMemoryJsonOrNull(memory)
+
+        assertTrue(json!!.contains("\"generatedAt\""))
+        assertTrue(json.contains("\"generatedByProvider\""))
+        assertTrue(json.contains("\"images\""))
+        assertEquals(
+            memory,
+            MessageEntity(
+                id = "m6",
+                conversationId = "c1",
+                role = "user",
+                content = "What is this?",
+                createdAt = 6L,
+                attachmentMemoryJson = json
+            ).attachmentMemoryOrNull()
+        )
     }
 
     @Test

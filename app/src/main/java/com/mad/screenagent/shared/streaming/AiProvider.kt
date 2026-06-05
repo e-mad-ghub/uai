@@ -1,10 +1,13 @@
 package com.mad.screenagent.shared.streaming
 
+import com.google.gson.annotations.SerializedName
 import com.mad.screenagent.data.model.AgentConfig
 import kotlinx.coroutines.flow.Flow
 
 data class ImageAttachment(
+    @SerializedName("base64")
     val base64: String,
+    @SerializedName("mimeType")
     val mimeType: String = "image/jpeg"
 )
 

@@ -23,6 +23,45 @@ info() { printf '\033[34m→ %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m✓ %s\033[0m\n' "$*"; }
 err()  { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; }
 
+run_gradle_with_aapt2_retry() {
+    local log_file retry_log_file exit_code
+    log_file="$(mktemp "${TMPDIR:-/tmp}/uai-gradle.XXXXXX.log")"
+
+    set +e
+    ./gradlew "$@" 2>&1 | tee "$log_file"
+    exit_code=${PIPESTATUS[0]}
+    set -e
+
+    if [[ $exit_code -eq 0 ]]; then
+        rm -f "$log_file"
+        return 0
+    fi
+
+    if grep -Eq 'AAPT2 .*Daemon #[0-9]+: Daemon startup failed|Daemon startup failed' "$log_file"; then
+        err "AAPT2 daemon failed to start. Stopping Gradle daemons and retrying once…"
+        ./gradlew --stop || true
+
+        retry_log_file="$(mktemp "${TMPDIR:-/tmp}/uai-gradle-retry.XXXXXX.log")"
+        set +e
+        ./gradlew "$@" 2>&1 | tee "$retry_log_file"
+        exit_code=${PIPESTATUS[0]}
+        set -e
+
+        if [[ $exit_code -ne 0 ]]; then
+            err "Gradle retry failed. Logs:"
+            err "  first: $log_file"
+            err "  retry: $retry_log_file"
+            return "$exit_code"
+        fi
+
+        rm -f "$log_file" "$retry_log_file"
+        return 0
+    fi
+
+    err "Gradle failed. Log: $log_file"
+    return "$exit_code"
+}
+
 require_signing_vars() {
     if [[ -z "${KEYSTORE_PASS:-}" ]]; then
         read -rsp "Keystore password: " KEYSTORE_PASS; echo
@@ -36,7 +75,7 @@ require_signing_vars() {
 # ── Build functions ────────────────────────────────────────────────────────────
 build_debug_apk() {
     info "Building debug APK…"
-    ./gradlew assembleDebug
+    run_gradle_with_aapt2_retry assembleDebug
     ok "Debug APK built"
     printf '   \033[33m%s\033[0m\n' "$SCRIPT_DIR/$DEBUG_APK"
 }
@@ -44,7 +83,7 @@ build_debug_apk() {
 build_release_aab() {
     require_signing_vars
     info "Building release AAB (Play Store)…"
-    ./gradlew bundleRelease \
+    run_gradle_with_aapt2_retry bundleRelease \
         -Pandroid.injected.signing.store.file="$SCRIPT_DIR/$KEYSTORE_FILE" \
         -Pandroid.injected.signing.store.password="$KEYSTORE_PASS" \
         -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
@@ -56,7 +95,7 @@ build_release_aab() {
 build_release_apk() {
     require_signing_vars
     info "Building release APK…"
-    ./gradlew assembleRelease \
+    run_gradle_with_aapt2_retry assembleRelease \
         -Pandroid.injected.signing.store.file="$SCRIPT_DIR/$KEYSTORE_FILE" \
         -Pandroid.injected.signing.store.password="$KEYSTORE_PASS" \
         -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
@@ -134,13 +173,13 @@ install_release_apk() {
 # ── Test functions ─────────────────────────────────────────────────────────────
 run_unit_tests() {
     info "Running unit tests…"
-    ./gradlew testDebugUnitTest
+    run_gradle_with_aapt2_retry testDebugUnitTest
     ok "Unit tests passed"
 }
 
 run_instrumented_tests() {
     info "Running instrumented tests (device/emulator required)…"
-    ./gradlew connectedDebugAndroidTest
+    run_gradle_with_aapt2_retry connectedDebugAndroidTest
     ok "Instrumented tests passed"
 }
 

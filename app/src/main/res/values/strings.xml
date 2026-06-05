@@ -58,6 +58,7 @@
     <string name="mini_chat_screenshot_accessibility_description">Allows ScreenAgent to capture screenshots for the floating mini chat without reopening the overlay or asking for screen-recording permission on every shot.</string>
     <string name="mini_chat_screenshot_accessibility_hint">Direct screenshot capture needs Screenshot Helper. Set it up once in Mini Chat settings.</string>
     <string name="mini_chat_screenshot_accessibility_wait">ScreenAgent Screenshot Helper is turning on. Wait a moment and try the screenshot again.</string>
+    <string name="mini_chat_screenshot_accessibility_unavailable">Screenshot Helper is enabled but not connected. Open Accessibility settings, turn Screenshot Helper off and on, then try again.</string>
     <string name="mini_chat_screenshot_requires_android_11">Mini Chat screenshot capture requires Android 11 or later.</string>
     <string name="mini_chat_screenshot_disclosure_title">Enable Screenshot Helper</string>
     <string name="mini_chat_screenshot_disclosure_body">ScreenAgent uses Android Accessibility only to capture a screenshot when you request it from Mini Chat.\n\nIt does not use Accessibility to continuously monitor your screen, read other apps, control your device, or stream activity in the background.\n\nThe screenshot is captured only so you can attach it to your chat and choose whether to send it to your selected AI model.\n\nThis feature is optional and can be turned off at any time.</string>
@@ -149,7 +150,7 @@
     <string name="assistants_advanced_card_body">Use a raw model ID, add detailed guidance, or tune creativity.</string>
     <string name="assistants_advanced_expand">Expand advanced settings</string>
     <string name="assistants_advanced_collapse">Collapse advanced settings</string>
-    <string name="assistants_field_system_prompt">System prompt</string>
+    <string name="assistants_field_system_prompt">Assistant Instruction</string>
     <string name="assistants_field_system_prompt_hint">Use this to shape tone, role, and answer style.</string>
     <string name="assistants_creativity_label">Creativity: %1$.1f</string>
     <string name="assistants_creativity_precise">Precise</string>

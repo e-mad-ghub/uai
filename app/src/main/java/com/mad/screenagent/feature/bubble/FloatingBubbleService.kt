@@ -63,6 +63,7 @@ import com.mad.screenagent.shared.streaming.ImageAttachment
 import com.mad.screenagent.shared.streaming.StreamChunk
 import com.mad.screenagent.shared.streaming.ThrottledStreamingMessageWriter
 import com.mad.screenagent.shared.streaming.buildConversationHistory
+import com.mad.screenagent.shared.streaming.completeImageTurnMemoryIfNeeded
 import com.mad.screenagent.shared.streaming.sanitizeGroundedAssistantResponse
 import com.mad.screenagent.data.db.ConversationEntity
 import com.mad.screenagent.data.db.MessageEntity
@@ -532,6 +533,18 @@ class FloatingBubbleService : Service() {
                 miniChatScreenshotHintMessage = null
             }
         }
+    }
+
+    private fun screenshotHelperUnavailableMessage(): String {
+        val accessibilityHelperEnabled =
+            MiniChatScreenshotAccessibilityService.isEnabled(applicationContext)
+        return getString(
+            if (accessibilityHelperEnabled) {
+                R.string.mini_chat_screenshot_accessibility_unavailable
+            } else {
+                R.string.mini_chat_screenshot_accessibility_hint
+            }
+        )
     }
 
     private fun repairCurrentConversationAssignmentIfNeeded(conversation: ConversationEntity) {
@@ -1127,7 +1140,7 @@ class FloatingBubbleService : Service() {
                     if (MiniChatScreenshotAccessibilityService.isAvailable()) {
                         miniChatErrorMessage = "Screenshot capture failed. The current screen may be protected."
                     } else {
-                        showMiniChatScreenshotHint(getString(R.string.mini_chat_screenshot_accessibility_hint))
+                        showMiniChatScreenshotHint(screenshotHelperUnavailableMessage())
                     }
                     showChatPanel()
                     return@launch
@@ -1985,17 +1998,7 @@ class FloatingBubbleService : Service() {
     private fun launchAccessibilityScreenshotCapture() {
         if (isOverlayScreenshotCaptureInProgress || overlaySurfaceState == OverlaySurfaceState.ExternalFlow) return
         if (!MiniChatScreenshotAccessibilityService.isAvailable()) {
-            val accessibilityHelperEnabled =
-                MiniChatScreenshotAccessibilityService.isEnabled(this)
-            showMiniChatScreenshotHint(
-                getString(
-                    if (accessibilityHelperEnabled) {
-                        R.string.mini_chat_screenshot_accessibility_wait
-                    } else {
-                        R.string.mini_chat_screenshot_accessibility_hint
-                    }
-                )
-            )
+            showMiniChatScreenshotHint(screenshotHelperUnavailableMessage())
             return
         }
 
@@ -2049,22 +2052,12 @@ class FloatingBubbleService : Service() {
             }
 
             if (!started) {
-                val accessibilityHelperEnabled =
-                    MiniChatScreenshotAccessibilityService.isEnabled(applicationContext)
                 android.util.Log.e("UAI_CAP", "accessibility screenshot service unavailable at capture time")
                 restoreOverlaysAfterExternalFlow(
                     flowGeneration = flowGeneration,
                     forcePanelVisible = true
                 )
-                showMiniChatScreenshotHint(
-                    getString(
-                        if (accessibilityHelperEnabled) {
-                            R.string.mini_chat_screenshot_accessibility_wait
-                        } else {
-                            R.string.mini_chat_screenshot_accessibility_hint
-                        }
-                    )
-                )
+                showMiniChatScreenshotHint(screenshotHelperUnavailableMessage())
             }
         }
     }
@@ -2255,7 +2248,7 @@ class FloatingBubbleService : Service() {
                 val persistedImageUri = imageList.firstOrNull()?.third
                     ?: imageList.firstOrNull()?.first?.let {
                         withContext(Dispatchers.IO) { persistImageAttachment(applicationContext, it) }
-                    }
+                }
 
                 userMessageId = UUID.randomUUID().toString()
                 val userMsg = MessageEntity(
@@ -2300,7 +2293,7 @@ class FloatingBubbleService : Service() {
                 // If agent doesn't support vision, insert a capability notice instead of calling API
                 if (imageList.isNotEmpty() && !resolvedAgent.canHandleImageRequests()) {
                     val notice = "I don't support image analysis with \"${resolvedAgent.model}\". " +
-                            "Please switch to a vision-capable model in agent settings."
+                            "Please switch to a vision-capable model in assistant settings."
                     accumulated = notice  // must be non-blank so finally doesn't delete the message
                     val idx = chatMessages.indexOfFirst { it.id == messageId }
                     if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = notice, isStreaming = false)
@@ -2417,10 +2410,12 @@ class FloatingBubbleService : Service() {
                             streamingWriter?.emitFinal(sanitized)
                             session?.finalize(sanitized)
                             if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(content = sanitized, isStreaming = false)
-                            if (imageList.isNotEmpty() && resolvedAgent.canHandleImageRequests() && userMessageId != null) {
-                                launch {
-                                    generateAttachmentMemoryIfMissing(userMessageId!!, resolvedAgent)
-                                }
+                            completeImageTurnMemoryIfNeeded(
+                                hasImages = imageList.isNotEmpty(),
+                                canHandleImages = resolvedAgent.canHandleImageRequests(),
+                                userMessageId = userMessageId
+                            ) { messageId ->
+                                generateAttachmentMemoryIfMissing(messageId, resolvedAgent)
                             }
                         }
                         convId?.let { container.conversationRepository.touchConversation(it) }
@@ -2815,7 +2810,7 @@ class FloatingBubbleService : Service() {
         private const val DISMISS_RADIUS_DP = 30
         private const val DISMISS_HIT_DP = 60
         private const val BUBBLE_NORMAL_ALPHA = 0.82f
-        private const val BUBBLE_IDLE_ALPHA = 0.55f
+        private const val BUBBLE_IDLE_ALPHA = 0.18f
         private const val BUBBLE_IDLE_DELAY_MS = 3_000L
         private const val BUBBLE_ALPHA_ANIMATION_MS = 180L
         private val BUBBLE_WINDOW_FLAGS =

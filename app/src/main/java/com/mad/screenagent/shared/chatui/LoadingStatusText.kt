@@ -7,7 +7,6 @@ import androidx.compose.runtime.remember
 import kotlinx.coroutines.delay
 
 private val defaultLoadingPhrases = listOf(
-    "Thinking…",
     "Thinking, because loading is lame…",
     "Consulting the ancient scrolls…",
     "Bribing my neurons with coffee…",
@@ -18,7 +17,7 @@ private val defaultLoadingPhrases = listOf(
     "Definitely not just making this up…",
     "Hallucinating responsibly…",
     "Predicting something useful…",
-    "Not Googling. Totally not Googling.",
+    "Totally not Googling…",
     "Asking the rubber duck…",
     "Two sips of coffee away…",
     "Generating the best answer…",

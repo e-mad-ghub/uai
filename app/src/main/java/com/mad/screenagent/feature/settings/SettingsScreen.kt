@@ -722,7 +722,7 @@ private fun QuickActionEditor(
     var takePhoto by rememberSaveable { mutableStateOf(action.takePhoto) }
     var usePromptAutomatically by rememberSaveable { mutableStateOf(action.usePromptAutomatically) }
     var conversationName by rememberSaveable { mutableStateOf(action.conversationName) }
-    // Feature 2: null = "Use Active Agent" (default); non-null = dedicated agent id.
+    // Feature 2: null = "Use Default Assistant" (default); non-null = dedicated agent id.
     var selectedAgentId by rememberSaveable { mutableStateOf(action.agentId) }
     var agentDropdownExpanded by remember { mutableStateOf(false) }
 
@@ -884,7 +884,7 @@ private fun QuickActionEditor(
             modifier = Modifier.fillMaxWidth()
         )
 
-        // Feature 2: agent picker — "Use Active Agent" or a specific assistant
+        // Feature 2: assistant picker — default assistant or a specific assistant
         if (agents.isNotEmpty()) {
             Text("Starting Assistant", style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -894,7 +894,7 @@ private fun QuickActionEditor(
                 onExpandedChange = { agentDropdownExpanded = it }
             ) {
                 OutlinedTextField(
-                    value = selectedAgent?.name ?: "Use Active Agent",
+                    value = selectedAgent?.name ?: "Use Default Assistant",
                     onValueChange = {},
                     readOnly = true,
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = agentDropdownExpanded) },
@@ -907,7 +907,7 @@ private fun QuickActionEditor(
                     onDismissRequest = { agentDropdownExpanded = false }
                 ) {
                     DropdownMenuItem(
-                        text = { Text("Use Active Agent") },
+                        text = { Text("Use Default Assistant") },
                         onClick = { selectedAgentId = null; agentDropdownExpanded = false }
                     )
                     agents.forEach { agent ->

@@ -1,11 +1,14 @@
 package com.mad.screenagent.data.db
 
-import com.mad.screenagent.shared.streaming.ChatMessage
+import com.google.gson.Gson
+import com.google.gson.JsonElement
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import com.mad.screenagent.shared.streaming.AttachmentImageMemory
 import com.mad.screenagent.shared.streaming.AttachmentTurnMemory
+import com.mad.screenagent.shared.streaming.ChatMessage
 import com.mad.screenagent.shared.streaming.FileAttachmentContext
 import com.mad.screenagent.shared.streaming.ImageAttachment
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 
 private val gson = Gson()
 
@@ -27,8 +30,11 @@ fun MessageEntity.hasDirectAttachmentContext(): Boolean {
 fun MessageEntity.storedImages(): List<ImageAttachment> {
     val json = imagesJson?.takeIf { it.isNotBlank() } ?: return emptyList()
     return try {
-        val type = object : TypeToken<List<ImageAttachment>>() {}.type
-        gson.fromJson<List<ImageAttachment>>(json, type) ?: emptyList()
+        JsonParser.parseString(json)
+            .asJsonArray
+            .mapNotNull { element ->
+                element.asObjectOrNull()?.toImageAttachmentOrNull()
+            }
     } catch (_: Exception) {
         emptyList()
     }
@@ -41,7 +47,9 @@ fun imageAttachmentsJsonOrNull(images: List<ImageAttachment>): String? {
 fun MessageEntity.attachmentMemoryOrNull(): AttachmentTurnMemory? {
     val json = attachmentMemoryJson?.takeIf { it.isNotBlank() } ?: return null
     return try {
-        gson.fromJson(json, AttachmentTurnMemory::class.java)
+        JsonParser.parseString(json)
+            .asObjectOrNull()
+            ?.toAttachmentTurnMemoryOrNull()
     } catch (_: Exception) {
         null
     }
@@ -63,4 +71,46 @@ fun MessageEntity.toChatMessage(
         fileAttachment = fileAttachmentOrNull(),
         documentBase64 = documentBase64
     )
+}
+
+private fun JsonElement.asObjectOrNull(): JsonObject? =
+    takeIf { it.isJsonObject }?.asJsonObject
+
+private fun JsonObject.stringOrNull(name: String): String? =
+    get(name)?.takeUnless { it.isJsonNull }?.asString
+
+private fun JsonObject.longOrNull(name: String): Long? =
+    get(name)?.takeUnless { it.isJsonNull }?.asLong
+
+private fun JsonObject.intOrNull(name: String): Int? =
+    get(name)?.takeUnless { it.isJsonNull }?.asInt
+
+private fun JsonObject.toImageAttachmentOrNull(): ImageAttachment? {
+    val base64 = stringOrNull("base64")?.takeIf { it.isNotBlank() } ?: return null
+    val mimeType = stringOrNull("mimeType")?.takeIf { it.isNotBlank() } ?: "image/jpeg"
+    return ImageAttachment(base64 = base64, mimeType = mimeType)
+}
+
+private fun JsonObject.toAttachmentImageMemoryOrNull(): AttachmentImageMemory? {
+    val summary = stringOrNull("summary")?.takeIf { it.isNotBlank() } ?: return null
+    return AttachmentImageMemory(
+        index = intOrNull("index") ?: 0,
+        label = stringOrNull("label")?.takeIf { it.isNotBlank() } ?: "Image",
+        summary = summary
+    )
+}
+
+private fun JsonObject.toAttachmentTurnMemoryOrNull(): AttachmentTurnMemory? {
+    val images = get("images")
+        ?.takeIf { it.isJsonArray }
+        ?.asJsonArray
+        ?.mapNotNull { it.asObjectOrNull()?.toAttachmentImageMemoryOrNull() }
+        .orEmpty()
+    return AttachmentTurnMemory(
+        generatedAt = longOrNull("generatedAt") ?: System.currentTimeMillis(),
+        generatedByProvider = stringOrNull("generatedByProvider"),
+        generatedByModel = stringOrNull("generatedByModel"),
+        fallbackReason = stringOrNull("fallbackReason"),
+        images = images
+    ).takeIf { it.images.isNotEmpty() }
 }

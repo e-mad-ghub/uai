@@ -35,6 +35,13 @@ class MiniChatScreenshotAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() = Unit
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        if (instance === this) {
+            instance = null
+        }
+        return super.onUnbind(intent)
+    }
+
     override fun onDestroy() {
         if (instance === this) {
             instance = null
@@ -90,6 +97,13 @@ class MiniChatScreenshotAccessibilityService : AccessibilityService() {
         fun isAvailable(): Boolean = instance != null
 
         fun isEnabled(context: Context): Boolean {
+            val accessibilityEnabled = Settings.Secure.getInt(
+                context.contentResolver,
+                Settings.Secure.ACCESSIBILITY_ENABLED,
+                0
+            ) == 1
+            if (!accessibilityEnabled) return false
+
             val enabledServices = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES

@@ -13,6 +13,7 @@ import com.mad.screenagent.shared.streaming.ThrottledStreamingMessageWriter
 import com.mad.screenagent.shared.streaming.ToolAwareAssistantRuntime
 import com.mad.screenagent.shared.streaming.WebGateway
 import com.mad.screenagent.shared.streaming.buildConversationHistory
+import com.mad.screenagent.shared.streaming.completeImageTurnMemoryIfNeeded
 import com.mad.screenagent.shared.streaming.sanitizeGroundedAssistantResponse
 import com.mad.screenagent.data.db.ConversationEntity
 import com.mad.screenagent.data.db.MessageEntity
@@ -371,7 +372,7 @@ class ConversationDetailViewModel(
                 // If the agent doesn't support the attachment type, say so in the chat
                 if (images.isNotEmpty() && !resolvedAgent.canHandleImageRequests()) {
                     accumulated =
-                        "I don't support image analysis with \"${resolvedAgent.model}\". Please switch to a vision-capable model in agent settings."
+                        "I don't support image analysis with \"${resolvedAgent.model}\". Please switch to a vision-capable model in assistant settings."
                     return@launch
                 }
 
@@ -508,10 +509,12 @@ class ConversationDetailViewModel(
                         val sanitized = if (resolvedAgent.hasInternetAccess) sanitizeGroundedAssistantResponse(accumulated) else accumulated
                         streamingWriter.emitFinal(sanitized)
                         session.finalize(sanitized)
-                        if (images.isNotEmpty() && resolvedAgent.canHandleImageRequests()) {
-                            launch {
-                                generateAttachmentMemoryIfMissing(userMessageId, resolvedAgent)
-                            }
+                        completeImageTurnMemoryIfNeeded(
+                            hasImages = images.isNotEmpty(),
+                            canHandleImages = resolvedAgent.canHandleImageRequests(),
+                            userMessageId = userMessageId
+                        ) { messageId ->
+                            generateAttachmentMemoryIfMissing(messageId, resolvedAgent)
                         }
                     }
                     repo.touchConversation(conversationId)

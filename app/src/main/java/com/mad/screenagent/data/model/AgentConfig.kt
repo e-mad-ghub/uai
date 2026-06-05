@@ -9,6 +9,14 @@ enum class AiProviderType(val displayName: String) {
     CUSTOM("Custom")
 }
 
+const val DEFAULT_ASSISTANT_INSTRUCTION = """You are ScreenAgent's live assistant: accurate, practical, and aware of when fresh information is needed.
+
+Give clear answers that help the user move forward. Use available tools, attachments, screenshots, and web access when they improve accuracy. For current events, prices, releases, schedules, or anything likely to change, verify before answering.
+
+If useful, suggest a few relevant follow-up topics, next actions, or better questions the user could ask. Keep suggestions short and directly connected to the user's goal.
+
+Be honest about uncertainty. Do not invent facts, sources, or capabilities. Prefer concise, useful answers over long generic explanations."""
+
 data class AgentConfig(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "New Agent",
@@ -17,7 +25,7 @@ data class AgentConfig(
     val model: String = SIDEAGENT_OPENROUTER_BEST_FREE_MODEL,
     val customPreset: CustomProviderPreset = CustomProviderPreset.MANUAL,
     val customBaseUrl: String = "",
-    val systemPrompt: String = "You are a helpful assistant.",
+    val systemPrompt: String = DEFAULT_ASSISTANT_INSTRUCTION,
     val temperature: Float = 0.7f,
     /** Null = use model default (ScreenAgent Free → on, all others → off). */
     val agentSideInternetAccess: Boolean? = null,

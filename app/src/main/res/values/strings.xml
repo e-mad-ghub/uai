@@ -149,7 +149,7 @@
     <string name="assistants_advanced_card_body">Use a raw model ID, add detailed guidance, or tune creativity.</string>
     <string name="assistants_advanced_expand">Expand advanced settings</string>
     <string name="assistants_advanced_collapse">Collapse advanced settings</string>
-    <string name="assistants_field_system_prompt">System prompt</string>
+    <string name="assistants_field_system_prompt">Assistant Instruction</string>
     <string name="assistants_field_system_prompt_hint">Use this to shape tone, role, and answer style.</string>
     <string name="assistants_creativity_label">Creativity: %1$.1f</string>
     <string name="assistants_creativity_precise">Precise</string>
